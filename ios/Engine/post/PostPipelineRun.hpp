@@ -196,8 +196,14 @@ inline PostOutput runPostPipeline(PostPipeline& p) {
         p.cropSize = *p.finalSize;
     }
     const Point rotated = p.getRotatedCoords(p.finalSize ? *p.finalSize : *p.mParameters.rawSize);
-    // P683: every picture in the 256-row bands of the larger ones (a band is a viewport: the same photo bit for bit)
+    // P683: every picture in the 256-row bands of the larger ones (a band is a viewport: the same photo bit for bit). The app on
+    // Metal (SCAM_POST_WHOLE_BANDS): one band per pass - each band was a draw, a render encoder and a command buffer committed
+    // (glFlush) of its own, ~12 a pass at 12 MP; the GPU watchdog the bands keep Android's phones under has no iOS counterpart
+#ifdef SCAM_POST_WHOLE_BANDS
+    GLDrawParams::TileSize() = 1 << 30;
+#else
     GLDrawParams::TileSize() = 256;
+#endif
     buildDefaultPipeline(p);
     PostOutput out;
     out.rgba = p.runAllToRgba(rotated);
