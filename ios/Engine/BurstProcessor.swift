@@ -270,6 +270,13 @@ enum BurstProcessor {
         // P628: the watermark on the finished photo (upright, after every crop and resize) before its encoding; the Ultra HDR gain
         // map is left as the pipeline made it, as ScamProcessor does
         var rgba = photo.rgba
+        // «Отметка ES / L на фото»: whether the ultrashort and long frames went into this photo, or a short code why not
+        let es = frames.filter { $0.role == NchWriter.roleUltrashort }.count, long = frames.filter { $0.role == NchWriter.roleBracketed }.count
+        let stamp = MergeStamp.lines(plan: burst.report.first(where: { $0.hasPrefix("hybrid normal-back:") || $0.hasPrefix("hybrid plan:") }),
+                                     esCaptured: es, esSent: es, longCaptured: long, longSent: long,
+                                     report: photo.log.joined(separator: "\n"), ettr: MergeStamp.ettrLine(burst.report))
+        log.append("merge stamp: " + stamp.joined(separator: " | "))
+        if MergeStamp.on { MergeStamp.draw(&rgba, width: photo.width, height: photo.height, lines: stamp) }
         var watermarkRecord: SCAMWatermarkRecord?
         if PhotoWatermark.on() {
             // P633: the pixels under it kept (WatermarkPatch) for the gallery's editor to take it off
