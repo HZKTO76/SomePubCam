@@ -11,6 +11,7 @@ actor CaptureService {
     private(set) var activeModule: LensModule?
     private var fullResolution = true
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var previewAngleObservation: NSKeyValueObservation?
     private var rotationObservation: NSKeyValueObservation?
     private var subjectAreaTask: Task<Void, Never>?
     private var isSetUp = false
@@ -572,6 +573,14 @@ actor CaptureService {
         let front = device.position == .front
         let disableMirror = ["1", "true", "1.0"].contains(StoredPrefs.string("pref_tunable_parameters_disablemirror", "0"))
         ViewfinderRenderer.shared.configure(rotation: previewAngle, mirrored: front)
+        // an iPad window iPadOS turns: the preview and the live look follow the window's new angle
+        previewAngleObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) { coordinator, _ in
+            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+            Task { @MainActor in
+                if let connection = layer?.connection, connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
+            }
+            ViewfinderRenderer.shared.configure(rotation: angle, mirrored: front)
+        }
         photoCapture.setMirrored(front && !disableMirror)
         // «Информация на экране» (pref_show_afdata_key): the HUD follows this lens (Capture/CameraHud)
         hudMonitor.observe(device, layer: layer)

@@ -66,6 +66,7 @@ final class DeviceTurn {
     static let shared = DeviceTurn()
     /// The controls' rotation in degrees, clockwise (SwiftUI's rotationEffect)
     private(set) var degrees: Double = 0
+    @ObservationIgnored private var lastDevice: Double = 0
     @ObservationIgnored private var observer: NSObjectProtocol?
 
     func start() {
@@ -78,15 +79,34 @@ final class DeviceTurn {
         update()
     }
 
-    private func update() {
-        let next: Double
-        switch UIDevice.current.orientation {
-        case .portrait: next = 0
-        case .landscapeLeft: next = 90       // the right side up
-        case .landscapeRight: next = -90     // the left side up
-        case .portraitUpsideDown: next = 180
-        default: return                      // face up / down, unknown: as it was
+    /// The window's orientation changed (SCAMERASceneDelegate): the angle against it again
+    func refresh() { update() }
+
+    /// The interface's own angle (clockwise, as the device's below): 0 on the phone; an iPad window iPadOS turned with the device
+    /// is already upright, so the controls turn only by what the window did not
+    private var interfaceDegrees: Double {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        switch scene?.effectiveGeometry.interfaceOrientation ?? .portrait {
+        case .landscapeRight: return 90      // the device's landscapeLeft
+        case .landscapeLeft: return -90      // the device's landscapeRight
+        case .portraitUpsideDown: return 180
+        default: return 0
         }
+    }
+
+    private func update() {
+        var device: Double
+        switch UIDevice.current.orientation {
+        case .portrait: device = 0
+        case .landscapeLeft: device = 90     // the right side up
+        case .landscapeRight: device = -90   // the left side up
+        case .portraitUpsideDown: device = 180
+        default: device = lastDevice         // face up / down, unknown: as it was
+        }
+        lastDevice = device
+        var next = device - interfaceDegrees
+        while next > 180 { next -= 360 }
+        while next <= -180 { next += 360 }
         guard next != degrees else { return }
         SessionLog.i("Camera", "controls turn to \(Int(next))")
         withAnimation(.easeInOut(duration: 0.35)) { degrees = next }

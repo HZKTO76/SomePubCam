@@ -111,6 +111,12 @@ final class QuickActions {
 }
 
 final class SCAMERAAppDelegate: NSObject, UIApplicationDelegate {
+    /// The camera's screen stays portrait as Android's CameraActivity; iPadOS may still turn a resizable window (DeviceTurn then
+    /// turns the controls against the interface's own angle)
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        .portrait
+    }
+
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         if let item = options.shortcutItem {
@@ -124,6 +130,21 @@ final class SCAMERAAppDelegate: NSObject, UIApplicationDelegate {
 }
 
 final class SCAMERASceneDelegate: NSObject, UIWindowSceneDelegate {
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        // iPad: the portrait screen asked for (refused in a resized window: the layout then follows the window)
+        if let windowScene = scene as? UIWindowScene, UIDevice.current.userInterfaceIdiom == .pad {
+            windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { error in
+                SessionLog.i("App", "portrait not granted: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// The window turned (an iPad window iPadOS rotates): the controls' angle again
+    func windowScene(_ windowScene: UIWindowScene, didUpdate previousCoordinateSpace: UICoordinateSpace,
+                     interfaceOrientation previousInterfaceOrientation: UIInterfaceOrientation, traitCollection previousTraitCollection: UITraitCollection) {
+        Task { @MainActor in DeviceTurn.shared.refresh() }
+    }
+
     func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem,
                      completionHandler: @escaping (Bool) -> Void) {
         let type = shortcutItem.type
