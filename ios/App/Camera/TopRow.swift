@@ -99,9 +99,35 @@ enum FormatState {
         }
     }
 
-    /// «12 Мп» / «48 Мп»
+    /// «12 Мп» / «48 Мп»; an SHDR shot (PhotoSize.badge, P501) names the photo «Разрешение» makes of its Bayer frames (the iPhone's
+    /// and the iPad's 4032 x 3024, the «16:9» crop): 1.5x ≈ 27 Мп, 2x ≈ 49 Мп
     @MainActor static func size(_ camera: CameraModel) -> String {
-        (camera.fullResolution && camera.supportsFullResolution ? "48" : "12") + L("unit.mp")
+        if camera.shdr {
+            let w = 4032, h = Wide169.on ? 2268 : 3024
+            let stored = SettingsStore.shared.string("pref_scam_hybrid_output", "sensor").trimmingCharacters(in: .whitespaces)
+            let (ow, oh): (Int, Int)
+            switch stored {
+            case "2x": (ow, oh) = (2 * w, 2 * h)
+            case "1.5x", "16", "20": // HybridOutput::sabreSize
+                (ow, oh) = (min(2 * w, Int((Float(w) * 1.5 / 4).rounded()) * 4), min(2 * h, Int((Float(h) * 1.5 / 2).rounded()) * 2))
+            default: (ow, oh) = (w, h)
+            }
+            return megapixels(ow, oh)
+        }
+        return (camera.fullResolution && camera.supportsFullResolution ? "48" : "12") + L("unit.mp")
+    }
+
+    /// PhotoInfo.megapixels: «12 Мп», «27 Мп», «8,3 Мп»
+    static func megapixels(_ w: Int, _ h: Int) -> String {
+        let mp = Double(w) * Double(h) / 1e6
+        let digits = mp >= 19.95 ? 0 : mp >= 0.995 ? 1 : 2
+        var s = String(format: "%.\(digits)f", locale: Locale(identifier: "en_US_POSIX"), mp)
+        if digits > 0 {
+            while s.hasSuffix("0") { s.removeLast() }
+            if s.hasSuffix(".") { s.removeLast() }
+        }
+        if Lang.russian { s = s.replacingOccurrences(of: ".", with: ",") }
+        return s + L("unit.mp")
     }
 
     /// «RAW (DNG) + HEIC» / «HEIC» / «RAW (DNG)»

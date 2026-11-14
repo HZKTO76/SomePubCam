@@ -71,6 +71,10 @@ targets:
       - path: ../app/src/main/assets/shaders
         type: folder
         buildPhase: resources
+      # the fringe net's weights (CaNetP: canet/canetp_v4.bin beside the shaders, as the Android app's assets)
+      - path: ../app/src/main/assets/canet
+        type: folder
+        buildPhase: resources
       # the film simulation's arrays (FilmSpectral: spektrafilm's film / paper profiles, assets/film/*.bin with their licences),
       # read beside the shaders as the Android app reads its assets
       - path: ../app/src/main/assets/film

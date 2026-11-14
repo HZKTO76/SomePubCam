@@ -16,7 +16,7 @@ struct VfOut {
     float2 screen; // the picture's coordinate (0..1, y down)
 };
 
-// u[0]: xy uv scale (aspect fit around the centre), zw unused
+// u[0]: xy uv scale (aspect fit around the centre), z the digital zoom (0 / 1: none), w unused
 // u[1]: xy resolution (drawable pixels), z LUT size, w LUT strength
 // u[2]: xyz LUT domain min
 // u[3]: xyz 1 / (LUT domain max - min)
@@ -31,7 +31,7 @@ vertex VfOut vf_vertex(uint vid [[vertex_id]], constant float4 *u [[buffer(0)]])
     VfOut o;
     o.position = float4(p, 0, 1);
     o.screen = float2((p.x + 1) * 0.5, (1 - p.y) * 0.5);
-    o.uv = (o.screen - 0.5) * u[0].xy + 0.5;
+    o.uv = (o.screen - 0.5) * u[0].xy / max(u[0].z, 1.0) + 0.5; // u[0].z: a digital zoom (ViewfinderRenderer.digitalZoom)
     return o;
 }
 

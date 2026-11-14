@@ -266,10 +266,32 @@ actor CaptureService {
 
     func captureBayerBurst(count: Int) async throws -> BayerBurst {
         guard let device = activeInput?.device else { throw CameraError.videoDeviceUnavailable }
-        let zoom = residual * (activeModule?.crop ?? 1) // a copy's crop (ModuleSettings) on top of the residual
-        var burst = try await photoCapture.captureBayerBurst(count: count, device: device)
-        burst.zoom = zoom
+        // AVFoundation takes Bayer RAW only at videoZoomFactor 1: a zoom (1.5x / 2x, a native-resolution module) is SabreCrop's
+        // window of the full frames, as Android's Sabre zoom; the viewfinder keeps the zoomed field digitally meanwhile
+        let factor = Double(device.videoZoomFactor)
+        var burst = try await atUnitZoom(device) { try await self.photoCapture.captureBayerBurst(count: count, device: device) }
+        burst.zoom = factor * (activeModule?.crop ?? 1) // a copy's crop (ModuleSettings) on top of the zoom
         return burst
+    }
+
+    /// `body` with the device at videoZoomFactor 1 (Bayer RAW), the zoom back after it; the viewfinder shows the same field
+    /// (ViewfinderRenderer.digitalZoom) while the device is at 1
+    private func atUnitZoom<T>(_ device: AVCaptureDevice, _ body: () async throws -> T) async throws -> T {
+        let saved = device.videoZoomFactor
+        guard abs(saved - 1) > 0.001 else { return try await body() }
+        try device.lockForConfiguration()
+        device.videoZoomFactor = 1
+        device.unlockForConfiguration()
+        ViewfinderRenderer.shared.digitalZoom = Float(saved)
+        SessionLog.i("Capture", "Bayer RAW at zoom 1 (was \(String(format: "%.2f", Double(saved)))): the zoom is the merge's crop")
+        defer {
+            if (try? device.lockForConfiguration()) != nil {
+                device.videoZoomFactor = saved
+                device.unlockForConfiguration()
+            }
+            ViewfinderRenderer.shared.digitalZoom = 1
+        }
+        return try await body()
     }
 
     // MARK: the top row's flash, the zoom and «Про» (CameraUIController torch_button, ZoomController, the manual panel)
@@ -369,9 +391,9 @@ actor CaptureService {
     /// The flash shot's one Bayer frame (nil: refused, the camera's own flash photo then)
     func captureFlashFrame() async throws -> BayerBurst? {
         guard let device = activeInput?.device else { throw CameraError.videoDeviceUnavailable }
-        let zoom = residual * (activeModule?.crop ?? 1) // a copy's crop (ModuleSettings) on top of the residual
-        var burst = try await photoCapture.captureFlashFrame(device: device, flash: .on)
-        burst?.zoom = zoom
+        let factor = Double(device.videoZoomFactor)
+        var burst = try await atUnitZoom(device) { try await self.photoCapture.captureFlashFrame(device: device, flash: .on) }
+        burst?.zoom = factor * (activeModule?.crop ?? 1) // a copy's crop (ModuleSettings) on top of the zoom
         return burst
     }
 

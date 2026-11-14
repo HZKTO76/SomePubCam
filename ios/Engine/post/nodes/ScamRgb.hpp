@@ -1,12 +1,13 @@
 // ScamRgb.java one to one (the default GL model): the worker RGB in, white balance and lens shading, the per-channel highlight
 // recovery (clip levels from the histogram plateau, local chroma, RawTherapee's «Inpaint opposed» with its chrominance on the
-// GPU), the purple fringe (P399), the sun bloom share, the opposed landing and the clip band. Not ported (they throw): the
-// SCAM HDR route (no hybrid), the fringe net (CaNetP «Нейросеть»), a lab fragment's frozen levels, the Sabre 2x grid above
+// GPU), the purple fringe (P399) or the fringe net (CaNetP «Нейросеть»), the sun bloom share, the opposed landing and the clip band. Not
+// ported (they throw): the SCAM HDR route (no hybrid), a lab fragment's frozen levels, the Sabre 2x grid above
 // 64 MP. The half RGB goes up by the CPU repack (HalfRgbUpload's GPU pass gives the same halves: its own exactness check).
 #pragma once
 
 #include "../Pipeline.hpp"
 #include "../why/WhyToneCore.hpp"
+#include "CaNetP.hpp"
 
 #include <atomic>
 #include <thread>
@@ -332,9 +333,14 @@ public:
             if (!oppGpu) throw std::runtime_error("post port: the opposed chrominance on the GPU failed");
         }
         const float purple = perChannel ? std::max(0.f, std::min(1.f, prefs.hybridValue("highlight_purple", 1.f))) : 0.f;
-        const std::string fringeMethod = prefs.hybridString("fringe_method", "classic") == "neural" ? "neural" : "classic";
-        if (purple > 0.f && fringeMethod == "neural") throw std::runtime_error("post port: the fringe net (CaNetP) is not ported");
-        const float p399 = purple;
+        // P493: «Подавление аберраций» - the fringe net (CaNetP, after this pass and the clip band) or P399 here, never both
+        const CaNetP::NetSettings fringeNet = CaNetP::NetSettings::read();
+        const std::string fringeMethod = CaNetP::method();
+        const int64_t fringePixels = int64_t(size.x) * size.y;
+        const CaNetP::Route fringe = CaNetP::route(purple, fringeMethod, fringePixels,
+            purple > 0.f && fringeMethod == CaNetP::NEURAL && fringePixels <= CaNetP::MAX_PIXELS
+            && CaNetP::prepare(prog, fringeNet, [](const std::string& l) { logI("SCAM_PIPELINE", l); }));
+        const float p399 = fringe == CaNetP::Route::CLASSIC ? purple : 0.f;
         if (p399 > 0.f && prefs.scamDevSwitch("purple_bound", true)) {
             purpleBound = makeTexture({(input->mSize.x + 7) / 8, (input->mSize.y + 7) / 8}, GLFormat(DataType::FLOAT_32, 4), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
             prog.useAssetProgram("scamhdr/purplebound", false);
@@ -453,6 +459,20 @@ public:
             if (chromaWide) { chromaWide->close(); chromaWide = nullptr; }
             if (chromaHuge) { chromaHuge->close(); chromaHuge = nullptr; }
             if (unbanded) p.releaseMain(unbanded);
+        }
+        // P493: the fringe net on scamrgb's output (after the clip band) into the next main; a GPU failure leaves the frame as it is
+        // (purpleU was 0) and the ping-pong cursor where it was
+        if (fringe == CaNetP::Route::NEURAL) {
+            Texture fringeIn = WorkingTexture, fringeOut = p.getMain();
+            try {
+                CaNetP::run(prog, *fringeIn, *fringeOut, p, cc.lo, fringeNet, purple, toRender(p));
+                WorkingTexture = fringeOut;
+                if (early) { glFinish(); p.releaseMain(fringeIn); }
+            } catch (const std::exception& e) {
+                logI("SCAM_PIPELINE", std::string("fringe net (P493) failed, the frame without fringe suppression: ") + e.what());
+                p.texnum = p.texnum == 1 ? 2 : 1;
+                prog.closed = true;
+            }
         }
         logI("SCAM_PIPELINE", std::string("scamrgb input ") + (isSigned ? "signed (clamped after the noise reduction or the WHY colour averages)" : "clamped per pixel (post_ab_clamp)"));
         if (perChannel)

@@ -39,9 +39,26 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         var filterStrength: Float = 0
         var weights: [SIMD3<Float>] = []
         var peaking = false
-        var active: Bool { lut != nil && strength > 0 || filter > 0 && filterStrength > 0 && !weights.isEmpty || peaking }
+        var zoomed = false   // a digital zoom to show (digitalZoom): the frames drawn even without a look
+        var active: Bool { lut != nil && strength > 0 || filter > 0 && filterStrength > 0 && !weights.isEmpty || peaking || zoomed }
     }
     private var drawn = Drawn()
+    private var zoomOverride: Float = 1
+    /// A digital zoom of the shown frame (1: none): the field of a device zoom while a Bayer RAW series runs at zoom 1
+    var digitalZoom: Float {
+        get { lock.lock(); defer { lock.unlock() }; return zoomOverride }
+        set {
+            lock.lock()
+            zoomOverride = max(1, newValue)
+            lock.unlock()
+            let zoomed = newValue > 1.001
+            queue.async { [self] in
+                drawn.zoomed = zoomed
+                let active = drawn.active && mainPipeline != nil
+                lookQueue.async { [self] in setFrames(active) }
+            }
+        }
+    }
     private var pyramid: MTLTexture?
     private var shownActivation = false
 
@@ -307,6 +324,7 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         let layer = metalLayer
         let size = drawableSize
         let view = self.view
+        let zoom = zoomOverride
         lock.unlock()
         guard let layer, size.width >= 2, size.height >= 2 else { return }
         if layer.drawableSize != size { layer.drawableSize = size }
@@ -337,7 +355,7 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         let range = drawn.domainMax - drawn.domainMin
         let inverse = SIMD3<Float>(range.x > 0 ? 1 / range.x : 0, range.y > 0 ? 1 / range.y : 0, range.z > 0 ? 1 / range.z : 0)
         var u: [SIMD4<Float>] = [
-            SIMD4(scale.x, scale.y, 0, 0),
+            SIMD4(scale.x, scale.y, zoom, 0),
             SIMD4(Float(size.width), Float(size.height), Float(drawn.lut?.width ?? 1), drawn.strength),
             SIMD4(drawn.domainMin, 0),
             SIMD4(inverse, 0),
