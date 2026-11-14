@@ -1,12 +1,14 @@
 // OldstyleTone.java and OldstyleStyleNode.java one to one: «Oldstyle» («ScamMaster Тон»), the mode's tone in place of «Why тон»
 // through the owner's tone-port module (oldstyle/ToneNative.hpp), then its style.
 //   1. the plan from the clean linear RGB's strided samples (why/v2_clean, why/v2_stride; OldstyleAe.plan), the version by memory;
-//   2. the module's frame (oldstyle/linear, RGBA16I) read back in strips of STRIP rows into one planar int16 frame;
+//   2. the module's frame (oldstyle/linear, RGBA16I) read back in strips of STRIP rows into one planar int16 frame (P716: V1's frame
+//      drawn at its gain, preGain, and dithered where the module still lifts its rounding);
 //   3. one call of the module on the whole frame (CPU);
 //   4. the RGB8 picture into the pipeline's main texture (oldstyle/rgb8).
 // OldstyleStyleNode: oldstyle/adjust with the style's uniforms after the tone.
 #pragma once
 
+#include "../SabreCrop.hpp"
 #include "../oldstyle/OldstyleAe.hpp"
 #include "../oldstyle/ToneNative.hpp"
 #include "../why/WhyToneCore.hpp"
@@ -36,6 +38,44 @@ public:
     static bool read16(GLint implementationFormat, GLint implementationType, bool allowed) {
         return allowed && implementationFormat == GL_RGBA_INTEGER && implementationType == GL_SHORT;
     }
+    /// P716 preGain: the gain the frame is drawn at (its int16 samples at uScale x this; the module then gets the gains over it):
+    /// at most 4 x the smaller gain, V2: 1
+    static float preGain(bool v2, float gainShort, float gainLong) {
+        if (v2 || !(gainShort > 0.f) || !(gainLong > 0.f)) return 1.f;
+        return std::max(1.f, std::min(std::max(gainShort, gainLong), 4.f * std::min(gainShort, gainLong)));
+    }
+    /// P716: a gain past which a step of the frame's int16 rounding becomes a visible step: the frame is dithered (oldstyle/linear)
+    static constexpr float DITHER_LIFT = 2.f;
+    /// P716 dither: whether oldstyle/linear dithers the frame's rounding (the module lifts a step of it by its gains over preGain)
+    static bool dither(float gainShort, float gainLong, float preGain) { return std::max(gainShort, gainLong) / preGain >= DITHER_LIFT; }
+    /// P716 post: the module's post array of the photo - the plan's, the frame's gain and V1 HDR's bright exposure from the linear frame
+    static std::vector<float> post(const std::vector<float>& base, float preGain) {
+        std::vector<float> out(17, 0.f);
+        for (size_t i = 0; i < base.size() && i < 17; i++) out[i] = base[i];
+        out[15] = preGain;
+        out[16] = 1.f;
+        return out;
+    }
+
+    /// String.format(Locale.ROOT, "%.3g", v) for the log's frame gain (v >= 1e-4): three significant digits, the trailing zeros
+    /// kept (Java's %g), rounded half up on the shortest decimal form as Java (javaFixed); scientific from 1000 on
+    static std::string javaGeneral3(float v) {
+        const double d = double(v);
+        if (!std::isfinite(d) || d < 1e-4) return javaFixed(d, 3);
+        int e = int(std::floor(std::log10(d)));
+        for (int tries = 0; tries < 2; tries++) {
+            if (e >= 3) break;
+            const std::string s = javaFixed(d, std::max(0, 2 - e));
+            const size_t point = s.find('.');
+            const int intDigits = int(point == std::string::npos ? s.size() : point);
+            if (e < 0 || intDigits <= e + 1) return s; // (below 1: no carry into a new decade changes the digit count)
+            e++; // rounded up into the next decade (9.995 -> 10.0)
+        }
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%.2e", d);
+        return buf;
+    }
+
     static int64_t bytes(bool v2, bool hdr, int64_t pixels) {
         return pixels * (v2 ? (hdr ? BYTES_V2_HDR : BYTES_V2_SDR) : (hdr ? BYTES_V1_HDR : BYTES_V1_SDR));
     }
@@ -164,12 +204,15 @@ public:
             std::array<float, 9> s2i{};
             for (size_t i = 0; i < 9 && i < s2iv.size(); i++) s2i[i] = s2iv[i];
             const Mat3 i2s = WhyTone::colourMatrix(pipeline);
+            const float pre = preGain(useV2, plan.gainShort, plan.gainLong);
+            const bool dithered = dither(plan.gainShort, plan.gainLong, pre);
             frame = makeTexture(size, GLFormat(DataType::SIGNED_16, 4), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
             prog.setDefine("PRE_CCM", useV2 ? 0 : 1);
             prog.useAssetProgram("oldstyle/linear", false);
             prog.setTexture("InputBuffer", input);
             WhyTone::setColour(prog, pipeline, *gainMap, 1.f);
-            prog.setVar("uScale", plan.inputScale * float(ToneNative::WHITE));
+            prog.setVar("uScale", plan.inputScale * float(ToneNative::WHITE) * pre);
+            prog.setVar("uDither", dithered ? 1.f : 0.f);
             prog.drawBlocks(frame);
             prog.closed = true;
             const auto readStart = std::chrono::steady_clock::now();
@@ -226,10 +269,11 @@ public:
             if (params_.dehaze && params_.dehazeShading && pipeline.mParameters.mapSize && pipeline.mParameters.gainMap)
                 shading = shadingGrid(*pipeline.mParameters.gainMap, pipeline.mParameters.mapSize->x, pipeline.mParameters.mapSize->y);
             float info[8] = {};
-            const std::vector<float> post = params_.post();
+            const std::vector<float> postArray = post(params_.post(), pre);
             const std::array<float, 9> ccm = ccmStrength(ColourLook::mul(i2s, s2i), params_.ccmStrength);
             ToneNative::render(useV2 ? ToneNative::V2 : ToneNative::V1, planar.data(), size.x, size.y, useV2 ? nullptr : ccm.data(),
-                               plan.gainShort, plan.gainLong, plan.hdr, postview_, params_.saturation, post.data(), int(post.size()),
+                               plan.gainShort / pre, plan.gainLong / pre, plan.hdr, postview_, params_.saturation, postArray.data(),
+                               int(postArray.size()),
                                shading ? shading->data() : nullptr, shading ? pipeline.mParameters.mapSize->x : 0,
                                shading ? pipeline.mParameters.mapSize->y : 0, info, out.data());
             const auto toneEnd = std::chrono::steady_clock::now();
@@ -254,7 +298,7 @@ public:
                 std::snprintf(dehaze, sizeof dehaze, " dehaze off");
             const auto now = std::chrono::steady_clock::now();
             logI("SCAM_PIPELINE", std::string("Oldstyle ") + (useV2 ? "V2 (tone-port 3.1)" : "V1 (tone-port 2.7)") + " " + plan.describe()
-                 + (useV2 && postview_ ? " postview" : "") + " grid=" + std::to_string(size.x) + "x" + std::to_string(size.y) + " samples="
+                 + (useV2 && postview_ ? " postview" : "") + " frame gain=" + javaGeneral3(pre) + (dithered ? " dithered" : "") + " grid=" + std::to_string(size.x) + "x" + std::to_string(size.y) + " samples="
                  + std::to_string(sw) + "x" + std::to_string(sh) + " shorts=" + (shorts ? "true" : "false") + " frameTET="
                  + std::to_string(long(std::floor(frameTet + 0.5))) + " samples ms=" + ms(started, planStart) + " (read "
                  + ms(samplesStart, planStart) + ") plan ms=" + ms(planStart, readStart) + " readback ms=" + ms(readStart, toneStart)

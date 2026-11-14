@@ -92,6 +92,16 @@ inline std::string text(const Settings& s) {
     // P675: the fast route's night motion test (worker fastNightMotion, default 1)
     const float nightMotion = s.hybridValue("fast_night_motion", 1.f);
     if (nightMotion != 1.f) out += "fastNightMotion " + f(std::max(0.f, std::min(1.f, nightMotion))) + "\n";
+    // P712: the fast route's faster GPU programs with the same output (worker fmOutTile / fmGuideCells / fmLatticeTiled /
+    // fmKeepContext / fmChromaFused, each default 1; "hybrid_fm_... 0" = as before, an A/B)
+    if (s.hybridValue("fm_out_tile", 1.f) == 0.f) out += "fmOutTile 0\n";
+    if (s.hybridValue("fm_guide_cells", 1.f) == 0.f) out += "fmGuideCells 0\n";
+    if (s.hybridValue("fm_lattice_tiled", 1.f) == 0.f) out += "fmLatticeTiled 0\n";
+    if (s.hybridValue("fm_keep_context", 1.f) == 0.f) out += "fmKeepContext 0\n";
+    if (s.hybridValue("fm_chroma_fused", 1.f) == 0.f) out += "fmChromaFused 0\n";
+    // P712: where the fast merge's readback (bit 1) and RAW upload ring (bit 2) live (worker fmAhb, 3 the default)
+    const float ahb = s.hybridValue("fm_ahb", 3.f);
+    if (ahb != 3.f) out += "fmAhb " + std::to_string(round(std::max(0.f, std::min(3.f, ahb)))) + "\n";
     if (s.hybridValue("us_weak_hom", 1.f) == 0.f) out += "usWeakHom 0\n";
     if (s.hybridValue("us_clip_vote", 1.f) == 0.f) out += "usClipVote 0\n";
     if (s.hybridValue("strip_guard", 1.f) == 0.f) out += "stripGuard 0\n";

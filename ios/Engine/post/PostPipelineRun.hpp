@@ -50,6 +50,13 @@ inline bool gainMapWanted(bool setting, const FilmSettings* film) { return setti
 /// PostPipeline.V2_MAX_PIXELS: the largest grid «Why тон» V2 runs on (the 200 MP grids keep V1)
 constexpr int64_t V2_MAX_PIXELS = 100000000LL;
 
+/// PostPipeline.whyToneV2 (no ShotLook of the press on iOS: the settings now): V2 unless the grid is above V2_MAX_PIXELS or a film
+/// of the old route is on; then PreferenceKeys.whyToneV2Effective (P718: not with the black-and-white filter)
+inline bool whyToneV2(const Settings& prefs, const FilmSettings* film, bool referenceFilm, int64_t pixels) {
+    if (pixels > V2_MAX_PIXELS || (film && !referenceFilm)) return false;
+    return prefs.whyToneV2Effective();
+}
+
 /// PostPipeline.takeFilm: the shot's film snapshot (the settings now: iOS has no ShotLook of the press yet), the chosen LUT and its
 /// strength; a film of the old route whose data cannot be read gives the photo no film
 inline void takeFilm(PostPipeline& p) {
@@ -110,17 +117,21 @@ inline void buildDefaultPipeline(PostPipeline& p) {
         tail(p, nullptr, false);
         return;
     }
-    // P614 «Why тон» V2 (PreferenceKeys.whyToneV2): the reference tone instead of V1's WhyStats / WhyFusion / WhyCombine, with our
-    // sharpening between them; a film of the old route or a grid above V2_MAX_PIXELS keeps V1
-    const int64_t pixels = p.mParameters.rawSize ? int64_t(p.mParameters.rawSize->x) * p.mParameters.rawSize->y : 0;
-    const bool v2Chosen = prefs.hybridString("tone_version", "v1") == "v2";
-    const bool v2 = v2Chosen && (!film || referenceFilm) && pixels <= V2_MAX_PIXELS;
-    if (v2Chosen && !v2)
-        logI("SCAM_PIPELINE", std::string("WHY tone V2 chosen, V1 used (") + (film && !referenceFilm ? "film of the old route" : "above 100 MP") + ")");
+    // P614 «Why тон» V2 (PreferenceKeys.whyToneV2Effective): the reference tone instead of V1's WhyStats / WhyFusion / WhyCombine,
+    // with our sharpening between them; a film of the old route, a grid above V2_MAX_PIXELS or (P718) the black-and-white filter
+    // keeps V1
+    const bool hasGrid = p.mParameters.rawSize.has_value();
+    const int64_t pixels = hasGrid ? int64_t(p.mParameters.rawSize->x) * p.mParameters.rawSize->y : 0;
+    const bool v2 = whyToneV2(prefs, film.get(), referenceFilm, pixels);
+    if (!v2 && prefs.whyToneV2())
+        logI("SCAM_PIPELINE", std::string("WHY tone V2 chosen, V1 used (") + (film && !referenceFilm ? "film of the old route"
+             : hasGrid && pixels > V2_MAX_PIXELS ? "above 100 MP" : "black and white") + ")");
     std::vector<std::unique_ptr<Node>> tone;
     if (v2) {
         tone.push_back(std::make_unique<WhyV2Stats>());
-        tone.push_back(std::make_unique<WhyLumaSharpen>());
+        auto sharpen = std::make_unique<WhyLumaSharpen>();
+        sharpen->v2 = true; // P718: «Резкость» scales V2's sharpening
+        tone.push_back(std::move(sharpen));
         tone.push_back(std::make_unique<WhyV2Highlights>());
         tone.push_back(std::make_unique<WhyV2Fusion>());
         tone.push_back(std::make_unique<WhyV2Tone>());
@@ -185,7 +196,8 @@ inline PostOutput runPostPipeline(PostPipeline& p) {
         p.cropSize = *p.finalSize;
     }
     const Point rotated = p.getRotatedCoords(p.finalSize ? *p.finalSize : *p.mParameters.rawSize);
-    GLDrawParams::TileSize() = int64_t(p.mParameters.rawSize->x) * p.mParameters.rawSize->y < 8000000 ? 8 : 256;
+    // P683: every picture in the 256-row bands of the larger ones (a band is a viewport: the same photo bit for bit)
+    GLDrawParams::TileSize() = 256;
     buildDefaultPipeline(p);
     PostOutput out;
     out.rgba = p.runAllToRgba(rotated);

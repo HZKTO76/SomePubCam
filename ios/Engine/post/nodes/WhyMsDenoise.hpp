@@ -1,5 +1,6 @@
 // WhyMsDenoise.java one to one: the post-CCM optics cleanup and the reference's Oklab Laplacian pyramid denoise (strips of
-// rows above 16 MP; the fused variants ms_fuse / ms_fuse_lab are off by default and not ported).
+// rows above 16 MP). P671's Oklab cache of the optics pass (scam_dev ms_oklab_cache, the same numbers) is speed only and not
+// ported: the optics pass is always the plain one here (the log's «opticsOklab=inline»).
 #pragma once
 
 #include "ScamHdrDenoise.hpp"
@@ -70,9 +71,6 @@ public:
         const int requested = std::max(0, javaRound(prefs.hybridValue("resolve_strip_rows", 0.f)));
         const int rows = stripRows(whole_.x, whole_.y, requested);
         tiled_ = rows < whole_.y;
-        const bool plain = pyramid && !tiled_;
-        if (plain && (prefs.scamDevSwitch("ms_fuse", false) || prefs.scamDevSwitch("ms_fuse_lab", false)))
-            throw std::runtime_error("post port: the fused pyramid passes (ms_fuse / ms_fuse_lab) are not ported");
         const bool reuse = prefs.scamDevSwitch("ms_reuse", true);
         Texture out = pipeline.getMain();
         Texture codes;
@@ -188,7 +186,7 @@ public:
         grids_.clear();
         prog.closed = true;
         logI("SCAM_PIPELINE", std::string("resolve post: pyramid=") + (pyramid ? "true" : "false") + " model=" + javaFloatString(model) + " shadow="
-             + javaFloatString(shadow) + " rows=" + std::to_string(rows));
+             + javaFloatString(shadow) + " opticsOklab=inline rows=" + std::to_string(rows));
     }
 
 private:

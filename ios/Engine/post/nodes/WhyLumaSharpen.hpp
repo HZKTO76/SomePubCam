@@ -13,6 +13,11 @@ public:
     WhyLumaSharpen() : Node("", "WhyLumaSharpen") {}
     void Compile() override {}
 
+    /// P718: in «Why тон» V2 «Резкость» (sharp_gain, V1's detail gain in WhyCombine) scales this sharpening's amounts instead, so the
+    /// Simple mode's slider acts with the style presets too; 1 (the default) leaves V2 as it was.
+    bool v2 = false;
+    static float v2Gain(bool v2, float sharpGain) { return v2 ? std::max(0.f, sharpGain) : 1.f; }
+
     static constexpr float SCALE2_BIL = 0.75f, SCALE2_RL_GAUSS = 0.85f, QUAD_RL3_BOOST = 2.f;
     static constexpr int MAX_HALF = 8;
     static constexpr float LOW_LIGHT_MIN = 0.3f, LOW_LIGHT_START = 4.f, LOW_LIGHT_FULL = 24.f;
@@ -32,6 +37,12 @@ public:
     static bool quadSwitch() { return Settings::current().scamDevSwitch("sharpen_quad", true); }
     static bool quadOnLattice(int block, bool enabled) { return block == 2 && enabled; }
     static bool r1Fits(int w, int h) { return int64_t(w) * h <= HUGE_GF_PIXELS; }
+    /// P687: on a Quad shot on the lattice source the last pass (why/sharp_r1 mode 4) smooths the sharpening's increment along a
+    /// straight edge only (the Quad merge's 2 x 2 wobble no longer lifted into 2 - 4 px steps); texture, flat ground and bends keep
+    /// mode 2's output bit for bit. The source plane lives to the end. scam_dev "sharpen_quad_edge 0" = the passes of before.
+    static constexpr float QUAD_EDGE_ALONG = 1.f;
+    static bool quadEdgeAlong(bool quadBoost, bool enabled) { return quadBoost && enabled; }
+    static bool quadEdgeSwitch() { return Settings::current().scamDevSwitch("sharpen_quad_edge", true); }
     static bool smoothedSource(int block, bool enabled) { return (block == 2 || block == 4) && enabled; }
     static bool smoothedSource(int block) {
         return smoothedSource(block, block > 1 && Settings::current().scamDevSwitch("sharpen_r1", true)) && !quadOnLattice(block, block == 2 && quadSwitch());
@@ -196,7 +207,7 @@ private:
         const float s = scaleSetting > 0.f ? std::min(scaleSetting, 4.f) : float(std::max(1, javaRound(pipeline.mParameters.outputScale)));
         const int down = std::max(1, int(std::floor(s + 1e-4f)));
         const int nb = std::max(1, javaRound(s));
-        const float lowLight = lowLightFactor(pipeline.mParameters.finishSnr);
+        const float lowLight = lowLightFactor(pipeline.mParameters.finishSnr) * v2Gain(v2, WhyTone::value("sharp_gain", 1.f));
         const float usmRadius = WhyTone::value("sharp_usm_radius", 0.1f);
         const float usmAmount = filmShare(WhyTone::value("sharp_usm_amount", 0.5f) * lowLight, film);
         const float usmThresh = WhyTone::value("sharp_usm_thresh", 0.f) / 255.f;
@@ -255,6 +266,8 @@ private:
         const bool lattice = !r1 && latticeSource(block, size.x, size.y);
         const bool quadBoost = lattice && quadOnLattice(block, block == 2 && quadSwitch());
         if (quadBoost) rl[2][2] *= QUAD_RL3_BOOST;
+        // P687: the source kept for the last pass, which smooths the increment along straight edges
+        const bool edgeAlong = quadEdgeAlong(quadBoost, quadBoost && quadEdgeSwitch());
         Texture src = ya, residual;
         if (r1 || lattice) {
             src = plane(size, DataType::FLOAT_16, 1);
@@ -325,7 +338,9 @@ private:
         prog.setVar("sobelU", sobelAmount, sobelThresh);
         prog.setVar("thinU", thin);
         prog.drawBlocks(obs);
-        src->close();
+        Texture source;
+        if (edgeAlong) source = src; // P687: read again by the last pass
+        else src->close(); // ya itself without R1
         if (ab) ab->close();
         std::string stages;
         Texture ratio;
@@ -381,11 +396,17 @@ private:
             prog.useAssetProgram("why/sharp_r1", false);
             prog.setTexture("Sharpened", obs);
             prog.setTexture("Residual", residual);
-            prog.setVar("modeU", 2);
+            if (source) { // P687: mode 2 with the increment smoothed along straight edges
+                prog.setTexture("Source", source);
+                prog.setVar("edgeAlongU", QUAD_EDGE_ALONG);
+            }
+            prog.setVar("modeU", source ? 4 : 2);
             prog.drawBlocks(out);
             residual->close();
+            if (source) source->close();
             obs = out;
-            stages += r1 ? " r1=B3(block " + std::to_string(block) + ")" : std::string(" lattice=off-sharpened") + (quadBoost ? " quad(rl3 x2.0)" : "");
+            stages += r1 ? " r1=B3(block " + std::to_string(block) + ")"
+                         : std::string(" lattice=off-sharpened") + (quadBoost ? " quad(rl3 x2.0)" : "") + (source ? " edge-along" : "");
         } else if (block > 1) stages += std::string(r1Fits(size.x, size.y) ? " r1=off(block " : " r1=off(>100MP, block ") + std::to_string(block) + ")";
         prog.closed = true;
         if (ratio) ratio->close();

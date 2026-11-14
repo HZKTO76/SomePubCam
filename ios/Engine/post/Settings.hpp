@@ -345,6 +345,23 @@ public:
         }
         return hybridString("downsampler", "lanczos");
     }
+    /// P614 whyToneV2: «Why тон» V2 chosen (pref_scam_hybrid_tone_version "v2"; scam_dev "hybrid_tone_version 0|1")
+    bool whyToneV2() const { return hybridString("tone_version", "v1") == "v2"; }
+    /// P718 monoFilter: «Чёрно-белый» (pref_scam_hybrid_colour_mono) on - an entry of ColourLook.MONO past "off"
+    bool monoFilter() const {
+        static const char* const MONO[7] = {"off", "neutral", "yellow", "orange", "red", "green", "blue"}; // ColourLook.MONO
+        const std::string v = hybridString("colour_mono", "off");
+        for (int i = 0; i < 7; i++) if (v == MONO[i]) return i > 0;
+        return false;
+    }
+    /// P718 whyToneV2Effective: the «Why тон» version a shot runs - V2 when chosen, unless the black-and-white filter is on
+    bool whyToneV2Effective() const { return whyToneV2() && !monoFilter(); }
+    /// P718 photoStyle: the «Стиль» tone preset (PhotoStyle.of of pref_photo_style: 1 "vivid", 2 "neutral", else 0 Normal; the
+    /// numbers are WhyV2Ae::STYLE_*)
+    int photoStyle() const {
+        const std::string v = trim(getString("pref_photo_style", ""));
+        return v == "vivid" ? 1 : v == "neutral" ? 2 : 0;
+    }
     /// P503 «Уменьшить до» (pref_scam_hybrid_resize): "off", "12", "16", "20", "mp" or "px"
     std::string hybridResizeMode() const { return hybridString("resize", "off"); }
     /// the own value of the «Уменьшить до» mode (pref_scam_hybrid_resize_mp / _px), none for the presets

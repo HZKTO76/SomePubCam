@@ -37,6 +37,8 @@ public:
         clampLine = WhyNoiseClamp::apply(settings, pipeline.mParameters.fullResRequested > 0, pipeline.merge.lastEffectiveFrames, width, height,
                                          pipeline.merge.lastEffectiveMedian, pipeline.merge.lastNormals);
         settings.ccmSat = WhyTone::ccmSatComp(pipeline.mParameters);
+        // P701: a YUV merge shot meters the scene before its shadow toe, at the day target (the camera's AE exposed it already)
+        if (const auto yuv = WhyTone::yuvExposure(settings, pipeline.mParameters.yuvAeScale)) logI("SCAM_PIPELINE", *yuv);
         return settings;
     }
 

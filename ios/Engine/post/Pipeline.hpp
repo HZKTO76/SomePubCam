@@ -79,7 +79,7 @@ public:
     Parameters mParameters;
     MergeInfo merge;
     std::vector<std::unique_ptr<Node>> Nodes;
-    Texture main1, main2, main3;
+    Texture main1, main2; // (no main3: nothing swapped it in, removed on Android)
     std::function<Texture()> lazyMain1, lazyMain2;
     int texnum = 0;
     Point workSize;
@@ -246,7 +246,6 @@ public:
         checkGl("final output");
         glBindFramebuffer(GL_FRAMEBUFFER, GLuint(bound));
         if (texnum == 1) { if (main1) main1->close(); } else { if (main2) main2->close(); }
-        if (main3) main3->close();
         lazyMain1 = lazyMain2 = nullptr;
         Nodes.clear();
         return rgba;

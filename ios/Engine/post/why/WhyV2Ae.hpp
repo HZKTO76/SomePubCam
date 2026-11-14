@@ -191,6 +191,49 @@ struct Params {
     float bracketDenoise = 0.f, hrAmount = 0.f;
 };
 
+/// P718 «Стиль» (settings/PhotoStyle): the tone presets Normal / Vivid / Neutral as factors on the user's own V2 parameters,
+/// applied at processing time (WhyV2Stats) - the rows keep their values.
+constexpr int STYLE_NORMAL = 0, STYLE_VIVID = 1, STYLE_NEUTRAL = 2;
+
+/// WhyV2Ae.Style: one preset's terms - shadow x shadow_str, highlight x hl_boost and x highlight_str, macro x the macro
+/// contrast's excess over 1, boost x the flat-scene contrast boost, vibrance / vibSaturated added to the vibrance of muted / of
+/// saturated colours, vibTerms x the sky / green / light-tone vibrance terms.
+struct Style {
+    float shadow, highlight, macro, boost, vibrance, vibSaturated, vibTerms;
+};
+
+/// WhyV2Ae.STYLES (index: STYLE_*); research/handoff/PLAN.md P718
+inline const Style& styleAt(int i) {
+    static const Style STYLES[3] = {
+        {1.f, 1.f, 1.f, 1.f, 0.f, 0.f, 1.f},
+        {1.7f, 1.6f, 1.5f, 1.f, 0.30f, 0.f, 1.f},
+        {0.85f, 1.f, 0.3f, 1.f / 3.f, -0.12f, -0.12f, 0.55f},
+    };
+    return STYLES[i];
+}
+
+/// WhyV2Ae.style: the preset of style (an unknown one: Normal)
+inline const Style& style(int style) { return styleAt(style >= 0 && style < 3 ? style : STYLE_NORMAL); }
+
+/// WhyV2Ae.applyStyle: p under the preset style (Normal leaves it as it is)
+inline void applyStyle(Params& p, int styleId) {
+    if (styleId == STYLE_NORMAL) return;
+    const Style& s = style(styleId);
+    p.shadowStr *= s.shadow;
+    p.hlBoost *= s.highlight;
+    p.highlightStr *= s.highlight;
+    p.macroContrast = 1.f + (p.macroContrast - 1.f) * s.macro;
+    p.contrastBoost *= s.boost;
+    p.vibStrength += s.vibrance;
+    p.vibSaturated += s.vibSaturated;
+    p.vibSky *= s.vibTerms;
+    p.vibGreen *= s.vibTerms;
+    p.vibHl *= s.vibTerms;
+}
+
+/// PhotoStyle.id: the stored value of a preset
+inline std::string photoStyleId(int style) { return style == STYLE_VIVID ? "vivid" : style == STYLE_NEUTRAL ? "neutral" : "normal"; }
+
 /// WhyV2Ae.Hist
 struct Hist {
     std::vector<int> luma = std::vector<int>(BINS), hl = std::vector<int>(BINS);

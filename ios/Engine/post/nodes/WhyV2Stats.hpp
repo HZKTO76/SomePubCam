@@ -159,6 +159,9 @@ public:
         st->inScale = float(std::pow(2.0, double(WhyTone::value("input_ev", 0.f))));
         auto v2 = std::make_shared<WhyV2State>();
         v2->params = settings();
+        // P718: the «Стиль» preset (PreferenceKeys.photoStyle: iOS has no ShotLook of the press yet, the settings now) on the user's rows
+        const int style = Settings::current().photoStyle();
+        WhyV2Ae::applyStyle(v2->params, style);
         pipeline.whyV2 = v2;
         const Point size = WorkingTexture->mSize;
         Texture gainMap = pipeline.GainMap, fallback, samplesTex;
@@ -213,7 +216,7 @@ public:
             shim.clip = r.clip;
             st->ae = shim;
             pipeline.linearDisplayGain = r.ae;
-            logI("SCAM_PIPELINE", "WHY V2 stats " + r.describe() + " stride=" + std::to_string(stride) + " samples=" + std::to_string(sw) + "x"
+            logI("SCAM_PIPELINE", "WHY V2 stats " + r.describe() + " style=" + WhyV2Ae::photoStyleId(style) + " stride=" + std::to_string(stride) + " samples=" + std::to_string(sw) + "x"
                  + std::to_string(sh) + " max=" + javaFloatString(max) + " bento=" + (pipeline.merge.lastBentoApplied ? "true" : "false")
                  + " shorts=" + (shorts ? "true" : "false") + " noise=" + javaFloatString(noise[0]) + "/" + javaFloatString(noise[1])
                  + " (stacked model " + javaFloatString(pipeline.noiseS) + "/" + javaFloatString(pipeline.noiseO) + ")");

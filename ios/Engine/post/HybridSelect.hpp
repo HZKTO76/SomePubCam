@@ -162,6 +162,16 @@ inline int normalLimit(int series, int workerLimit, int budget, int minNormals, 
 
 inline int minNormals(int w, int h) { return (long long)w * h > HUGE_INPUT_PIXELS ? HUGE_MIN_NORMALS : MIN_NORMALS; }
 
+/// P685 workerBudgetsFast: a stream above 16 MP on the fast route («Быстрый») leaves its memory to the worker, which merges in row
+/// bands sized to its share of MemAvailable - no frame cap from the SCAM merge's estimate
+inline bool workerBudgetsFast(bool fast, int w, int h) { return fast && (long long)w * h > CLASSIC_INPUT_PIXELS; }
+
+/// workerBudgetsMosaic: a mosaic stream (colour block 2+) between 16 and 100 MP budgets its frames in the worker
+inline bool workerBudgetsMosaic(int w, int h, int mosaicBlock) {
+    const long long px = (long long)w * h;
+    return mosaicBlock >= 2 && px > CLASSIC_INPUT_PIXELS && px <= HUGE_INPUT_PIXELS;
+}
+
 inline int memoryFrameBudget(int w, int h, int mosaicBlock, int grid, long long availableBytes) {
     const long long px = (long long)w * h;
     if (px <= CLASSIC_INPUT_PIXELS || availableBytes <= 0) return std::numeric_limits<int>::max();
@@ -230,7 +240,15 @@ inline Result select(std::vector<Frame> source, int width, int height, const Set
     const int reservedExtras = bentoFrames(s) + 5;
     const int workerLimit = WORKER_MAX_FRAMES - reservedExtras;
     const long long available = (long long)width * height > CLASSIC_INPUT_PIXELS ? availableBytes : -1;
-    const int budget = memoryFrameBudget(width, height, 1, grid, available);
+    // P685: the fast route («Быстрый», PreferenceKeys.fastProcessing) fits its own memory (row bands above its share)
+    const bool fastBudget = workerBudgetsFast(s.hybridString("processing", "fast") != "quality", width, height);
+    const bool workerBudget = workerBudgetsMosaic(width, height, 1) || fastBudget;
+    const int budget = workerBudget ? std::numeric_limits<int>::max() : memoryFrameBudget(width, height, 1, grid, available);
+    if (workerBudget && available > 0)
+        log.push_back("hybrid memory " + std::to_string(width) + "x" + std::to_string(height) + " colour block 1"
+                      + (fastBudget ? ": the fast route sizes its own memory (row bands above its share, P685; available "
+                                    : ": the worker's native mosaic budget picks the frames (available ")
+                      + std::to_string(available >> 20) + " MB)");
     const int limit = normalLimit(0, workerLimit, budget, minNormals(width, height), reservedExtras, int(bracketed.size() + shorts.size()));
     const std::string limitReason = limit < workerLimit ? "memory budget" : "worker limit";
     if (budget != std::numeric_limits<int>::max())

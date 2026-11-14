@@ -1,13 +1,16 @@
 // ScamRgb.java one to one (the default GL model): the worker RGB in, white balance and lens shading, the per-channel highlight
 // recovery (clip levels from the histogram plateau, local chroma, RawTherapee's «Inpaint opposed» with its chrominance on the
-// GPU), the purple fringe (P399) or the fringe net (CaNetP «Нейросеть»), the sun bloom share, the opposed landing and the clip band. Not
+// GPU), the purple fringe (P399) or the fringe net (CaNetP «Нейросеть»), the sun bloom share, the opposed landing and the clip band
+// (P671: only in the tiles near a flagged pixel, ClipBandTiles). Not
 // ported (they throw): the SCAM HDR route (no hybrid), a lab fragment's frozen levels, the Sabre 2x grid above
 // 64 MP. The half RGB goes up by the CPU repack (HalfRgbUpload's GPU pass gives the same halves: its own exactness check).
 #pragma once
 
 #include "../Pipeline.hpp"
 #include "../why/WhyToneCore.hpp"
+#include "../SabreCrop.hpp"
 #include "CaNetP.hpp"
+#include "ClipBandTiles.hpp"
 
 #include <atomic>
 #include <thread>
@@ -161,11 +164,31 @@ public:
     }
 
     /// pixels «Inpaint opposed» reconstructs: a clipped-mean channel (bits 0-2) and no ultrashort content (bits 4, 5)
-    static long opposedPixels(const std::vector<uint8_t>& flags) {
+    static long opposedPixels(const std::vector<uint8_t>& flags) { return opposedPixels(flags, nullptr); }
+
+    /// P671: also the clip band's flagged tiles into band, in the same walk (Java's parts of flagParts, 8-byte aligned: the same
+    /// words whatever the part count)
+    static long opposedPixels(const std::vector<uint8_t>& flags, ClipBandTiles* band) {
         long total = 0;
         for (uint8_t v : flags) if ((v & 7) != 0 && (v & 48) == 0) total++;
+        if (band) {
+            const int64_t n = int64_t(flags.size());
+            const int parts = flagParts();
+            const int64_t step = ((n + parts - 1) / parts + 7) & ~int64_t(7);
+            for (int k = 0; k < parts; k++) {
+                const int64_t s = std::min(n, int64_t(k) * step), e = std::min(n, s + step);
+                band->scan(flags.data(), s, e, k);
+            }
+        }
         return total;
     }
+
+    /// flagParts: the parallel parts of the flags' walk
+    static int flagParts() { return std::max(1, int(4 * hardwareThreads())); }
+
+    /// P671: scam_dev scamrgb_band_tiles (default on; off: the clip band's two passes over every pixel as before) - the band
+    /// computed only in the tiles near a flagged pixel, skipped on a shot without one (ClipBandTiles)
+    static bool bandTilesWanted() { return !PostGlMode::legacy() && Settings::current().scamDevSwitch("scamrgb_band_tiles", true); }
 
     static float opposedMeansUnused(); // (the read-back route is not the default one)
 
@@ -204,9 +227,12 @@ public:
         if (!half && !p.scamRgb.empty() && p.scamRgb.size() != size_t(size.x) * size.y * 12)
             throw std::runtime_error("post port: worker RGB of " + std::to_string(p.scamRgb.size()) + " B for " + std::to_string(size.x) + "x" + std::to_string(size.y));
         const float strength = std::max(0.f, std::min(1.f, prefs.hybridValue("highlight_recovery", 100.f) / 100.f));
+        // P671: the clip band's flagged tiles, marked in the same walk of the flags
+        const std::unique_ptr<ClipBandTiles> bandTiles = hybrid && strength > 0.f && flags && bandTilesWanted()
+            ? ClipBandTiles::create(size.x, size.y, int64_t(flags->size()), flagParts()) : nullptr;
         // the statistics (Java: on a helper thread beside the upload; the same result)
         const ChannelClip stats = channelClip(p.scamRgb.data(), p.scamRgb.size(), half, bento, bentoK, bentoUs, withFlags);
-        const long oppPixels = flags ? opposedPixels(*flags) : -1;
+        const long oppPixels = flags ? opposedPixels(*flags, bandTiles.get()) : -1;
         // the input texture: RGBA16F of the halves (alpha 1.0), or RGBA32F of the floats
         Texture input;
         {
@@ -266,7 +292,6 @@ public:
         }
         flags.reset();
         p.main1 = makeTexture(size, GLFormat(DataType::FLOAT_16, GLDrawParams::WorkDim), nullptr, GL_LINEAR, GL_CLAMP_TO_EDGE);
-        p.main3 = nullptr;
         const bool early = int64_t(size.x) * size.y > 100000000LL || prefs.scamDevSwitch("early_release", false);
         if (early) {
             const Point mainSize = size;
@@ -410,7 +435,24 @@ public:
         }
         const float band = perChannel && flagsTex ? std::max(0.f, std::min(1.f, prefs.hybridValue("highlight_band", 1.f))) : 0.f;
         const float glow = perChannel && flagsTex ? std::max(0.f, std::min(1.f, prefs.hybridValue("highlight_glow", 1.f))) : 0.f;
-        const bool bandPass = band > 0.f || glow > 0.f;
+        // P671: the tiles near a flagged pixel (the windows' reach widened to whole tiles); none: no pass changes a pixel
+        const int bandReach = std::max(std::max(3 * s, 2 * s), glow > 0.f ? 6 * s : 0);
+        const bool tilesApply = (band > 0.f || glow > 0.f) && bandTiles && flagsTex && flagsTex->mSize == size;
+        const std::vector<uint8_t> bandMap = tilesApply ? bandTiles->activeMap(bandReach) : std::vector<uint8_t>();
+        const bool bandSkipped = tilesApply && bandMap.empty();
+        const bool bandPass = (band > 0.f || glow > 0.f) && !bandSkipped;
+        Texture bandTileTex;
+        if (!bandMap.empty()) {
+            try {
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                bandTileTex = makeTexture({bandTiles->tilesX, bandTiles->tilesY}, GLFormat(DataType::SIMPLE_8, 1), bandMap.data(), GL_NEAREST,
+                                          GL_CLAMP_TO_EDGE);
+            } catch (const std::exception& e) {
+                logI("SCAM_PIPELINE", std::string("clip band tiles: ") + e.what() + ", every pixel");
+                if (bandTileTex) bandTileTex->close();
+                bandTileTex = nullptr;
+            }
+        }
         bool inputIsMain2 = false;
         if (early && bandPass && !p.main2 && p.lazyMain2 && input->mainFormat()) {
             input->setFilter(GL_LINEAR);
@@ -424,7 +466,9 @@ public:
             Texture bandMask;
             if (!(int64_t(size.x) * size.y > 100000000LL) && flagsTex->mSize == WorkingTexture->mSize && prefs.scamDevSwitch("clipband_mask", true)) {
                 bandMask = makeTexture(flagsTex->mSize, GLFormat(DataType::SIMPLE_8, 1), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
+                if (bandTileTex) prog.setDefine("BAND_TILES", 1);
                 prog.useAssetProgram("scamhdr/clipmask", false);
+                if (bandTileTex) { prog.setTexture("BandTiles", bandTileTex); prog.setVar("bandTileU", ClipBandTiles::TILE); }
                 prog.setTexture("ClipFlags", flagsTex);
                 prog.setVar("radiusU", 3 * s);
                 prog.setVar("zoneU", 2 * s);
@@ -435,8 +479,10 @@ public:
             }
             Texture banded = p.getMain();
             if (bandMask) prog.setDefine("BAND_MASK", 1);
+            if (bandTileTex) prog.setDefine("BAND_TILES", 1);
             prog.useAssetProgram("scamhdr/clipband", false);
             if (bandMask) prog.setTexture("BandMask", bandMask);
+            if (bandTileTex) { prog.setTexture("BandTiles", bandTileTex); prog.setVar("bandTileU", ClipBandTiles::TILE); }
             prog.setTexture("InputBuffer", WorkingTexture);
             prog.setTexture("ClipFlags", flagsTex);
             prog.setVar("radiusU", 3 * s);
@@ -448,6 +494,7 @@ public:
             prog.drawBlocks(banded);
             prog.closed = true;
             if (bandMask) bandMask->close();
+            if (bandTileTex) { bandTileTex->close(); bandTileTex = nullptr; }
             unbanded = WorkingTexture;
             WorkingTexture = banded;
         }
@@ -478,9 +525,12 @@ public:
         if (perChannel)
             logI("SCAM_PIPELINE", "highlight recovery per channel: chroma=" + (chromaNear ? std::to_string(chromaNear->mSize.x) + "x"
                  + std::to_string(chromaNear->mSize.y) + " block " + std::to_string(block) : std::string("neutral")) + " limit=" + javaFloatString(chromaLimit)
-                 + " band=" + javaFloatString(band) + " glow=" + javaFloatString(glow) + " clipGuard k=" + javaFloatString(usWhite)
+                 + " band=" + javaFloatString(band) + " glow=" + javaFloatString(glow)
+                 + (bandSkipped ? std::string(" (band skipped: no flagged pixel)")
+                    : !bandMap.empty() ? " (band tiles " + javaFixed(double(100.f * ClipBandTiles::share(bandMap)), 1) + "%)" : std::string())
+                 + " clipGuard k=" + javaFloatString(usWhite)
                  + (early ? std::string(" early release") + (inputIsMain2 ? " (input as main2)" : "") : ""));
-        for (Texture* t : {&input, &flagsTex, &chromaNear, &chromaWide, &chromaHuge}) if (*t) (*t)->close();
+        for (Texture* t : {&input, &flagsTex, &chromaNear, &chromaWide, &chromaHuge, &bandTileTex}) if (*t) (*t)->close();
     }
 
 private:

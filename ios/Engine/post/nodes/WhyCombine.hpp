@@ -3,9 +3,11 @@
 // tone curve - into the next main; with Ultra HDR the sky term's ratio for the gain map (skyHdrRatio). «Портрет» as the Java: the
 // skin-tone correction (PORTRAIT), «Маска лица» (FACE_MASK, why/facemask on the whyLow grid) and Face AWB (FACE_AWB). Not ported
 // (stays off): the scene luma cache (the reference renders without it: the original colour evaluation). The film simulation's
-// scene table (FILM_SIM) and «Плёночный LUT» (FILM_LUT) as the Java.
+// scene table (FILM_SIM) and «Плёночный LUT» (FILM_LUT) as the Java. P713's coarse landing mask (CoarseMask) as the Java; its
+// deferred draw beside the final output's tiles (GLDeferredDraw, drawBlocksDeferrable) is speed only: the same draw at once here.
 #pragma once
 
+#include "CoarseMask.hpp"
 #include "WhyFusion.hpp"
 
 namespace scam_post {
@@ -17,6 +19,10 @@ public:
 
     static constexpr float NIGHT_DETAIL = 1.f;   // P672: the night floor off (V1 detail as V2)
     std::function<void(const std::string&, const Texture&)> stageHook; // the reference's ScamDiagnostics.gpu stages
+
+    /// P713 (speed): scam_dev.txt "hlmask_coarse" (on) - the landing's mask on a grid ~sigma / 6 times coarser (CoarseMask); 0: as
+    /// before
+    static bool coarseMaskOn() { return !PostGlMode::legacy() && Settings::current().scamDevSwitch("hlmask_coarse", true); }
 
     static std::optional<std::vector<float>> hlWeights(float sigmaU) {
         if (!Settings::current().scamDevSwitch("hlmask_fast", true)) return std::nullopt;
@@ -260,6 +266,7 @@ public:
         const std::string lutName = chain ? chain->key : "";
         const FilmLutP lut = lutStrength > 0.f && !lutName.empty() ? FilmChain::lut(lutName) : nullptr;
         GLuint lutTexture = 0;
+        std::optional<CoarseMask::Plan> hlPlan;   // P713: the landing's mask on a coarse grid (none: whyLow's grid)
         Texture hlA, hlB, sunBloom, oppShare, fusedLc, faceTex;
         std::unique_ptr<GLBuffer> rimTiles;
         GLint rimBindings[2] = {0, 0};
@@ -286,24 +293,35 @@ public:
         const float measCeil = measuredCeiling(r, measured, WhyTone::hlMeasuredMax());
         if (soft > 0.f && realClip && !filmOnly) {
             const Point hlSize = st.low->mSize;
-            hlA = makeTexture(hlSize, GLFormat(DataType::FLOAT_16, 1), nullptr, GL_LINEAR, GL_CLAMP_TO_EDGE);
-            hlB = makeTexture(hlSize, GLFormat(DataType::FLOAT_16, 1), nullptr, GL_LINEAR, GL_CLAMP_TO_EDGE);
             const float sigma = std::max(1.f, 0.012f * float(hlSize.x));
+            // P713: the share and its blur on a grid hlPlan->block times coarser with a margin (why/hlmask DECIMATE 1), the landing's
+            // uv mapped into it (why/combine HL_COARSE); none: on whyLow's grid as before
+            hlPlan = CoarseMask::plan(hlSize.x, hlSize.y, sigma, coarseMaskOn());
+            const Point blurSize = hlPlan ? Point{hlPlan->width, hlPlan->height} : hlSize;
+            hlA = makeTexture(blurSize, GLFormat(DataType::FLOAT_16, 1), nullptr, GL_LINEAR, GL_CLAMP_TO_EDGE);
+            hlB = makeTexture(blurSize, GLFormat(DataType::FLOAT_16, 1), nullptr, GL_LINEAR, GL_CLAMP_TO_EDGE);
+            if (hlPlan) prog.setDefine("DECIMATE", 1);
             prog.useAssetProgram("why/hlmask", false);
             prog.setTexture("InputBuffer", st.low);
             prog.setVar("invClipU", 1.f / std::max(std::max(std::max(r.clip, r.hr), measCeil), 1e-6f));
             prog.setVar("dirU", 0, 0);
+            if (hlPlan) {
+                prog.setVar("blockU", hlPlan->block);
+                prog.setVar("scaleU", hlPlan->scaleX, hlPlan->scaleY);
+                prog.setVar("marginU", hlPlan->margin, hlPlan->margin);
+            }
             prog.drawBlocks(hlB);
-            const auto hw = hlWeights(sigma);
+            const float blurSigma = hlPlan ? hlPlan->sigma : sigma;
+            const auto hw = hlWeights(blurSigma);
             for (int pass = 0; pass < 2; pass++) {
                 if (hw) prog.setDefine("FAST", 1);
                 prog.useAssetProgram("why/hlmask", false);
                 prog.setTexture("InputBuffer", pass == 0 ? hlB : hlA);
                 prog.setVar("dirU", pass == 0 ? 1 : 0, pass == 0 ? 0 : 1);
-                prog.setVar("sigmaU", sigma);
+                prog.setVar("sigmaU", blurSigma);
                 if (hw) {
                     prog.setVarVec4s("weightsU", *hw);
-                    prog.setVar("radiusU", int(std::ceil(3.0 * double(std::max(sigma, 0.5f)))));
+                    prog.setVar("radiusU", int(std::ceil(3.0 * double(std::max(blurSigma, 0.5f)))));
                 }
                 prog.drawBlocks(pass == 0 ? hlA : hlB);
             }
@@ -340,6 +358,7 @@ public:
             && Settings::current().hybridSwitch("why_rim_support", true))
             rimTiles = rimSupport(prog, *st.low, r.ae, sharp, sharp ? r.ae / std::max(st.sharpMul, 1e-6f) : 1.f);
         if (hlB) prog.setDefine("HL_LANDING", 1);
+        if (hlB && hlPlan) prog.setDefine("HL_COARSE", 1);   // P713
         oppShare = pipeline.opposedShare;
         pipeline.opposedShare = nullptr;
         const auto oppSize = pipeline.opposedShareSize;
@@ -469,6 +488,7 @@ public:
         prog.setVar("detailRefU", st.detailRef ? 1 : 0);
         prog.setTexture("WhyLumaS", sharp ? st.lumaS : st.low);
         if (hlB) prog.setTexture("WhyHl", hlB);
+        if (hlB && hlPlan) prog.setVar("hlGridU", hlPlan->grid[0], hlPlan->grid[1], hlPlan->grid[2], hlPlan->grid[3]);   // P713
         if (st.sky) {
             const float sky = WhyTone::sky();
             const auto tone = WhyTone::skyTone();

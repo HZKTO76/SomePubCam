@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
         p.scamRgb = readWorkerOutput(p.merge, workerOut, std::string(reportBytes.begin(), reportBytes.end()), outW, outH, hw, hh, rgbHalf,
                                      effectiveMap, clipFlags, highlightMask);
         p.workSize = *p.mParameters.rawSize;
-        GLDrawParams::TileSize() = int64_t(p.mParameters.rawSize->x) * p.mParameters.rawSize->y < 8000000 ? 8 : 256;
+        GLDrawParams::TileSize() = 256; // P683: every picture in 256-row bands
         p.computeNoise();
         p.cropSize = *p.mParameters.rawSize;
 

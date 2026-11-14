@@ -311,6 +311,23 @@ inline void facePriority(WhyAe::Result& r, const std::optional<PortraitSkinResul
     logI("SCAM_PIPELINE", buf);
     r.ae = ae;
 }
+/// P701: the WHY AE of a YUV merge shot (scale = Parameters.yuvAeScale; 0 or not finite: not one, nothing changes - every
+/// iPhone shot): the night rule's darker target is not applied (the camera's AE exposed the frames) and the target is multiplied
+/// by the shadow toe's geometric-mean factor. scam_dev "yuv_ae_day 0": the night rule as for a RAW shot (the toe's factor kept).
+/// Returns the log line, nullopt when not a YUV shot.
+inline std::optional<std::string> yuvExposure(WhyAe::AeSettings& s, float scale) {
+    if (!(scale > 0.f) || !std::isfinite(scale)) return std::nullopt;
+    const float k = std::max(0.5f, std::min(2.f, scale));
+    const bool day = prefs().scamDevSwitch("yuv_ae_day", true);
+    const float before = s.aeTarget;
+    s.aeTarget *= k;
+    s.nightAeTarget = day ? s.aeTarget : s.nightAeTarget * k;
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "WHY AE of a YUV merge shot (P701): target %.4f -> %.4f (the shadow toe's x%.3f), night target %.4f%s",
+                  double(before), double(s.aeTarget), double(k), double(s.nightAeTarget),
+                  day ? " (the day target: the camera's AE exposed the frames)" : " (scam_dev yuv_ae_day 0)");
+    return std::string(buf);
+}
 constexpr const char* PORTRAIT_POINTS = "0.0000:0.0000,0.0625:0.0147,0.1250:0.0349,0.1875:0.0642,0.2500:0.1108,0.3125:0.1870,0.3750:0.2822,0.4375:0.3900,0.5000:0.5100,0.5625:0.6362,0.6250:0.7587,0.6875:0.8677,0.7500:0.9524,0.8125:0.9996,0.8750:1.0000,0.9375:1.0000,1.0000:1.0000";
 constexpr float CURVE_B[17] = {0, 0, 4, 50, 178, 401, 674, 906, 1000, 906, 674, 401, 178, 50, 4, 0, 0},
                 CURVE_C[17] = {0, 349, 659, 889, 1000, 964, 769, 431, 0, -431, -769, -964, -1000, -889, -659, -349, 0},

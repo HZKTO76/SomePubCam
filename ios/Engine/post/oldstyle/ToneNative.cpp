@@ -1,11 +1,13 @@
 // «Oldstyle»: ToneNative.hpp's definitions - oldstyle-tone-jni.cpp's setThreads and render (its post_from and the arguments'
-// checks) without the JNI, on the module's own core (app/src/main/cpp/oldstyle-tone-core.h, unchanged). The app compiles this
+// checks) without the JNI, on the module's own core (app/src/main/cpp/oldstyle-tone-core.h). The app compiles this
 // unit with the module's sources (project.yml: third_party/tone_port, -ffp-contract=off as the Android build); a host tool takes
 // it through ToneUnity.hpp.
 #include "ToneNative.hpp"
 
 #include "oldstyle-tone-core.h"
 
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -18,8 +20,8 @@ namespace {
 oldstyle::Post postFrom(const float* array, int count) {
     oldstyle::Post p;
     if (!array || count < 12) return p;
-    float v[15] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f};
-    for (int i = 0; i < std::min(15, count); ++i) v[i] = array[i];
+    float v[17] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f};
+    for (int i = 0; i < std::min(17, count); ++i) v[i] = array[i];
     p.dehaze = v[0] > .5f;
     p.max_dark = std::clamp(static_cast<int>(std::lround(v[1])), 0, 255);
     p.percentile = v[2];
@@ -35,6 +37,8 @@ oldstyle::Post postFrom(const float* array, int count) {
     p.lf_strength = v[12] == v[12] ? std::clamp(v[12], 0.f, 1.f) : 1.f;
     p.curve_mid = v[13] == v[13] ? v[13] : 0.f;
     p.curve_contrast = v[14] == v[14] ? v[14] : 0.f;
+    p.frame_gain = v[15] > 0.f && std::isfinite(v[15]) ? v[15] : 1.f; // P716
+    p.linear_bright = v[16] > .5f;
     return p;
 }
 
