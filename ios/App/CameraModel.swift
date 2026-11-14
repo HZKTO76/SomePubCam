@@ -489,10 +489,13 @@ final class CameraModel {
                 return
             }
             let heic = result.heic ?? burst.processed
-            if let heic { thumbnail = MediaLibrary.thumbnail(of: heic) }
+            // the thumbnail decoded off the main actor (a 12 MP HEIC's decode held the camera's UI)
+            if let heic { thumbnail = await Task.detached(priority: .userInitiated) { MediaLibrary.thumbnail(of: heic) }.value }
+            let saveStarted = Date()
             try await mediaLibrary.save(CapturedPhoto(processed: heic, processedUTI: result.heic != nil ? result.uti : UTType.heic.identifier,
                                                       rawFile: rawFile, report: []))
-            SessionLog.i("SHDR", "saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms, \(shots.count - 1) more queued, \(memoryFootprint())")
+            SessionLog.i("SHDR", "saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms (the library \(Int(Date().timeIntervalSince(saveStarted) * 1000)) ms), "
+                         + "\(shots.count - 1) more queued, \(memoryFootprint())")
         } catch {
             SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
             show(error.localizedDescription)

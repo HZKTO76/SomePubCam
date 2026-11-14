@@ -12,6 +12,8 @@ struct BayerBurst {
     var report: [String] = []
     var front = false         // the front camera: the photo is mirrored as Android's Parameters.mirror
     var lens = ""             // the capture device's uniqueID (LensShading's key)
+    /// The NCH file the planes are written to as they arrive (BurstProcessor finishes it); nil: written after the capture
+    var stream: NchStream?
     /// ZoomController's residual at the press (the digital crop over the module's own zoom): SabreCrop's window before the merge and
     /// the photo's crop after it (P576 / P226). 1: no crop.
     var zoom = 1.0
@@ -282,6 +284,10 @@ extension PhotoCapture {
                 memcpy(dst.baseAddress! + y * burst.width * 2, base + (first + y) * row, burst.width * 2)
             }
         }
+        if burst.frames.isEmpty && burst.stream == nil {
+            burst.stream = try? NchStream(folder: BurstProcessor.lastBurstURL.deletingLastPathComponent(), width: burst.width, height: burst.height)
+        }
+        burst.stream?.append(raw)
         let (exposureNs, iso) = Self.measured(photo)
         let product = Double(exposureNs) * Double(iso)
         if clock.exposure0 == 0 { clock.exposure0 = product }

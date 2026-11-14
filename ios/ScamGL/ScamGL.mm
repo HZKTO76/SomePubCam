@@ -484,7 +484,22 @@ void setupLocations(Program& p) {
     }
 }
 
+// the translations on disk (Caches/scamgl): a launch after the first runs no glslang / SPIRV-Cross for a program it saw before
+void ensureTranslationCache() {
+#if TARGET_OS_IPHONE
+    static std::once_flag once;
+    std::call_once(once, [] {
+        NSString* caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        if (!caches) return;
+        NSString* dir = [caches stringByAppendingPathComponent:@"scamgl"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        scamgl::setCacheDir(dir.fileSystemRepresentation);
+    });
+#endif
+}
+
 std::shared_ptr<Linked> linkCompute(const std::string& source) {
+    ensureTranslationCache();
     auto cached = gLinkCache.find(source);
     if (cached != gLinkCache.end()) return cached->second;
     auto linked = std::make_shared<Linked>();
@@ -563,6 +578,7 @@ std::shared_ptr<Linked> linkRender(const std::string& vs, const std::string& fs)
 #else
     const bool ios = false;
 #endif
+    ensureTranslationCache();
     const scamgl::Compiled v = scamgl::compile(vs, scamgl::Stage::Vertex, ios);
     if (!v.ok) { linked->log = "vertex " + v.log; return linked; }
     for (const auto& r : v.resources) {
@@ -927,13 +943,17 @@ void glCopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOff
         [e copyFromBuffer:s sourceOffset:NSUInteger(readOffset) toBuffer:d destinationOffset:NSUInteger(writeOffset) size:NSUInteger(size)];
     });
 }
-void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield) {
+void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) {
     Guard g(gLock);
     Context* c = ctx();
     if (!c) return nullptr;
     Buffer* b = bufferBound(*c, target);
     if (!b || !b->mtl || offset < 0 || length <= 0 || size_t(offset + length) > b->size) { fail(GL_INVALID_VALUE); return nullptr; }
-    submit(*c, true);
+    // GL_MAP_UNSYNCHRONIZED_BIT on a write-only mapping: the caller orders it itself (the fast merge's upload ring waits on each
+    // slot's fence): the shared storage is written at once, the recorded work goes on (no submit and wait - it serialised the
+    // frames' uploads with the GPU: ~1 s of a 21-frame burst on the M1)
+    const bool unsynchronized = (access & GL_MAP_UNSYNCHRONIZED_BIT) && (access & GL_MAP_WRITE_BIT) && !(access & GL_MAP_READ_BIT);
+    if (!unsynchronized) submit(*c, true);
     return static_cast<uint8_t*>(b->mtl.contents) + offset;
 }
 GLboolean glUnmapBuffer(GLenum) { return GL_TRUE; }

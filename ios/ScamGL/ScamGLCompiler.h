@@ -41,4 +41,8 @@ constexpr int kShiftSsbo = 100, kShiftImage = 200, kShiftTexture = 300, kShiftUb
 
 Compiled compile(const std::string& glsl, Stage stage, bool iosPlatform);
 
+// A directory for the translations (the MSL and the reflection of a source; "" = none): a later launch reads them instead of
+// running glslang and SPIRV-Cross again. Keyed by the source, the stage, the platform and this build.
+void setCacheDir(const std::string& dir);
+
 } // namespace scamgl

@@ -6,6 +6,8 @@
 #include <spirv_msl.hpp>
 #include <spirv_parser.hpp>
 
+#include <cstdio>
+#include <cstring>
 #include <map>
 #include <regex>
 #include <mutex>
@@ -87,7 +89,7 @@ int baseTypeOf(const spirv_cross::SPIRType& t) {
 
 } // namespace
 
-Compiled compile(const std::string& source, Stage stage, bool iosPlatform) {
+static Compiled compileUncached(const std::string& source, Stage stage, bool iosPlatform) {
     Compiled out;
     // GLSL ES words that Vulkan GLSL reserves or refuses: a parameter named `sampler` (a type there), #version 100 / 300 es
     std::string glsl = std::regex_replace(source, std::regex("\\bsampler\\b"), "scam_sampler");
@@ -232,4 +234,132 @@ Compiled compile(const std::string& source, Stage stage, bool iosPlatform) {
     return out;
 }
 
+
+// ---- the translation cache ----
+
+namespace {
+std::mutex gCacheLock;
+std::string gCacheDir;
+
+uint64_t fnv(const std::string& text, uint64_t h = 1469598103934665603ULL) {
+    for (unsigned char c : text) { h ^= c; h *= 1099511628211ULL; }
+    return h;
+}
+
+struct Writer {
+    std::string out;
+    void u32(uint32_t v) { out.append(reinterpret_cast<const char*>(&v), 4); }
+    void i32(int v) { u32(uint32_t(v)); }
+    void str(const std::string& s) { u32(uint32_t(s.size())); out += s; }
+};
+struct Reader {
+    const std::string& in;
+    size_t at = 0;
+    bool bad = false;
+    uint32_t u32() {
+        if (at + 4 > in.size()) { bad = true; return 0; }
+        uint32_t v;
+        std::memcpy(&v, in.data() + at, 4);
+        at += 4;
+        return v;
+    }
+    int i32() { return int(u32()); }
+    std::string str() {
+        const uint32_t n = u32();
+        if (bad || at + n > in.size()) { bad = true; return ""; }
+        std::string s = in.substr(at, n);
+        at += n;
+        return s;
+    }
+};
+
+std::string serialize(const Compiled& c) {
+    Writer w;
+    w.str("SCAMGLC2");
+    w.str(c.log); w.str(c.msl); w.str(c.entry);
+    for (uint32_t v : c.local) w.u32(v);
+    w.u32(uint32_t(c.resources.size()));
+    for (const Resource& r : c.resources) {
+        w.i32(int(r.type)); w.i32(r.glBinding); w.i32(r.mslIndex); w.i32(r.mslSampler); w.i32(r.arrayed); w.i32(r.volume); w.str(r.name);
+    }
+    w.u32(uint32_t(c.members.size()));
+    for (const Member& m : c.members) {
+        w.str(m.name);
+        for (uint32_t v : {m.offset, m.size, m.arrayStride, m.count, m.vecsize, m.columns, m.matrixStride}) w.u32(v);
+        w.i32(m.baseType);
+    }
+    w.u32(c.blockSize);
+    w.i32(c.bufferSizeIndex);
+    return w.out;
+}
+
+bool deserialize(const std::string& data, Compiled& c) {
+    Reader r{data};
+    if (r.str() != "SCAMGLC2") return false;
+    c.log = r.str(); c.msl = r.str(); c.entry = r.str();
+    for (uint32_t& v : c.local) v = r.u32();
+    const uint32_t nr = r.u32();
+    if (r.bad || nr > 4096) return false;
+    for (uint32_t i = 0; i < nr; i++) {
+        Resource res;
+        res.type = Resource::Type(r.i32()); res.glBinding = r.i32(); res.mslIndex = r.i32(); res.mslSampler = r.i32();
+        res.arrayed = r.i32() != 0; res.volume = r.i32() != 0; res.name = r.str();
+        c.resources.push_back(res);
+    }
+    const uint32_t nm = r.u32();
+    if (r.bad || nm > 65536) return false;
+    for (uint32_t i = 0; i < nm; i++) {
+        Member m;
+        m.name = r.str();
+        m.offset = r.u32(); m.size = r.u32(); m.arrayStride = r.u32(); m.count = r.u32(); m.vecsize = r.u32(); m.columns = r.u32();
+        m.matrixStride = r.u32(); m.baseType = r.i32();
+        c.members.push_back(m);
+    }
+    c.blockSize = r.u32();
+    c.bufferSizeIndex = r.i32();
+    c.ok = !r.bad && !c.msl.empty();
+    return c.ok;
+}
+} // namespace
+
+void setCacheDir(const std::string& dir) {
+    std::lock_guard<std::mutex> g(gCacheLock);
+    gCacheDir = dir;
+}
+
+Compiled compile(const std::string& source, Stage stage, bool iosPlatform) {
+    std::string dir;
+    {
+        std::lock_guard<std::mutex> g(gCacheLock);
+        dir = gCacheDir;
+    }
+    if (dir.empty()) return compileUncached(source, stage, iosPlatform);
+    // this build's translator: a new app version translates again
+    static const std::string build = std::string(__DATE__) + " " + __TIME__;
+    char name[64];
+    std::snprintf(name, sizeof name, "/%016llx-%d%d.scamglc",
+                  static_cast<unsigned long long>(fnv(source, fnv(build))), int(stage), iosPlatform ? 1 : 0);
+    const std::string path = dir + name;
+    if (FILE* f = std::fopen(path.c_str(), "rb")) {
+        std::string data;
+        char buf[65536];
+        for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;) data.append(buf, n);
+        std::fclose(f);
+        Compiled cached;
+        if (deserialize(data, cached)) return cached;
+    }
+    Compiled out = compileUncached(source, stage, iosPlatform);
+    if (out.ok) {
+        const std::string tmp = path + ".tmp";
+        if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
+            const std::string data = serialize(out);
+            const bool written = std::fwrite(data.data(), 1, data.size(), f) == data.size();
+            std::fclose(f);
+            if (written) std::rename(tmp.c_str(), path.c_str()); else std::remove(tmp.c_str());
+        }
+    }
+    return out;
+}
+
 } // namespace scamgl
+

@@ -31,6 +31,23 @@ enum NchWriter {
         let plane = width * height * 2
         let headerPages = (128 + 32 * frames.count + page - 1) / page
         let planePages = (plane + page - 1) / page
+        let header = Self.header(width: width, height: height, cfa: cfa, white: white, black: black, frames: frames,
+                                 headerPages: headerPages, planePages: planePages)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: header)
+        let padding = Data(count: planePages * page - plane)
+        for f in frames {
+            guard f.raw.count == plane else { throw CocoaError(.fileWriteInvalidFileName) }
+            try handle.write(contentsOf: f.raw)
+            if !padding.isEmpty { try handle.write(contentsOf: padding) }
+        }
+    }
+
+    /// The header pages: the 128-byte header and the frame table, each plane at headerPages + i x planePages
+    static func header(width: Int, height: Int, cfa: Int, white: Float, black: [Float], frames: [NchFrame], headerPages: Int,
+                       planePages: Int) -> Data {
         var header = Data(count: headerPages * page)
         func put<T>(_ value: T, at offset: Int) {
             withUnsafeBytes(of: value) { header.replaceSubrange(offset..<offset + $0.count, with: $0) }
@@ -57,16 +74,7 @@ enum NchWriter {
             put(f.orderMs.bitPattern.littleEndian, at: o + 20)
             put(UInt32(headerPages + i * planePages).littleEndian, at: o + 28) // the plane's page
         }
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.write(contentsOf: header)
-        let padding = Data(count: planePages * page - plane)
-        for f in frames {
-            guard f.raw.count == plane else { throw CocoaError(.fileWriteInvalidFileName) }
-            try handle.write(contentsOf: f.raw)
-            if !padding.isEmpty { try handle.write(contentsOf: padding) }
-        }
+        return header
     }
 
     /// The capture facts the merge's frame rules and the crop read (ShotTransport.hpp's sidecar): the digital zoom's residual, each
@@ -83,5 +91,69 @@ enum NchWriter {
         }
         let data = try JSONSerialization.data(withJSONObject: facts, options: [.sortedKeys])
         try data.write(to: url, options: .atomic)
+    }
+}
+
+/// An NCH file written while the series is captured (each plane as its frame arrives, on a queue of its own): the 547 MB of a
+/// 23-frame burst no longer go to the flash after the capture (~0.8 s on the M1 iPad). One header page is kept free (up to 124
+/// frames); NchWriter.header goes there once the frames' table is known. A unique file, so a shot captured while the previous one
+/// is processed never touches it; BurstProcessor moves it to last.nch when its turn comes.
+final class NchStream: @unchecked Sendable {
+    let url: URL
+    let width: Int, height: Int
+    private let queue = DispatchQueue(label: "scamera.nch-stream", qos: .userInitiated)
+    private var handle: FileHandle?
+    private var failure: Error?
+    private(set) var planes = 0
+    static let maxFrames = (NchWriter.page - 128) / 32
+
+    init(folder: URL, width: Int, height: Int) throws {
+        url = folder.appendingPathComponent("shot-\(UUID().uuidString).nch")
+        self.width = width
+        self.height = height
+        FileManager.default.createFile(atPath: url.path, contents: Data(count: NchWriter.page))
+        handle = try FileHandle(forWritingTo: url)
+        try handle?.seekToEnd()
+    }
+
+    /// A plane in capture order (copied by reference: the frame's Data is not duplicated)
+    func append(_ raw: Data) {
+        planes += 1
+        let plane = width * height * 2, planePages = (plane + NchWriter.page - 1) / NchWriter.page
+        queue.async { [self] in
+            guard failure == nil, let handle else { return }
+            do {
+                guard raw.count == plane else { throw CocoaError(.fileWriteInvalidFileName) }
+                try handle.write(contentsOf: raw)
+                let pad = planePages * NchWriter.page - plane
+                if pad > 0 { try handle.write(contentsOf: Data(count: pad)) }
+            } catch {
+                failure = error
+            }
+        }
+    }
+
+    /// The header and the table of `frames` (the planes appended in their order), the file closed
+    func finish(cfa: Int, white: Float, black: [Float], frames: [NchFrame]) throws {
+        try queue.sync {
+            if let failure { throw failure }
+            guard frames.count == planes, frames.count <= Self.maxFrames, let handle else { throw CocoaError(.fileWriteUnknown) }
+            let planePages = (width * height * 2 + NchWriter.page - 1) / NchWriter.page
+            let header = NchWriter.header(width: width, height: height, cfa: cfa, white: white, black: black, frames: frames,
+                                          headerPages: 1, planePages: planePages)
+            try handle.seek(toOffset: 0)
+            try handle.write(contentsOf: header)
+            try handle.close()
+            self.handle = nil
+        }
+    }
+
+    /// Not used: the file goes (a refused shot, the plain writer instead)
+    func discard() {
+        queue.sync {
+            try? handle?.close()
+            handle = nil
+        }
+        try? FileManager.default.removeItem(at: url)
     }
 }

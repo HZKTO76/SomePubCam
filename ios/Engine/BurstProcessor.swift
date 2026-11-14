@@ -43,8 +43,18 @@ enum BurstProcessor {
     static var lastBurstURL: URL {
         let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Bursts", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        _ = staleStreamsRemoved
         return folder.appendingPathComponent("last.nch")
     }
+
+    /// NchStream files of an earlier run that never reached the merge (the app ended during a shot): removed once a launch
+    private static let staleStreamsRemoved: Bool = {
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Bursts", isDirectory: true)
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where f.hasPrefix("shot-") && f.hasSuffix(".nch") {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(f))
+        }
+        return true
+    }()
 
     /// The facts beside the last burst (NchWriter.writeFacts: the frames' capture roles and exposures, the zoom, the 16:9 cut)
     static var lastFactsURL: URL { lastBurstURL.appendingPathExtension("json") }
@@ -226,8 +236,16 @@ enum BurstProcessor {
         let writeStarted = Date()
         // the frames in capture order; the merge's frame table (the base, roles, ratios, noise, orderMs: ScamHybridBurst's rules) and
         // the zoom's window are ShotRun's (Engine/post/HybridSelect.hpp, SabreCrop.hpp), from these facts
-        try NchWriter.write(to: nch, width: burst.width, height: burst.height, cfa: burst.cfa, white: info.white, black: info.black,
-                            frames: frames)
+        if let stream = burst.stream, stream.planes == frames.count, (try? stream.finish(cfa: burst.cfa, white: info.white, black: info.black, frames: frames)) != nil {
+            // the planes went to the flash during the capture (NchStream): the header now, then the file becomes last.nch
+            try? FileManager.default.removeItem(at: nch)
+            try FileManager.default.moveItem(at: stream.url, to: nch)
+            log.append("burst streamed to the flash during the capture")
+        } else {
+            burst.stream?.discard()
+            try NchWriter.write(to: nch, width: burst.width, height: burst.height, cfa: burst.cfa, white: info.white, black: info.black,
+                                frames: frames)
+        }
         try NchWriter.writeFacts(to: lastFactsURL, frames: frames, zoom: shotZoom, fullHeight: burst.fullHeight, firstRow: burst.firstRow)
         log.append("burst written to \(nch.lastPathComponent) in \(ms(since: writeStarted)) ms")
         // SCAM Lab (iOS): what merging this series again needs beside it - the reference frame's DNG, the photo's metadata, the lens
