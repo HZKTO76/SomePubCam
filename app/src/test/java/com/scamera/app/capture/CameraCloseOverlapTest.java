@@ -177,6 +177,20 @@ public class CameraCloseOverlapTest {
         assertTrue("a FULLRES SDK session taken by this open", CaptureController.closeWaitFirst(false, false, true));
     }
 
+    /**
+     * P719 (Xiaomi 17 Ultra, a refused LOFIC setup, log 2026-11-14 19:26:59): the restart's close took the HAL 7898 ms, the open
+     * gave up after 5000 ms with «Time out waiting to lock camera opening» and the viewfinder stayed frozen. The open waits on while
+     * that close runs and the screen stays, within a bound.
+     */
+    @Test public void anOpenWaitsForASlowCloseWhileItRunsAndTheScreenStays() {
+        assertTrue("the log's close was still running at 5 s", CaptureController.openWaitsLongerForClose(true, true, 5_000));
+        assertTrue("and at 7.9 s", CaptureController.openWaitsLongerForClose(true, true, 7_898));
+        assertFalse("no close in flight: the old timeout stands", CaptureController.openWaitsLongerForClose(false, true, 5_000));
+        assertFalse("the screen left", CaptureController.openWaitsLongerForClose(true, false, 5_000));
+        assertFalse("bounded", CaptureController.openWaitsLongerForClose(true, true, CaptureController.OPEN_CLOSE_WAIT_MAX_MS));
+        assertTrue(CaptureController.OPEN_CLOSE_WAIT_MAX_MS >= 2 * 7_898);
+    }
+
     @Test public void aPauseClosesOffTheMainThreadOnlyWithoutALeaseAnSdkSessionOrAVideo() {
         assertTrue(CaptureController.pauseCloseAsync(false, false, false, true));
         assertFalse("scam_dev pause_close_async 0", CaptureController.pauseCloseAsync(false, false, false, false));

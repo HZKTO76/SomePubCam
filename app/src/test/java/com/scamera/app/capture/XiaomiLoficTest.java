@@ -430,6 +430,27 @@ public class XiaomiLoficTest {
     }
 
     /**
+     * P719 (build 4ed084d3, log 2026-11-14 19:26:56 / 19:27:53): 4:3+row and 4:3+row+yuv - both asking row 5 by current_mode - had
+     * every request refused and gave no frame, each try a frozen viewfinder and a 7.9 s close; 4:3 without the ask gave frames. A
+     * variant asking a row that gives no frame fails the others asking that row; a failure after frames, or of a setup asking no
+     * row, fails only itself.
+     */
+    @Test
+    public void aRowTheHalRefusesFailsEveryVariantAskingIt() {
+        assertEquals(Arrays.asList(XiaomiLofic.Setup.FOUR_THREE_COMPANION, XiaomiLofic.Setup.FOUR_THREE_CAPTURE),
+                XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_ROW, true));
+        assertEquals(Arrays.asList(XiaomiLofic.Setup.FOUR_THREE_ROW, XiaomiLofic.Setup.FOUR_THREE_CAPTURE),
+                XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_COMPANION, true));
+        assertTrue("frames came (the rows' check)", XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_ROW, false).isEmpty());
+        assertTrue("4:3 asks no row", XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE, true).isEmpty());
+        assertTrue("16:10 asks no row", XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.SIXTEEN_TEN, true).isEmpty());
+        // the log's run with the fix: 4:3 by its rows, 4:3+row by the HAL - then 16:10 is next, no second refused variant
+        final java.util.Set<XiaomiLofic.Setup> failed = java.util.EnumSet.of(XiaomiLofic.Setup.FOUR_THREE, XiaomiLofic.Setup.FOUR_THREE_ROW);
+        failed.addAll(XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_ROW, true));
+        assertEquals(Arrays.asList(XiaomiLofic.Setup.SIXTEEN_TEN), XiaomiLofic.ladder(failed, null, false));
+    }
+
+    /**
      * P700: P679's PHOTO / NIGHT gate never let the route run from the screen, whose photo mode older builds called MOTION (log
      * 2026-11-14 11:18:25: «session mode=MOTION», the P641 ladder with a black viewfinder instead). P702: the photo mode is the
      * only camera mode and the session's LOFIC decision reads no mode at all.

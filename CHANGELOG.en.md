@@ -2,6 +2,11 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-14 (evening, 2) — Icon and LOFIC
+
+- A new app icon: a camera with depth and a highlight on a graphite background; the splash and themed icon to match.
+- Xiaomi 17 Ultra, DCG+LOFIC: the viewfinder no longer freezes — a refusal is caught in ~0.2 s, the failing 4:3 setups are skipped, the camera waits out a slow close and opens again.
+
 ## 2026-11-14 (night) — Settings modes
 
 - Settings modes: «Simple» (45 main settings, the rest tuned for the phone), «Custom» (you choose what is shown) and «Advanced» (as before).

@@ -2803,7 +2803,7 @@ public class CaptureController {
         Log.w(TAG, "PREVIEW_REFUSED camera " + physicalID + ": the session " + why + " (P700)");
         final boolean handled;
         if (mRecipe != null) handled = retryWithoutRecipe(session, why);
-        else if (XiaomiLofic.sessionActive()) handled = retryWithoutLofic(session, why);
+        else if (XiaomiLofic.sessionActive()) handled = retryWithoutLofic(session, why, true); // P719: no result came
         else {
             handled = retryWithoutDcgRoute(session, why);
             if (handled && dualGain != null) showToast(Lang.t(dualGain + ": камера не дала кадров этим способом, пробую следующий",
@@ -2847,7 +2847,7 @@ public class CaptureController {
         }
         // P679: a LOFIC session without viewfinder frames: its setup failed, the next one (or the normal session) opens
         if (XiaomiLofic.sessionActive() && retryWithoutLofic(mCaptureSession, "no preview frame for " + noFrame + " ms ("
-                + (mLastPreviewResultMs == 0 ? "none since the session started" : "frames stopped") + ")")) {
+                + (mLastPreviewResultMs == 0 ? "none since the session started" : "frames stopped") + ")", mLastPreviewResultMs == 0)) {
             mPreviewSessionStartMs = 0;
             handler.removeCallbacks(mStallCheck);
             return;
@@ -3433,6 +3433,17 @@ public class CaptureController {
         return closeWaitFirst(mIszLease != null || mVivoSdkRawSession != null || mVivoSdkRestorePending, leaseWanted, sdkWanted);
     }
 
+    /** P719: the longest an open waits for a close the HAL holds (the 17 Ultra's took 7.9 s; P710 saw 30 s under memory pressure). */
+    static final long OPEN_CLOSE_WAIT_MAX_MS = 30_000;
+
+    /**
+     * P719: an open that has waited {@code waitedMs} for the open lock waits on while the previous camera's close still runs on
+     * CAMERA_CLOSE ({@code closeInFlight}) and the screen stays ({@code resumed}), up to {@link #OPEN_CLOSE_WAIT_MAX_MS}.
+     */
+    static boolean openWaitsLongerForClose(boolean closeInFlight, boolean resumed, long waitedMs) {
+        return closeInFlight && resumed && waitedMs < OPEN_CLOSE_WAIT_MAX_MS;
+    }
+
     /** P662: waits (at most 5 s) until a close handed to CAMERA_CLOSE released the open lock; the ms waited. */
     private long awaitAsyncClose() {
         final long waitStart = System.nanoTime();
@@ -3500,11 +3511,32 @@ public class CaptureController {
             // P662: a restart's close runs on its own thread holding the lock: the open waits for it (as it waited on the main thread)
             final long lockStart = System.nanoTime();
             trace("CaptureController.awaitClose");
-            final boolean locked;
+            boolean locked;
             try {
                 locked = mCameraOpenCloseLock.tryAcquire(mAsyncCloseInFlight ? 5000 : 1000, TimeUnit.MILLISECONDS);
+                // P719: a close the HAL holds longer (Xiaomi 17 Ultra, a refused LOFIC setup: 7.9 s and 7.7 s, log 2026-11-14
+                // 19:26:59 / 19:27:56) is waited for while it runs and the screen stays, instead of the old 5 s and «Time out waiting
+                // to lock camera opening» - the open that gave up left the viewfinder frozen until the app was left
+                boolean slowLogged = false;
+                while (!locked && openWaitsLongerForClose(mAsyncCloseInFlight, isCameraResumed,
+                        (System.nanoTime() - lockStart) / 1_000_000)) {
+                    if (!slowLogged) {
+                        slowLogged = true;
+                        Log.w("PERF", "camera open: the previous camera's close still runs after "
+                                + (System.nanoTime() - lockStart) / 1_000_000 + " ms (the HAL holds it): waiting up to "
+                                + OPEN_CLOSE_WAIT_MAX_MS + " ms (P719)");
+                    }
+                    locked = mCameraOpenCloseLock.tryAcquire(1000, TimeUnit.MILLISECONDS);
+                }
+                if (slowLogged) Log.i("PERF", "camera open: " + (locked ? "the lock came" : "gave up") + " after "
+                        + (System.nanoTime() - lockStart) / 1_000_000 + " ms of the previous camera's close (P719)");
             } finally {
                 endTrace();
+            }
+            if (!locked && !isCameraResumed) {
+                mCameraOpening.set(false);
+                Log.d(TAG, "screen left while the previous camera closed: no open");
+                return;
             }
             if (!locked) {
                 mCameraOpening.set(false);
@@ -4120,7 +4152,7 @@ public class CaptureController {
     private void sessionRefused(CameraCaptureSession refused, CameraDevice device) {
         mRetryDevice = device;
         mFallbackUndo = null;
-        if (retryWithoutLofic(refused, "session configuration failed")) return; // P679
+        if (retryWithoutLofic(refused, "session configuration failed", false)) return; // P679
         if (retryWithoutRecipe(refused, "session configuration failed")) return; // P635
         if (retryWithoutDcgRoute(refused, "session configuration failed")) return; // P230
         if (retryWithoutVendorMode(refused)) return; // P211
@@ -4618,7 +4650,7 @@ public class CaptureController {
             }
         } catch (Exception e) {
             Log.e(TAG, Log.getStackTraceString(e));
-            if (retryWithoutLofic(null, "session: " + e.getMessage())) return; // P679
+            if (retryWithoutLofic(null, "session: " + e.getMessage(), false)) return; // P679
             if (retryWithoutRecipe(null, "session: " + e.getMessage())) return; // P635
             if (retryWithoutDcgRoute(null, "session: " + e.getMessage())) return; // P230
             if (retryWithoutVendorMode(null)) return; // P211
@@ -5338,12 +5370,16 @@ public class CaptureController {
         });
     }
 
-    /** P679: a LOFIC session refused, or failed while being built: its setup failed, the camera reopens with the next one. */
-    private boolean retryWithoutLofic(@Nullable CameraCaptureSession session, String why) {
+    /**
+     * P679: a LOFIC session refused, or failed while being built: its setup failed, the camera reopens with the next one.
+     * P719: {@code noFrame} - the session gave no result at all (the HAL refused its requests), which fails the other 4:3 variants
+     * asking the same row too (XiaomiLofic.sessionFailed).
+     */
+    private boolean retryWithoutLofic(@Nullable CameraCaptureSession session, String why, boolean noFrame) {
         if (!XiaomiLofic.sessionActive() || mCameraDevice == null) return false;
         mDcgOperationMode = 0;
         mDcgRequestKeys = false;
-        XiaomiLofic.sessionFailed(why);
+        XiaomiLofic.sessionFailed(why, noFrame);
         if (session != null) try { session.close(); } catch (RuntimeException ignored) { }
         mainHandler().post(this::restartCamera);
         return true;

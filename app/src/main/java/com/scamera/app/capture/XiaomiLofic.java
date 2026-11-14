@@ -52,7 +52,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <li>{@code 4:3+row+yuv+usecase}: as 3 with the 50 MP recipe's capture RAW fields on RAW A / B (vendor stream use case 0x80103,
  * usage 0x100003).</li>
  * </ol>
- * A variant proven once runs first on this firmware; with none left the screen says 4:3 needs root here.</li>
+ * A variant proven once runs first on this firmware; with none left the screen says 4:3 needs root here. P719: a variant that
+ * asks a row and gets no frame at all (the HAL refused every request) fails the other variants asking that row with it.</li>
  * <li>16:10 · 60 fps (0x8004, [60, 60], the HAL's own row 27, 4096 x 2560): the release's root-free setup; proven by the mode
  * the results report (27, nothing is sent) and the frames' rows.</li>
  * </ul>
@@ -687,9 +688,38 @@ public final class XiaomiLofic {
 
     /** The session was refused or failed ({@code why}): its setup is marked, the next session takes the next one. */
     public static void sessionFailed(String why) {
+        sessionFailed(why, false);
+    }
+
+    /**
+     * P719: the 4:3 variants that fail with {@code failed} when it gave no frame at all ({@code noFrame}): the others asking the same
+     * row. The Xiaomi 17 Ultra (build 4ed084d3, log 2026-11-14 19:26:56 / 19:27:53): 4:3+row and 4:3+row+yuv, which ask row 5 by
+     * current_mode, each had every request refused (the result and all buffers of 7 frames lost, then nothing) while 4:3 without
+     * the ask gave frames at once; each such try froze the viewfinder and held the HAL's close 7.9 s. Empty for a setup that asks
+     * no row, or a failure after frames came (the rows' check, a frame that stopped).
+     */
+    static List<Setup> sameRowRefused(Setup failed, boolean noFrame) {
+        final List<Setup> out = new ArrayList<>();
+        if (!noFrame || failed == null || failed.askRow < 0 || !failed.fourThree()) return out;
+        for (Setup s : Setup.values()) if (s != failed && s.fourThree() && s.askRow == failed.askRow) out.add(s);
+        return out;
+    }
+
+    /**
+     * The session was refused or failed ({@code why}): its setup is marked, the next session takes the next one. P719: a 4:3
+     * variant that asked a row and gave no frame ({@code noFrame}) marks the other variants asking that row too
+     * ({@link #sameRowRefused}).
+     */
+    public static void sessionFailed(String why, boolean noFrame) {
         final Setup s = sSetup;
         if (s == null) return;
         markFailed(s, why);
+        for (Setup same : sameRowRefused(s, noFrame)) {
+            if (failed(same)) continue;
+            markFailed(same, "as " + s.id + ": the HAL gave no frame with row " + s.askRow + " asked (" + why + ")");
+            Log.w(TAG, "XIAOMI LOFIC setup " + same.label + " not tried: " + s.label + " asked the same row " + s.askRow
+                    + " and the HAL gave no frame (P719)");
+        }
         final List<Setup> next = ladder(failedSetups(), proven4x3(), false);
         Log.w(TAG, "XIAOMI LOFIC setup " + s.label + " FAILED: " + why + " -> " + (next.isEmpty() ? "DCG (no LOFIC setup left)"
                 : "the " + next.get(0).label + " setup next") + (s.fourThree() ? " (this 4:3 variant is not tried again on this firmware)" : "")
