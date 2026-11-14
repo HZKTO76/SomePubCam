@@ -1,9 +1,10 @@
-// P665 host check of the gallery developer's C++ (Engine/post/DevelopRecord.hpp, DevelopRun.hpp, Editor/EditDevelop.hpp) on the
-// cases of the Android tests (DevelopRecordTest, DevelopRunTest, EditDevelopTest): the record through a file and back (zlib as the
+// P665 host check of the gallery developer's C++ (Engine/post/DevelopRecord.hpp, DevelopRun.hpp, DevelopDefaults.hpp,
+// Editor/EditDevelop.hpp) on the cases of the Android tests (DevelopRecordTest, DevelopRunTest, DevelopDefaultsTest, EditDevelopTest): the record through a file and back (zlib as the
 // platform's deflate), the Parameters field for field, a reduced grid and a Sabre 2x shot's final size, the settings with the
 // changes, the maps' resampling, the crops, the demosaics and the halves. No GL: the pipeline's run itself is the post checks'.
 //   g++ -std=c++17 -O1 -ffp-contract=off -Iios/ScamGL/include -Iapp/src/main/cpp -Iapp/src/main/cpp/third_party/tone_port/include
 //       ios/tools/develop_check.cpp -lz -pthread -o develop_check && ./develop_check
+#include "../Engine/post/DevelopDefaults.hpp"
 #include "../Engine/post/DevelopRun.hpp"
 #include "../Engine/post/DngWriter.hpp"
 #include "../Editor/EditDevelop.hpp"
@@ -225,6 +226,115 @@ int main() {
         r.metaText = "{\"v\":2}";
         const std::vector<uint8_t> t = r.appendix(c);
         CHECK(!DevelopRecord::read(t.data(), t.size(), c));
+    }
+    // P696: the record of a DNG without one, made from its tags (DevelopDefaultsTest)
+    {
+        auto facts = [] {
+            DevelopDefaults::Facts f;
+            f.width = 4080;
+            f.height = 3072;
+            f.neutral = {.484375f, 1.f, .6416016f};
+            f.cameraToXyzD50 = std::vector<float>{1.01f, .254f, .344f, .253f, .837f, .063f, .035f, -.499f, 2.04f};
+            f.sceneCct = 5825.f;
+            f.noiseProfile = std::vector<double>{2e-4, 4e-7, 3e-4, 5e-7, 4e-4, 6e-7};
+            f.iso = 50;
+            f.exposureTime = 1 / 254.0;
+            f.fNumber = 2.27f;
+            f.focalMm = 22.48f;
+            f.rotationDeg = 90;
+            f.headroom = 2.f;
+            f.whiteLevel = 65535;
+            f.blackLevel = 4100.f;
+            f.software = "SCAMERA 0.98 (31254) 5b8d8d04";
+            f.shadingW = 3;
+            f.shadingH = 2;
+            std::vector<float> map(4 * 6);
+            for (size_t i = 0; i < map.size(); i++) map[i] = 1.f + float(i) * .01f;
+            f.shadingMap = map;
+            return f;
+        };
+        const Settings none;
+        // the Parameters are the DNG's tags
+        {
+            const DevelopDefaults::Facts f = facts();
+            const Parameters p = DevelopDefaults::parameters(f, none);
+            CHECK(p.rawSize && *p.rawSize == (Point{4080, 3072}));
+            CHECK(p.sensorPix && p.sensorPix->left == 0 && p.sensorPix->top == 0 && p.sensorPix->right == 4080 && p.sensorPix->bottom == 3072);
+            CHECK(p.whitePoint && *p.whitePoint == f.neutral);
+            namespace Conv = ShotColour::Conv;
+            ShotColour::F9 cam{};
+            for (size_t i = 0; i < 9; i++) cam[i] = (*f.cameraToXyzD50)[i];
+            const ShotColour::F9 want = Conv::multiply(Conv::sXYZtoProPhoto, cam), srgb = Conv::multiply(Conv::sXYZtoSRGB, Conv::sProPhotoToXYZ);
+            for (size_t i = 0; i < 9; i++) {
+                NEAR((*p.sensorToProPhoto)[i], want[i], 1e-6);
+                NEAR((*p.proPhotoToSRGB)[i], srgb[i], 1e-6);
+                NEAR(p.CCT->matrix[i], srgb[i], 1e-6);
+            }
+            CHECK(p.colourSource == "DNG_FM");
+            CHECK(p.sceneCct == 5825.f && p.iso == 50 && p.aperture == 2.27f && p.focalLength == 22.48f && p.cameraRotation == 90);
+            NEAR(p.exposureTime, 1 / 254.0, 1e-12);
+            CHECK(p.outputScale == 1.f && !p.hybridFinalSize && p.multiFrameCount == 1);
+            CHECK(p.blackLevel && *p.blackLevel == std::vector<float>(4, 4100.f) && p.whiteLevel == 65535);
+            // the noise of the RGB the pipeline takes: the DNG's level times the headroom (S x 2, O x 4), one frame
+            for (size_t c = 0; c < 3; c++) {
+                NEAR(p.noiseModeler->baseModel[c].first, (*f.noiseProfile)[2 * c] * 2, 1e-12);
+                NEAR(p.noiseModeler->baseModel[c].second, (*f.noiseProfile)[2 * c + 1] * 4, 1e-15);
+                CHECK(p.noiseModeler->computeModel[c] == p.noiseModeler->baseModel[c]);
+            }
+            // the DNG's lens-shading map
+            CHECK(p.mapSize && *p.mapSize == (Point{3, 2}) && p.gainMap && *p.gainMap == *f.shadingMap);
+        }
+        // without matrices, noise or shading the defaults stand
+        {
+            DevelopDefaults::Facts f;
+            f.width = 64;
+            f.height = 48;
+            f.neutral = {.5f, 1.f, .8f};
+            f.rotationDeg = 270;
+            const Parameters p = DevelopDefaults::parameters(f, none);
+            const std::vector<float> wb = {2.f, 0, 0, 0, 1.f, 0, 0, 0, 1.25f};
+            for (size_t i = 0; i < 9; i++) NEAR((*p.sensorToProPhoto)[i], wb[i], 1e-6);
+            CHECK(*p.proPhotoToSRGB == (std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1}));
+            CHECK(p.colourSource == "IDENTITY_FALLBACK");
+            CHECK(p.iso == 100);
+            for (size_t c = 0; c < 3; c++) {
+                CHECK(p.noiseModeler->baseModel[c].first > 0 && std::isfinite(p.noiseModeler->baseModel[c].first));
+                CHECK(p.noiseModeler->computeModel[c].second > 0);
+            }
+            CHECK(p.gainMap && p.gainMap->size() == size_t(4 * p.mapSize->x * p.mapSize->y));
+            for (float v : *p.gainMap) CHECK(v == 1.f);
+            CHECK(p.cameraRotation == 270);
+        }
+        // the record reads back as the develop's and says where it came from
+        {
+            const DevelopDefaults::Facts f = facts();
+            Settings s;
+            s.prefs["pref_scam_hybrid_why_sharp_gain"] = Pref::string("1.6");
+            s.prefs["pref_scam_hybrid_denoise"] = Pref::boolean(false);
+            s.dev["hybrid_sun_bloom_no_short"] = 0.f;
+            const DevelopRecord r = throughTheFile(DevelopDefaults::record(f, s, 696));
+            CHECK(DevelopDefaults::fromTags(&r));
+            CHECK(r.meta["software"].text() == f.software);
+            NEAR(r.headroom(), 2.f, 0);
+            // the develop's Parameters at the DNG's grid are the ones made from the tags, field for field
+            CHECK(Develop::parameters(r, 4080, 3072).toJson() == DevelopDefaults::parameters(f, s).toJson());
+            const Settings v = Develop::settings(r, {});
+            CHECK(v.getString("pref_scam_hybrid_why_sharp_gain", "") == "1.6");
+            CHECK(!v.getBoolean("pref_scam_hybrid_denoise", true));
+            CHECK(!v.getBoolean("pref_scam_hybrid_diagnostics", true));
+            CHECK(v.scamDevValue("hybrid_sun_bloom_no_short") && *v.scamDevValue("hybrid_sun_bloom_no_short") == 0.f);
+            // one frame's merge numbers, no maps, no crop
+            const DevelopRecord::Worker w = r.worker();
+            CHECK(!w.bentoApplied && w.normals == 1 && w.noiseFactor == 1.f && std::isnan(w.effectiveMedian));
+            CHECK(r.clipFlags.empty() && r.frames.empty() && r.hlMask.empty());
+            CHECK(DevelopRecord::numberOf(r.meta["crop"]["zoom"], 0) == 1.f && !DevelopRecord::boolOf(r.meta["crop"]["isz4x3"], true));
+        }
+        // a camera's record is not from tags
+        {
+            const DevelopRecord r = record(shot(), 4.f, 1.f, false);
+            CHECK(!DevelopDefaults::fromTags(&r));
+            CHECK(!DevelopDefaults::fromTags(nullptr));
+        }
     }
     // the developer's demosaics (EditDevelopTest)
     {

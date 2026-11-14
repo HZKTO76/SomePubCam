@@ -7,6 +7,7 @@
 // app/src/main/assets/film); PostPipelineRun / the editor derive it from the shaders' folder when it is not set.
 #pragma once
 
+#include "../Inflate.hpp"
 #include "../Settings.hpp"
 
 #include <array>
@@ -867,12 +868,43 @@ inline float half(uint16_t hbits) {
     return s == 1 ? -v : v;
 }
 
-/// 'SFD1', count, then per array: name, dtype (0 f32, 1 f16), dims, little-endian data
+/// P683: tools/film_pack.py's codec undone - inflate, the bytes back from their significance planes, the words' differences
+/// summed (wrapping, as they were taken): the little-endian words that were packed, bit for bit
+inline std::vector<uint8_t> unpack(const uint8_t* stored, size_t length, int width, size_t words) {
+    const std::vector<uint8_t> shuffled = Inflate::zlib(stored, length, words * size_t(width));
+    std::vector<uint8_t> out(shuffled.size());
+    if (width == 4) {
+        uint32_t prev = 0;
+        for (size_t i = 0; i < words; i++) {
+            const uint32_t d = uint32_t(shuffled[i]) | uint32_t(shuffled[words + i]) << 8 | uint32_t(shuffled[2 * words + i]) << 16
+                               | uint32_t(shuffled[3 * words + i]) << 24;
+            prev += d;
+            out[4 * i] = uint8_t(prev);
+            out[4 * i + 1] = uint8_t(prev >> 8);
+            out[4 * i + 2] = uint8_t(prev >> 16);
+            out[4 * i + 3] = uint8_t(prev >> 24);
+        }
+    } else {
+        uint32_t prev = 0;
+        for (size_t i = 0; i < words; i++) {
+            prev = (prev + (uint32_t(shuffled[i]) | uint32_t(shuffled[words + i]) << 8)) & 0xFFFFu;
+            out[2 * i] = uint8_t(prev);
+            out[2 * i + 1] = uint8_t(prev >> 8);
+        }
+    }
+    return out;
+}
+
+/// 'SFD1', count, then per array: name, dtype (0 f32, 1 f16), dims, little-endian data. P683 (APK and install size): 'SFD2', the
+/// same with each array's data stored as codec (0 the plain words, 1 delta + shuffle + deflate: tools/film_pack.py), the CRC-32 of
+/// the plain words and the stored length - decoded here into the same words
 inline Arrays parse(const std::vector<uint8_t>& b) {
     size_t at = 0;
-    auto need = [&](size_t n) { if (at + n > b.size()) throw std::runtime_error("SFD1 truncated"); };
+    auto need = [&](size_t n) { if (at + n > b.size()) throw std::runtime_error("SFD truncated"); };
     auto i32 = [&] { need(4); int32_t v; std::memcpy(&v, b.data() + at, 4); at += 4; return v; };
-    if (b.size() < 8 || b[0] != 'S' || b[1] != 'F' || b[2] != 'D' || b[3] != '1') throw std::runtime_error("not SFD1");
+    if (b.size() < 8 || b[0] != 'S' || b[1] != 'F' || b[2] != 'D') throw std::runtime_error("not SFD1 / SFD2");
+    const uint8_t version = b[3];
+    if (version != '1' && version != '2') throw std::runtime_error("not SFD1 / SFD2");
     at = 4;
     const int count = i32();
     Arrays m;
@@ -887,10 +919,30 @@ inline Arrays parse(const std::vector<uint8_t>& b) {
         Arr arr;
         size_t n = 1;
         for (int i = 0; i < nd; i++) { arr.dims.push_back(i32()); n *= size_t(arr.dims.back()); }
+        const size_t width = dt == 1 ? 2 : 4;
+        const uint8_t* words;
+        std::vector<uint8_t> plain;
+        if (version == '1') {
+            need(n * width);
+            words = b.data() + at;
+            at += n * width;
+        } else {
+            need(1);
+            const int codec = int8_t(b[at++]);
+            const uint32_t crc = uint32_t(i32());
+            const size_t length = size_t(uint32_t(i32()));
+            need(length);
+            plain = codec == 0 ? std::vector<uint8_t>(b.begin() + std::ptrdiff_t(at), b.begin() + std::ptrdiff_t(at + length))
+                               : unpack(b.data() + at, length, int(width), n);
+            at += length;
+            if (plain.size() != n * width || Inflate::crc32(plain.data(), plain.size()) != crc)
+                throw std::runtime_error("damaged array " + name);
+            words = plain.data();
+        }
         arr.v.resize(n);
         for (size_t i = 0; i < n; i++) {
-            if (dt == 1) { need(2); uint16_t h; std::memcpy(&h, b.data() + at, 2); at += 2; arr.v[i] = half(h); }
-            else { need(4); float f; std::memcpy(&f, b.data() + at, 4); at += 4; arr.v[i] = f; }
+            if (dt == 1) { uint16_t h; std::memcpy(&h, words + 2 * i, 2); arr.v[i] = half(h); }
+            else { float f; std::memcpy(&f, words + 4 * i, 4); arr.v[i] = f; }
         }
         m[name] = std::move(arr);
     }

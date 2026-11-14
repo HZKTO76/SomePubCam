@@ -64,7 +64,6 @@ struct SettingsAvailability {
     private let v1V2Colour = (ScamDevFile.cachedValues()["hybrid_why_v2_colour"] ?? 1) != 0
     private let dcg = false
     private let yuvMerge = false
-    private let rawViewfinder = false
     private let heic10Unavailable: String? = nil
     private let hdrUnavailable: String? = nil
     private let colorMethodOverride: String? = nil
@@ -124,7 +123,6 @@ struct SettingsAvailability {
     func hidden(_ key: String) -> Bool {
         // what the iPhone / iPad cannot do at all is not shown (Android greys a row only for a state that can change)
         if iPhoneReason(key) != nil { return true }
-        if key == "pref_live_viewfinder_raw_key" && !rawViewfinder { return true }
         if key.hasPrefix("pref_scam_hybrid_mosaic_") && !mosaicStreams { return true }
         if !xiaomiSmoothZoom && key == "pref_xiaomi_smooth_zoom" { return true }
         if !fullResHwRemosaic && key == "pref_fullres_hw_remosaic" { return true }
@@ -147,10 +145,10 @@ struct SettingsAvailability {
     private var toneV2: Bool { text("pref_scam_hybrid_tone_version", "v1").trimmingCharacters(in: .whitespaces) == "v2" }
 
     private static let V1_ONLY: Set<String> = [
-        WHY + "sharp_gain", WHY + "metering", WHY + "night_dim", WHY + "agx_look", COLOUR + "hue_lock", WHY + "curve_boost",
+        WHY + "metering", WHY + "night_dim", WHY + "agx_look", COLOUR + "hue_lock", WHY + "curve_boost",
         WHY + "fusion_layout", WHY + "weight_hl", WHY + "weight_dark2", WHY + "weight_mid", WHY + "weight_bright",
         WHY + "weight_center", WHY + "ef_coarse", WHY + "clarity", WHY + "sharp_domain", WHY + "ccm_sat", COLOUR + "gamut",
-        COLOUR + "mono", COLOUR + "skin_hue", WHY + "skin_hue_center", COLOUR + "skin_even",
+        COLOUR + "skin_hue", WHY + "skin_hue_center", COLOUR + "skin_even",
         WHY + "portrait_ae", WHY + "portrait_awb", WHY + "portrait_curve_on", WHY + "portrait_curve_points",
         WHY + "hl_soft", WHY + "hl_white", WHY + "delta_chroma", WHY + "flat_protect",
         "scam_hybrid_why_weights_category", "scam_hybrid_why_artifacts_category", "portrait_face_category",
@@ -274,9 +272,6 @@ struct SettingsAvailability {
     /// Why a row does not act now (nil: it does): the iPhone's own reasons first, then SettingsAvailability.reason.
     func reason(_ key: String) -> String? {
         if let r = iPhoneReason(key) { return r }
-        if key == "pref_live_viewfinder_raw_key" && !rawViewfinder {
-            return L("set.na.raw_viewfinder")
-        }
         if let r = toneVersionReason(key) { return r }
         if !toneV2 && v1V2Colour && any(key, Self.WHY + "hl_white", Self.WHY + "delta_chroma") {
             return Lang.t("Тон V1 берёт цвет по правилу тона V2, где этого нет (scam_dev hybrid_why_v2_colour 0 — свой цвет V1, как раньше).",
@@ -502,6 +497,9 @@ struct SettingsAvailability {
     func iPhoneReason(_ key: String) -> String? {
         switch key {
         case "pref_root_enabled": return L("set.na.root")
+        // the developed-RAW viewfinder (LiveRawRenderer / LiveWhyTone: a RAW stream drawn per frame): the iPhone shows the system
+        // camera preview (Android greys it no longer: P705 lets every phone turn it on)
+        case "pref_live_viewfinder_raw_key": return L("set.na.raw_viewfinder")
         case "camera_package_spoof_screen", "pref_camera_package_spoof_enabled", "pref_oplus_spoof_package_key",
              "pref_generic_spoof_package_key", "pref_binder_spoof_package_key", "pref_camera_package_spoof_help":
             return L("set.na.spoof")
