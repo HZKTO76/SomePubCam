@@ -255,6 +255,9 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
         picked = HybridSelect::select(facts.frames, w, h, s, [&](int i) { return float(HybridSelect::score(nch.plane(i), frameW, frameH)); },
                                       dng.aperture, plan.twoX ? 2 : 1, available);
         for (const std::string& line : picked->log) log(line);
+        // «Отметка ES / L» (ScamProcessor -> MergeStamp): the extra frames captured and sent after the frame rules
+        log("frames sent: ultrashort " + std::to_string(picked->ultrashort) + " of " + std::to_string(picked->esCaptured) + ", long "
+            + std::to_string(picked->bracketed) + " of " + std::to_string(picked->longCaptured));
     }
     const std::string mergePath = writeTransport(nchPath, picked ? &picked->frames : nullptr, window ? std::optional<CropArea>(window->area) : std::nullopt,
                                                  jobDir + "/transport.nch");

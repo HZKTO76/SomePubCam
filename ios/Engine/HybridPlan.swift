@@ -66,6 +66,10 @@ enum HybridPlan {
     /// HybridPlan.oneExposure: «Движение», «HDR кадры» off, «Oldstyle»
     static var oneExposure: Bool { motionMode || !hdrFrames || StoredPrefs.bool("pref_oldstyle_mode", false) }
 
+    /// The plan line of a shot without extra frames («Движение», «HDR кадры» off, «Oldstyle»: bento and shasta 0, as Android's plan
+    /// says them) - MergeStamp reads «off» from it
+    static let offDescription = "hybrid plan: one exposure, bento off shasta off"
+
     /// MotionMode.DEFAULTS: the hybrid keys «Спорт» replaces with its own pref_scam_hybrid_mm_<key> and their defaults
     static let motionDefaults: [String: Float] = [
         "zsl_frames": 8, "shasta": 0, "bento": 0, "boost_value": 10, "motion_threshold": 0.5, "motion_boost": 1, "widen_below": 0,
@@ -158,6 +162,19 @@ enum HybridPlan {
 
     static func handheldCap(_ nShutterNs: Int64) -> Int64 { max(nShutterNs, handheldShutterCapNs) }
 
+    /// iOS: the gain a Bayer RAW frame really keeps. The iPad's RAW measured by the merge's HYBRID GAIN CHECK: ISO 25 against N's 200
+    /// came x0.1726 (not x0.125: ~ISO 35), ISO 400 x1.016 (~ISO 200); a gain outside is applied after the RAW (Android's sensor range
+    /// is the RAW's own) and the merge corrects a ratio only within 0.5 .. 2 x its metadata. So the plan moves the gain only inside
+    /// that range, from an N inside it (HybridPlan.java's rule: the gain first, the shutter for the rest); an N outside it (a night
+    /// ISO 1600, a sunny ISO 25) keeps its own ISO and every ratio comes from the shutter - right whatever the RAW keeps.
+    static let rawIsoFloor = 35, rawIsoCeiling = 200
+
+    static func rawIsos(_ isos: ClosedRange<Int>, nIso: Int) -> ClosedRange<Int> {
+        let low = max(isos.lowerBound, rawIsoFloor), high = min(isos.upperBound, rawIsoCeiling)
+        guard low <= high, nIso >= low, nIso <= high else { return nIso...nIso }
+        return low...high
+    }
+
     static func flickerSafe(_ ns: Int64, _ nShutterNs: Int64) -> Int64 {
         let hz = antibandingHz
         if hz <= 0 || ns <= nShutterNs { return ns }
@@ -190,12 +207,10 @@ enum HybridPlan {
         var why = ""
         let bento = bentoMode
         if bento == 2 || (bento == 1 && clip > bentoTriggerClip) {
-            // iOS: the shorter shutter at N's ISO first (the iPad's RAW keeps only part of a lower ISO: ISO 25 against 200 measured
-            // x0.17, not x0.125), a lower ISO only below the shortest shutter
+            // HybridPlan.java: the gain first, then the shutter (`isos` is the gain the RAW keeps: rawIsos)
             let target = n / ultrashortFactor
-            let ns = max(times.lowerBound, min(nShutterNs, round(target / Double(nIso))))
-            let iso = Double(ns) * Double(nIso) > target * 1.05
-                ? Int(max(Int64(isos.lowerBound), min(Int64(nIso), round(target / Double(ns))))) : nIso
+            let iso = Int(max(Int64(isos.lowerBound), min(Int64(nIso), round(target / Double(nShutterNs)))))
+            let ns = max(times.lowerBound, min(nShutterNs, round(target / Double(iso))))
             let ratio = Double(ns) * Double(iso) / n
             if ratio < 0.5 {
                 for _ in 0..<bentoFrames { out.append(Request(role: .extraShort, shutterNs: ns, iso: iso, ratio: ratio)) }
@@ -211,11 +226,13 @@ enum HybridPlan {
             let ev = deep ? max(bracketEv, 2.0) : bracketEv
             let target = n * pow(2, ev)
             let cap = min(times.upperBound, handheldCap(nShutterNs))
-            // iOS: the light of a long frame comes from its shutter (Android: its ISO, the deep shadows' shutter up to 1/60 s): the
-            // iPad's RAW keeps no ISO above ~200 (LONG at ISO x2 measured x1.016, the merge's GAIN CHECK), so the shutter grows to
-            // the handheld cap first and the ISO only takes what is left
-            var ns = flickerSafe(max(nShutterNs, min(cap, round(target / Double(nIso)))), nShutterNs)
-            if deep { ns = max(ns, flickerSafe(max(nShutterNs, min(round(Double(nShutterNs) * pow(2, ev)), min(cap, max(nShutterNs, bracketSafeShutterNs)))), nShutterNs)) }
+            // HybridPlan.java: the gain first at the N shutter (no extra motion blur), the shutter only beyond the gain the RAW keeps
+            // (`isos`: rawIsos), within the handheld cap; deep shadows: the shutter up to 1/60 s, the gain part at most x2
+            var ns = nShutterNs
+            if deep {
+                ns = max(nShutterNs, min(round(Double(nShutterNs) * pow(2, ev)), min(cap, max(nShutterNs, bracketSafeShutterNs))))
+                ns = flickerSafe(max(nShutterNs, min(ns, times.upperBound)), nShutterNs)
+            }
             let gainWanted = target / (Double(ns) * Double(nIso))
             let gain = deep ? min(gainWanted, 2.0) : gainWanted
             let iso = Int(max(Int64(isos.lowerBound), min(Int64(isos.upperBound), round(Double(nIso) * gain))))

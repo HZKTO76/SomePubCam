@@ -112,7 +112,8 @@ extension PhotoCapture {
         let iLow = Int(format.minISO.rounded(.up)), iHigh = Int(format.maxISO.rounded(.down))
         guard tLow > 0, tHigh >= tLow, iLow > 0, iHigh >= iLow else { return nil }
         return HybridPlan.build(nShutterNs: newest.exposureNs, nIso: Int(newest.iso), clip: measure.clip, shadow: measure.shadow,
-                                deepShadow: measure.deep, times: tLow...tHigh, isos: iLow...iHigh)
+                                deepShadow: measure.deep, times: tLow...tHigh,
+                                isos: HybridPlan.rawIsos(iLow...iHigh, nIso: Int(newest.iso)))
     }
 
     /// The plan's frames as manual exposure brackets (AVCaptureManualExposureBracketedStillImageSettings: the plan's shutter and ISO),

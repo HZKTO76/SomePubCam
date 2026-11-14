@@ -958,3 +958,22 @@ Every change keeps the photo bit for bit (host Mesa against the Android referenc
   post node, log, frames); the camera's own photo route honours format, quality, watermark and 16:9; 16:9 viewfinder mask.
 - P718 «Стиль» Vivid / Normal / Neutral (pref_photo_style, tone V2); P696 / P706 «Проявка» of plain DNGs from their tags
   (DevelopDefaults), OpcodeList1 / 2 tags fixed in DngRaw.hpp.
+
+## ES / LONG against Android (audit 2026-11-14)
+Verified the same as Android: HybridSelect (400 bursts, 4497 frame lines, 0 differ; a real vivo burst 26 of 26 entries), the
+NCH header / frame table bytes, clip flags, job markers (rgb-half, hl-mask), tuning lines, ScamMergeCore = the worker's path,
+what the post reads (Bento / HL mask / effective map). The Android bursts through the iOS shot: «3 of 3 short frames», highlight
+path on, BENTO applied («Качество»), the photo bit for bit. Fixed:
+- P558 white (above): the iPad's buffer clips under the declared white - the highlight path was off, ES never used. A burst cut
+  with white 1023 vs 1052 (2.8 % high, the iPad's ratio) reproduces it: 3 of 3 short frames vs 0 of 3. iOS measures the plateau
+  on an N frame (Android: the darkest; an ES frame does not clip, so it would find none here).
+- Plan: HybridPlan.java's rule again (ES and LONG: the gain first, then the shutter) inside the gain the RAW keeps
+  (HybridPlan.rawIsos: ISO 35..200 from the iPad's GAIN CHECK: ISO 25 -> x0.1726 of 200, ISO 400 -> x1.016); an N outside that
+  range keeps its ISO and the shutter makes every ratio (right whatever the RAW keeps; the merge corrects 0.5..2 x only).
+  iPad N 30.3 ms x ISO 200: ES 21.6 ms x ISO 35 (x0.125), LONG 60.6 ms x ISO 200 (x2), as Android with that range.
+- «Чёрный из данных»: BlockScan's floor (32 x 32 blocks, every 4th site, padding blocks out, the 3rd lowest mean per site) on the
+  darkest frame (refineBlackFromDarkestFrame).
+- MergeStamp: the counts after the frame rules (ShotRun logs «frames sent: ultrashort s of c, long s of c»), «off» for a shot
+  without extra frames.
+Kept: per-frame noise from the DNG profile scaled by ISO (slope k, offset k^2: NoiseModeler's generator form); the merge measures
+the bracketed frames' noise itself (P358).

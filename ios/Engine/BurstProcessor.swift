@@ -65,33 +65,44 @@ enum BurstProcessor {
     /// rawOnly («Только RAW», pref_save_raw_key 2): the merge and its DNG only (ScamProcessor returns after the DNG): no photo.
     /// How many times the frames' codes exceed the DNG's levels (1, 2, 4, ... ; nil when it cannot be told): the 14-bit buffer's full
     /// scale against the DNG's white.
-    /// The data floor: the smallest mean of a 64 x 64 block of one CFA site over the reference frame (every fourth block row and
-    /// column), nil without one
+    /// The data floor (Parameters.refineBlackLevel's plain path, P114): on the darkest frame of the series (the lowest exposure x ISO:
+    /// ScamProcessor.refineBlackFromDarkestFrame - it has the most sites at the floor), per CFA site the 32 x 32 blocks of the site's
+    /// plane sampled every fourth row and column (BlockScan), a block with a sample under a quarter of the declared black left out
+    /// (padding / a masked strip); the third lowest block mean of a site, the lowest of the four sites. nil without one.
     static func blackFloor(_ burst: BayerBurst, black: [Float]) -> Float? {
-        guard let first = burst.frames.first, burst.width >= 256, burst.height >= 256 else { return nil }
-        let w = burst.width, h = burst.height, bs = 64
-        var lowest = Float.greatestFiniteMagnitude
-        first.raw.withUnsafeBytes { p in
+        let w = burst.width, h = burst.height, bs = 32, bw = w / 2 / bs, bh = h / 2 / bs
+        guard bw > 0, bh > 0, w >= 128, h >= 128 else { return nil }
+        let darkest = burst.frames.min(by: { Double($0.exposureNs) * Double($0.iso) < Double($1.exposureNs) * Double($1.iso) })
+        guard let frame = burst.frames.contains(where: { $0.exposureNs <= 0 || $0.iso == 0 }) ? burst.frames.first : darkest,
+              frame.raw.count >= w * h * 2 else { return nil }
+        let reportedMin = black.min() ?? 0
+        let paddingBelow: Float = reportedMin > 4 ? reportedMin * 0.25 : -1
+        var floor = Float.greatestFiniteMagnitude
+        frame.raw.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
             let v = p.bindMemory(to: UInt16.self)
-            guard v.count >= w * h else { return }
-            for by in stride(from: 0, to: h / 2 / bs, by: 2) {
-                for bx in stride(from: 0, to: w / 2 / bs, by: 2) {
-                    for site in 0..<4 {
-                        let dy = site >> 1, dx = site & 1
-                        var sum = 0.0, n = 0.0
-                        var qy = by * bs
-                        while qy < (by + 1) * bs {
-                            let row = (qy * 2 + dy) * w
-                            var qx = bx * bs
-                            while qx < (bx + 1) * bs { sum += Double(v[row + qx * 2 + dx]); n += 1; qx += 2 }
-                            qy += 2
+            for c in 0..<4 {
+                let ox = c % 2, oy = c / 2
+                var s1 = Float.greatestFiniteMagnitude, s2 = s1, s3 = s1
+                for by in 0..<bh {
+                    for bx in 0..<bw {
+                        var sum = 0, low = false
+                        for y in stride(from: 0, to: bs, by: 4) {
+                            let row = ((by * bs + y) * 2 + oy) * w + bx * bs * 2 + ox
+                            for x in stride(from: 0, to: bs, by: 4) {
+                                let s = Int(UInt16(littleEndian: v[row + x * 2]))
+                                sum += s
+                                if Float(s) < paddingBelow { low = true }
+                            }
                         }
-                        if n > 0 { lowest = min(lowest, Float(sum / n)) }
+                        if low { continue }
+                        let mean = Float(sum) / Float((bs / 4) * (bs / 4))
+                        if mean < s1 { s3 = s2; s2 = s1; s1 = mean } else if mean < s2 { s3 = s2; s2 = mean } else if mean < s3 { s3 = mean }
                     }
                 }
+                floor = min(floor, s3)
             }
         }
-        return lowest == .greatestFiniteMagnitude ? nil : lowest
+        return floor == .greatestFiniteMagnitude ? nil : floor
     }
 
     static func bufferScale(_ burst: BayerBurst, info: DngInfo, log: (String) -> Void) -> Float? {
@@ -183,8 +194,8 @@ enum BurstProcessor {
                 log.append("RAW white level: \(Int(info.white)) kept (top sample \(top), plateau \(plateau))")
             }
         }
-        // «Чёрный из данных» (pref_raw_black_from_data, Parameters.refineBlackLevel / applyBlackFloor): the darkest 64 x 64 block
-        // mean of the reference frame below the declared black (by more than ~1 DN of a 10-bit range) is the black
+        // «Чёрный из данных» (pref_raw_black_from_data, Parameters.refineBlackLevel / applyBlackFloor): the darkest frame's data
+        // floor (blackFloor) below the declared black by more than ~1 DN of a 10-bit range is the black
         if PostSettings.bool("pref_raw_black_from_data", true), let floor = Self.blackFloor(burst, black: info.black),
            info.black.contains(where: { $0 > floor + max(1, info.white / 1023) }) {
             let before = info.black
@@ -313,9 +324,16 @@ enum BurstProcessor {
         // map is left as the pipeline made it, as ScamProcessor does
         var rgba = photo.rgba
         // «Отметка ES / L на фото»: whether the ultrashort and long frames went into this photo, or a short code why not
-        let es = frames.filter { $0.role == NchWriter.roleUltrashort }.count, long = frames.filter { $0.role == NchWriter.roleBracketed }.count
-        let stamp = MergeStamp.lines(plan: burst.report.first(where: { $0.hasPrefix("hybrid normal-back:") || $0.hasPrefix("hybrid plan:") }),
-                                     esCaptured: es, esSent: es, longCaptured: long, longSent: long,
+        // the counts after the frame rules (ShotRun: «frames sent: ultrashort s of c, long s of c»), as ScamHybridBurst hands them on
+        var es = frames.filter { $0.role == NchWriter.roleUltrashort }.count, long = frames.filter { $0.role == NchWriter.roleBracketed }.count
+        var esSent = es, longSent = long
+        if let line = photo.log.first(where: { $0.hasPrefix("frames sent: ") }) {
+            let n = line.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            if n.count == 4 { (esSent, es, longSent, long) = (n[0], n[1], n[2], n[3]) }
+        }
+        let plan = burst.report.first(where: { $0.hasPrefix("hybrid normal-back:") || $0.hasPrefix("hybrid plan:") })
+            ?? (HybridPlan.oneExposure ? HybridPlan.offDescription : nil)
+        let stamp = MergeStamp.lines(plan: plan, esCaptured: es, esSent: esSent, longCaptured: long, longSent: longSent,
                                      report: photo.log.joined(separator: "\n"), ettr: MergeStamp.ettrLine(burst.report))
         log.append("merge stamp: " + stamp.joined(separator: " | "))
         if MergeStamp.on { MergeStamp.draw(&rgba, width: photo.width, height: photo.height, lines: stamp) }
