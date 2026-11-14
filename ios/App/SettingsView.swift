@@ -527,6 +527,8 @@ struct SettingsRow: View {
             label(detail: SettingsExtras.versionText)
         case AccentPalette.key:
             NavigationLink { AccentPage() } label: { label(detail: AccentPalette.name(AccentPalette.selected(store.values))) }
+        case DcpProfiles.key:
+            NavigationLink { DcpPage() } label: { label(detail: DcpProfiles.label(of: store.string(DcpProfiles.key, ""))) }
         case FileNamePattern.key:
             FileNameRow(label: { label(detail: $0) })
         case SettingsLayout.editorKey:

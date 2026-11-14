@@ -6,6 +6,7 @@
 
 #include "../Parameters.hpp"
 #include "../Settings.hpp"
+#include "DcpProfile.hpp"
 
 #include <array>
 #include <cstdio>
@@ -501,11 +502,14 @@ inline void reCalcColor(Parameters& p, const ShotColourTags& t, const std::funct
     if (placeholderFm) log("the DNG forward matrices are the sRGB -> XYZ placeholder: the plain-session table or the ISP matrix (P315)");
     std::string route = "DNG_FM", why;
     std::optional<F9> cmOnly;
-    if (chainFailed) {
+    const auto dcpXyz = DcpProfiles::activeToXyz(wp.data(), log);
+    if (chainFailed && dcpXyz) {
+        // a DCP profile stands in for the failed chain (Parameters: the failure routes only without one)
+    } else if (chainFailed) {
         why = colourFailure;
         route = "IDENTITY_FALLBACK";
         log("colour: " + route + " (" + why + ")");
-    } else if (placeholderFm || noForward) {
+    } else if (!dcpXyz && (placeholderFm || noForward)) {
         why = noForward ? "no forward matrix" : "the forward matrices are the sRGB -> XYZ placeholder";
         // Parameters.colourMatrixRoute
         auto colourMatrixRoute = [&]() -> std::optional<F9> {
@@ -550,8 +554,15 @@ inline void reCalcColor(Parameters& p, const ShotColourTags& t, const std::funct
     F9 proPhotoToSRGB = Conv::multiply(Conv::sXYZtoSRGB, Conv::sProPhotoToXYZ);
     if (route == "IDENTITY_FALLBACK") proPhotoToSRGB = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::vector<float> pro = vecOf(proPhotoToSRGB);
-    // P408: «Профиль матрицы», else «Своя матрица 3x3»
     Settings& prefs = Settings::current();
+    if (dcpXyz) {
+        // a DCP profile: its camera -> XYZ, then the standard ProPhoto -> sRGB
+        p.sensorToProPhoto = vecOf(Conv::multiply(Conv::sXYZtoProPhoto, *dcpXyz));
+        pro = vecOf(Conv::multiply(Conv::sXYZtoSRGB, Conv::sProPhotoToXYZ));
+        route = "DCP";
+        why = "";
+    } else {
+    // P408: «Профиль матрицы», else «Своя матрица 3x3»
     int presetId = 0;
     try { presetId = std::stoi(prefs.hybridString("why_ccm_profile", "0")); } catch (...) { presetId = 0; }
     std::optional<std::vector<float>> own = presetId > 0 ? presetMatrix(presetId) : std::nullopt;
@@ -564,6 +575,7 @@ inline void reCalcColor(Parameters& p, const ShotColourTags& t, const std::funct
         pro = *own;
         route = preset ? "CCM_PRESET" : "CCM_OVERRIDE";
         why = preset ? "profile " + std::to_string(presetId) : "";
+    }
     }
     p.proPhotoToSRGB = pro;
     p.CCT = ColorCorrection{pro};

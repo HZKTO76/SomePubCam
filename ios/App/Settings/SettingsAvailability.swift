@@ -508,7 +508,6 @@ struct SettingsAvailability {
         case "fringe_net_screen": return L("set.na.fringe_net")
         case "expert_module_sensor", "lens_isp_category", "expert_sensor_screen": return L("set.na.vendor_keys")
         case "scam_lab_screen": return L("set.na.lab")
-        case "pref_dcp_profile_key": return L("set.na.dcp")
         case "pref_noise_model_import_key", "pref_noise_model_export_key", "pref_noise_model_profile_key": return L("set.na.noise_model")
         case "scam_recent_messages": return L("set.na.messages")
         // rows that would show as active but have nothing to act on here

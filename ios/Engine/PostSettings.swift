@@ -18,6 +18,10 @@ enum PostSettings {
             default: break
             }
         }
+        // DcpProfiles: the chosen DCP's file for ShotColour's DCP route
+        if let id = defaults.dictionary(forKey: prefsKey)?[DcpProfiles.key] as? String, let url = DcpProfiles.path(id) {
+            prefs["ios_dcp_path"] = ["s", url.path]
+        }
         // the app's own developer values, then Documents/scam_dev.txt over them (ScamDevFile: Android's file, its lines win)
         var dev = defaults.dictionary(forKey: devKey) as? [String: Double] ?? [:]
         for (key, value) in ScamDevFile.values() { dev[key] = value }
