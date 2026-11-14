@@ -36,7 +36,7 @@ if [ "${SCAM_HOST_FILM:-0}" = 1 ]; then
     g++ -shared -fPIC -O2 -std=c++17 -DSCAMERA_EMBEDDED_FILM=1 -I"$film" -I"$root/app/src/main/cpp" -I"$out/film-gen" -I"$jni" -I"$jni/linux" \
         "$root/app/src/main/cpp/film-reference-jni.cpp" "$root/app/src/main/cpp/film-reference-resources.cpp" "$out/film-gen/embedded_film_data.cpp" \
         "$film/SpektraVulkanRenderer.cpp" "$film/SpektraGeneratedProfileCurves.cpp" "$here/film_host_bridge.cpp" \
-        -o "$out/lib/libscameraFilm.so" -lvulkan -ldl
+        -o "$out/lib/libscameraFilm.so" -lvulkan -ldl -lz
 fi
 filter="$1"; shift
 for kv in "$@"; do export "SCAM_HOST_$kv"; done
