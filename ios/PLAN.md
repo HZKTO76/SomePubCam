@@ -875,3 +875,15 @@ camera_screen: the top row (64 pt) with its grabber, the 3:4 viewfinder from the
   come from ios/CHANGELOG.md (no English copy), the title «SCAMERA iOS <version> · unsigned IPA»; the IPA is not pinned (the
   APK stays the topic's pin). The bot's /post re-sends APKs only.
 
+## «Быстрый» on Metal (2026-11-14)
+- GL pass trace (ios/tools/gl_trace.hpp, hybrid_replay -DSCAM_GL_TRACE, SCAM_GL_TRACE=1; replay_bursts.py trace): every
+  dispatch / draw's float targets read back (mean per channel), Mesa vs Metal pass by pass in merge-metal.
+- Cause: ScamGL kept glDrawBuffers per context; GL keeps it per framebuffer. scam-fast-gpu.h sets it once per FBO at creation,
+  so every draw took the last FBO's single buffer: the MRT passes (kFastGuideQuad's o_gauss_cov, kFastBaseRefColor's o_luma) never
+  wrote their second target -> the luma pyramid and its statistics 0. Night d0 corr 0.69 -> 0.999; full route night 30 -> 53 dB,
+  e193420 50 -> 74 dB, day 60 / 70 dB.
+- Rest: the first pass off Mesa is kFastBaseRefColor (bicubic through 4 bilinear fetches): Apple's GPU interpolates with
+  fixed-point texel weights (as Adreno / Mali), llvmpipe in float, ~1e-3. The fast route's CI gate is 50 dB / 2 % off.
+- ScamGL glReadPixels: a missing alpha of an 8-bit normalised target as bytes reads 255 (was 1).
+- iPad levels: the frames' scale is the 14-bit buffer against the DNG white (x4 for 4095), not the noise slope of an N pair
+  (a shaken series measured 18-20 -> x16: black 8448 above the signal, a black / green photo).

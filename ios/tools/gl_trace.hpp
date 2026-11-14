@@ -73,6 +73,25 @@ inline GLuint createProgram() {
     programOrder()[p] = n;
     return p;
 }
+// with SCAM_GL_TRACE: which shaders a program ordinal is (a hash and the size of each attached source)
+inline void linkProgram(GLuint p) {
+    glLinkProgram(p);
+    if (!enabled()) return;
+    GLuint shaders[4] = {};
+    GLsizei n = 0;
+    glGetAttachedShaders(p, 4, &n, shaders);
+    std::fprintf(stderr, "GLPROG #%d", programOrder().count(p) ? programOrder()[p] : -1);
+    for (GLsizei i = 0; i < n; ++i) {
+        GLint len = 0;
+        glGetShaderiv(shaders[i], GL_SHADER_SOURCE_LENGTH, &len);
+        std::vector<char> src(size_t(len > 0 ? len : 1));
+        glGetShaderSource(shaders[i], GLsizei(src.size()), nullptr, src.data());
+        unsigned long long h = 1469598103934665603ULL;
+        for (char ch : src) { h ^= (unsigned char)ch; h *= 1099511628211ULL; }
+        std::fprintf(stderr, " %016llx/%d", h, len);
+    }
+    std::fprintf(stderr, "\n");
+}
 inline void useProgram(GLuint p) { currentProgram() = p; glUseProgram(p); }
 inline void bindTexture(GLenum target, GLuint t) { if (target == GL_TEXTURE_2D) boundTexture() = t; glBindTexture(target, t); }
 inline void texStorage2D(GLenum target, GLsizei levels, GLenum fmt, GLsizei w, GLsizei h) {
@@ -114,6 +133,7 @@ inline void drawArrays(GLenum mode, GLint first, GLsizei count) {
 
 #define glCreateProgram gltrace::createProgram
 #define glUseProgram gltrace::useProgram
+#define glLinkProgram gltrace::linkProgram
 #define glBindTexture gltrace::bindTexture
 #define glTexStorage2D gltrace::texStorage2D
 #define glBindFramebuffer gltrace::bindFramebuffer

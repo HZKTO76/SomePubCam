@@ -1170,7 +1170,7 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
         for (int xx = 0; xx < width; ++xx) {
             for (int k = 0; k < to.components; ++k) {
                 // GL: a component the storage lacks reads 0, alpha 1
-                const double v = k < from.components ? toClient(readComponent(sp + k * fromBytes, from.kind), from.kind, to.kind, normalised) : k == 3 ? 1.0 : 0.0;
+                const double v = k < from.components ? toClient(readComponent(sp + k * fromBytes, from.kind), from.kind, to.kind, normalised) : k == 3 ? (normalised && to.kind == Kind::U8 ? 255.0 : 1.0) : 0.0;
                 writeComponent(dp + k * toBytes, to.kind, v);
             }
             sp += from.size();

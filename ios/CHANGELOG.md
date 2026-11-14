@@ -1,5 +1,9 @@
 # SCAMERA iOS
 
+## 0.3.1 — fixes
+- «Быстрый» merge on iPhone and iPad now matches Android (night shots were noisy).
+- iPad: no more black / green photos from a shaken series.
+
 ## 0.3 — Android updates of 2026-11-14
 - iPad: a native iPad app - full-screen camera, wider gallery grids, settings and editor sized for the tablet.
 - Noise reduction keeps shadow texture; tone V1 noise, detail and colour as tone V2; V2 without glow beside dark objects.
