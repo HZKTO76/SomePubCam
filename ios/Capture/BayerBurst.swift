@@ -11,6 +11,7 @@ struct BayerBurst {
     var processed: Data?      // the camera's own HEIC of the first request, for its EXIF
     var report: [String] = []
     var front = false         // the front camera: the photo is mirrored as Android's Parameters.mirror
+    var lens = ""             // the capture device's uniqueID (LensShading's key)
     /// ZoomController's residual at the press (the digital crop over the module's own zoom): SabreCrop's window before the merge and
     /// the photo's crop after it (P576 / P226). 1: no crop.
     var zoom = 1.0
@@ -41,6 +42,7 @@ extension PhotoCapture {
         }
         var burst = BayerBurst()
         burst.front = device.position == .front
+        burst.lens = device.uniqueID
         let wide = Wide169.on
         let started = Date()
         let perRequest = max(1, min(count, output.maxBracketedCapturePhotoCount))
