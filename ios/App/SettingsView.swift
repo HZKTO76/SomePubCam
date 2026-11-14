@@ -296,6 +296,8 @@ enum SettingsPages {
     @ViewBuilder static func destination(_ node: SettingsNode, highlight: String? = nil) -> some View {
         if node.key == DeveloperPage.screen {
             DeveloperPage(node: node).environment(\.settingsHighlight, highlight)
+        } else if node.key == ScamLabPage.screen {
+            ScamLabPage()
         } else {
             SettingsScreen(node: node).environment(\.settingsHighlight, highlight)
         }

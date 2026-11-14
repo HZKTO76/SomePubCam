@@ -892,3 +892,32 @@ camera_screen: the top row (64 pt) with its grabber, the 3:4 viewfinder from the
 - Owner chose the iOS-style variant of the Android launcher icon (scamera_icon_fg / _background): the glyph x1.22, a lit
   background, a soft shadow, glass highlights. Source ios/tools/app_icon.svg (viewBox = Android's visible 72 dp), the 1024 px
   PNG without alpha in Icons.xcassets/AppIcon.appiconset (single size, ASSETCATALOG_COMPILER_APPICON_NAME AppIcon).
+
+## iPhone / iPad rework (2026-11-14)
+- DCP: Engine/post/color/DcpProfile.hpp (DcpProfile.java bit for bit against Java on two test profiles), ShotColour's DCP route
+  (Parameters order: no failure / CM-only route with a profile, no CCM preset after it); App/Settings/DcpProfiles.swift (sha256
+  imports in Application Support/dcp, the page), PostSettings "ios_dcp_path".
+- Noise model profiles: App/Settings/NoiseModelProfiles.swift (parse / export of the calibration .c, the imported one kept),
+  BurstProcessor (ScamHybridBurst.noiseFor: the planes' mean at each frame's ISO), DngShot.noiseModel ("ios_noise_profile"). No
+  analogue ISO range on iOS: the digital gain is 1.
+- Vignetting: Engine/LensShading.swift - «Калибровка виньетирования» (Lens › levels): the next SHDR series of an even surface,
+  17 x 13 points, windows of a quarter spacing, edge points carried out along the next point (synthetic 1/(1+0.8 r^2): corners
+  within 0.2 %), refused when clipped / dark / not smooth; per lens uniqueID and size, "ios_lsc_map" -> DngShot.shadingMap where
+  the DNG has no GainMap (Android's stored plain map, applyStoredShading). pref_raw_lsc_mode skip honoured. «Чёрный из данных»:
+  the darkest 64 x 64 site block below the black (applyBlackFloor's margin).
+- CaNetP (P493) ported: Engine/post/nodes/CaNetP.hpp (sha256 of canet/canetp_v4.bin, the passes of canet_p.glsl), ScamRgb as
+  Android (default «Классическое» as Android's DEFAULT_METHOD); the weights bundled. Mesa run of vivo_room with «Нейросеть»: the
+  net 4000x3000 without errors (no Android host reference of this route yet).
+- SHDR at a zoom: AVFoundation refuses Bayer RAW at videoZoomFactor != 1 («When specifying Bayer raw capture, the videoZoomFactor
+  ... must be 1.0»): the series runs at 1 (CaptureService.atUnitZoom), burst.zoom = the device zoom x a copy's crop (SabreCrop),
+  the viewfinder zoomed digitally (ViewfinderRenderer.digitalZoom, the look's frames forced on). The size badge: «Разрешение»
+  as PhotoSize.badge (4032 x 3024: 1.5x 27 MP, 2x 49 MP).
+- iPad orientation: portrait asked (supportedInterfaceOrientationsFor, requestGeometryUpdate); a window iPadOS turns anyway: the
+  controls turn by device - interface angle, the preview / look follow the rotation coordinator's preview angle (KVO).
+- Brackets: the iPad's RAW keeps the ISO only within ~35..200 (GAIN CHECK: LONG at ISO x2 x1.016, ISO 25 vs 200 x0.17): ultrashort
+  by the shutter at N's ISO, LONG by the shutter up to the handheld cap, then the ISO. The plan's clip / shadow shares were measured
+  against the DNG's 12-bit levels on 14-bit codes (clip 0.18 .. 0.36): now at the buffer's levels.
+- ETTR: one metering RAW frame (auto exposure), Ettr.tail of the brightest site of the quads (0.1 %, 0.5 % with Bento) -> boost to
+  0.85 of white, at most 2 EV and 1/30 s; the N frames as manual brackets at its ISO (light, not gain, P377).
+- SCAM Lab: the last series kept with its DNG / metadata / lab json; «Склеить заново с текущими настройками» (BurstProcessor.relab)
+  saves the photo to the library.

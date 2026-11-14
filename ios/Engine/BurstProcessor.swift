@@ -107,6 +107,43 @@ enum BurstProcessor {
         return k
     }
 
+    /// SCAM Lab on the iPhone (ScamLabFragment's «пересклейка»): the last kept series (Documents/Bursts/last.nch and its lab files)
+    /// merged and processed again with the settings as they are now; the photo in «Формат фото», no watermark, no DNG
+    static func relab() throws -> Result {
+        var log: [String] = []
+        let started = Date()
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: lastBurstURL.path), let dng = try? Data(contentsOf: lastBurstURL.appendingPathExtension("dng")) else {
+            throw EngineError.decode(Lang.t("Нет сохранённой серии: снимите кадр SHDR", "No kept series: take an SHDR shot"))
+        }
+        let metadata = (try? Data(contentsOf: lastBurstURL.appendingPathExtension("meta")))
+            .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] } ?? [:]
+        let lab = (try? Data(contentsOf: lastBurstURL.appendingPathExtension("lab")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        guard let shaders = Bundle.main.url(forResource: "shaders", withExtension: nil) else {
+            throw EngineError.decode("the pipeline's shaders are missing from the app")
+        }
+        let extra: [String: Any] = (lab["lscKey"] as? String).flatMap { LensShading.wire($0) }.map { ["ios_lsc_map": ["s", $0]] } ?? [:]
+        let photo: SCAMPhoto
+        do {
+            photo = try SCAMShot.processBurst(atPath: lastBurstURL.path, dng: dng, settings: PostSettings.json(extra: extra), faces: [],
+                                              facesDetected: false, front: lab["front"] as? Bool ?? false, dngFacts: nil, rawOnly: false,
+                                              shaders: shaders.path)
+        } catch let error as NSError {
+            log += (error.userInfo["log"] as? [String]) ?? []
+            throw error
+        }
+        log += photo.log
+        log.append("lab: merge \(Int(photo.mergeMilliseconds)) ms, post \(Int(photo.postMilliseconds)) ms, photo \(photo.width)x\(photo.height)")
+        let format = ShotProcessor.photoFormat
+        var encodeLog: [String] = []
+        let data = try ShotProcessor.encode(rgba: photo.rgba, width: photo.width, height: photo.height, metadata: metadata, format: format,
+                                            gainMap: ShotProcessor.GainMap(photo: photo), log: { encodeLog.append($0) })
+        log += encodeLog
+        log.append("lab: the series merged again in \(ms(since: started)) ms, \(data.count) bytes")
+        return Result(heic: data, uti: format.type.identifier, log: log)
+    }
+
     static func process(_ burst: BayerBurst, metadata: [String: Any], zoom: Double? = nil, dngFacts: [String: Any]? = nil,
                         rawOnly: Bool = false) throws -> Result {
         guard MetalEngine.shared != nil else { throw EngineError.noDevice }
@@ -193,6 +230,15 @@ enum BurstProcessor {
                             frames: frames)
         try NchWriter.writeFacts(to: lastFactsURL, frames: frames, zoom: shotZoom, fullHeight: burst.fullHeight, firstRow: burst.firstRow)
         log.append("burst written to \(nch.lastPathComponent) in \(ms(since: writeStarted)) ms")
+        // SCAM Lab (iOS): what merging this series again needs beside it - the reference frame's DNG, the photo's metadata, the lens
+        try? burst.dng.write(to: lastBurstURL.appendingPathExtension("dng"), options: .atomic)
+        if let plist = try? PropertyListSerialization.data(fromPropertyList: metadata, format: .binary, options: 0) {
+            try? plist.write(to: lastBurstURL.appendingPathExtension("meta"), options: .atomic)
+        }
+        if let lab = try? JSONSerialization.data(withJSONObject: ["lscKey": lscKey, "front": burst.front, "frames": frames.count,
+                                                                  "width": burst.width, "height": burst.height, "time": Date().timeIntervalSince1970]) {
+            try? lab.write(to: lastBurstURL.appendingPathExtension("lab"), options: .atomic)
+        }
         guard let shaders = Bundle.main.url(forResource: "shaders", withExtension: nil) else {
             throw EngineError.decode("the pipeline's shaders are missing from the app")
         }

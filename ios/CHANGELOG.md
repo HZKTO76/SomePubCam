@@ -4,6 +4,10 @@
 - «Быстрый» merge on iPhone and iPad now matches Android (night shots were noisy).
 - iPad: no more black / green photos from a shaken series.
 - App icon: the SCAMERA camera in the iOS style.
+- SHDR at 1.5x / 2x zoom works; the size badge shows «Разрешение» 1.5x / 2x.
+- iPad: portrait screen, upright controls when the window turns; vignetting calibration for lenses without a lens map.
+- Long bracket frame really brighter (shutter, not ISO); ETTR works.
+- DCP colour profiles, noise model profiles, «Чёрный из данных», the fringe net («Нейросеть») and the lab (merge the last series again).
 
 ## 0.3 — Android updates of 2026-11-14
 - iPad: a native iPad app - full-screen camera, wider gallery grids, settings and editor sized for the tablet.
