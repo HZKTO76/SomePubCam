@@ -53,8 +53,8 @@ enum BurstProcessor {
     /// SabreCrop's window of the frames before the merge and the photo's crop after the pipeline (Engine/post/ShotRun.hpp).
     /// dngFacts (P165): the facts for the merged DNG (dngFacts(metadata:shot:)), nil when no RAW is saved.
     /// rawOnly («Только RAW», pref_save_raw_key 2): the merge and its DNG only (ScamProcessor returns after the DNG): no photo.
-    /// How many times the frames' codes exceed the DNG's levels (1, 2, 4, ... ; nil when it cannot be told): the noise of two N frames
-    /// measured against the DNG's NoiseProfile (variance ∝ the code scale), else the dark sites against the DNG's black.
+    /// How many times the frames' codes exceed the DNG's levels (1, 2, 4, ... ; nil when it cannot be told): the 14-bit buffer's full
+    /// scale against the DNG's white.
     static func bufferScale(_ burst: BayerBurst, info: DngInfo, log: (String) -> Void) -> Float? {
         let black = info.black.reduce(0, +) / 4
         guard info.white > black + 16, let first = burst.frames.first else { return nil }
