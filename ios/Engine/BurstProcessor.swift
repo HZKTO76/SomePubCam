@@ -115,6 +115,15 @@ enum BurstProcessor {
             frames[i].noiseSlope = slope * k
             frames[i].noiseOffset = offset * k * k
         }
+        // «Профиль модели шума» other than «Авто» (ScamHybridBurst.noiseFor): the profile at each frame's ISO, the planes' mean; the
+        // iPhone tells no analogue ISO range, so the digital gain is taken as 1 (Android: SENSOR_MAX_ANALOG_SENSITIVITY)
+        if let profile = NoiseModelProfile.active() {
+            for i in frames.indices {
+                let iso = max(1, Int(frames[i].iso))
+                (frames[i].noiseSlope, frames[i].noiseOffset) = profile.mean(iso: iso, analogueIso: iso)
+            }
+            source = "settings profile \(profile.id) at each frame's ISO"
+        }
         let shotZoom = max(1, zoom ?? burst.zoom)
         let roles = frames.map(\.role)
         log.append("burst \(burst.width)x\(burst.height) cfa=\(burst.cfa) frames=\(frames.count) (N \(roles.filter { $0 == NchWriter.roleNormal }.count),"

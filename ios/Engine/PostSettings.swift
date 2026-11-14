@@ -22,6 +22,8 @@ enum PostSettings {
         if let id = defaults.dictionary(forKey: prefsKey)?[DcpProfiles.key] as? String, let url = DcpProfiles.path(id) {
             prefs["ios_dcp_path"] = ["s", url.path]
         }
+        // NoiseModelProfile: a chosen profile's coefficients for DngShot.noiseModel (the merge takes them in BurstProcessor)
+        if let profile = NoiseModelProfile.active() { prefs["ios_noise_profile"] = ["s", profile.wire] }
         // the app's own developer values, then Documents/scam_dev.txt over them (ScamDevFile: Android's file, its lines win)
         var dev = defaults.dictionary(forKey: devKey) as? [String: Double] ?? [:]
         for (key, value) in ScamDevFile.values() { dev[key] = value }

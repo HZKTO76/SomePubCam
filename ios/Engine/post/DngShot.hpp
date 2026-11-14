@@ -13,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -231,7 +232,7 @@ inline void shadingMap(const DngShot& s, Parameters& p, const std::function<void
 }
 
 /// NoiseModeler of the DNG's NoiseProfile (one pair for all channels, three per channel, four R / Gr / Gb / B), base = compute
-inline NoiseModel noiseModel(const DngShot& s, int white) {
+inline NoiseModel noiseModel(const DngShot& s, int white, const std::function<void(const std::string&)>& log = {}) {
     NoiseModel m;
     m.AnalogueISO = s.iso;
     m.SensivityISO = s.iso;
@@ -243,6 +244,26 @@ inline NoiseModel noiseModel(const DngShot& s, int white) {
     }
     // NoiseModeler.reportedModel: the profile as the camera gave it (the offsets sanitised), before the fallback and merging
     if (!in.empty()) m.reportedModel = in;
+    // «Профиль модели шума» other than «Авто» (NoiseModeler: NoiseModelProfile.evaluate at the shot's ISO replaces the camera's);
+    // the app passes its coefficients A, B, C, D (four planes each) as "ios_noise_profile"; no analogue ISO range on the iPhone
+    {
+        std::vector<double> k;
+        std::stringstream text(Settings::current().getString("ios_noise_profile", ""));
+        for (std::string part; std::getline(text, part, ',');) {
+            try { k.push_back(std::stod(part)); } catch (...) { k.clear(); break; }
+        }
+        if (k.size() == 16) {
+            const int iso = std::max(1, s.iso), analogue = iso;
+            const double digitalGain = std::max(double(iso) / std::max(analogue, 1), 1.0);
+            in.clear();
+            for (int p = 0; p < 4; p++) {
+                const double S = k[size_t(p)] * iso + k[size_t(4 + p)];
+                const double O = k[size_t(8 + p)] * double(iso) * iso + k[size_t(12 + p)] * digitalGain * digitalGain;
+                in.push_back({std::max(S, 0.0), std::max(O, 0.0)});
+            }
+            if (log) log("Noise model profile at ISO " + std::to_string(iso) + " replaces the DNG's NoiseProfile");
+        }
+    }
     if (in.empty() || in[0].first == 0.0) {
         // NoiseModeler's built-in generators at the shot's ISO
         const double iso = s.iso, dGain = std::max(iso / std::max(1, s.iso), 1.0);
@@ -279,7 +300,7 @@ inline Parameters shotParameters(const DngShot& s, int outW, int outH, const std
     case 8: p.cameraRotation = 270; break;
     default: p.cameraRotation = 0; break;
     }
-    p.noiseModeler = noiseModel(s, s.white);
+    p.noiseModeler = noiseModel(s, s.white, log);
     shadingMap(s, p, log);
     ShotColour::reCalcColor(p, s.colour, log);
     return p;

@@ -527,6 +527,10 @@ struct SettingsRow: View {
             label(detail: SettingsExtras.versionText)
         case AccentPalette.key:
             NavigationLink { AccentPage() } label: { label(detail: AccentPalette.name(AccentPalette.selected(store.values))) }
+        case "pref_noise_model_import_key":
+            NoiseModelImportRow(label: label(detail: nil))
+        case "pref_noise_model_export_key":
+            NoiseModelExportRow(label: label(detail: nil))
         case DcpProfiles.key:
             NavigationLink { DcpPage() } label: { label(detail: DcpProfiles.label(of: store.string(DcpProfiles.key, ""))) }
         case FileNamePattern.key:
