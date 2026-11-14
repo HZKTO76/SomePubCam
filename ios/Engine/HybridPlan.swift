@@ -128,9 +128,12 @@ enum HybridPlan {
         var why = ""
         let bento = bentoMode
         if bento == 2 || (bento == 1 && clip > bentoTriggerClip) {
+            // iOS: the shorter shutter at N's ISO first (the iPad's RAW keeps only part of a lower ISO: ISO 25 against 200 measured
+            // x0.17, not x0.125), a lower ISO only below the shortest shutter
             let target = n / ultrashortFactor
-            let iso = Int(max(Int64(isos.lowerBound), min(Int64(nIso), round(target / Double(nShutterNs)))))
-            let ns = max(times.lowerBound, min(nShutterNs, round(target / Double(iso))))
+            let ns = max(times.lowerBound, min(nShutterNs, round(target / Double(nIso))))
+            let iso = Double(ns) * Double(nIso) > target * 1.05
+                ? Int(max(Int64(isos.lowerBound), min(Int64(nIso), round(target / Double(ns))))) : nIso
             let ratio = Double(ns) * Double(iso) / n
             if ratio < 0.5 {
                 for _ in 0..<bentoFrames { out.append(Request(role: .extraShort, shutterNs: ns, iso: iso, ratio: ratio)) }
@@ -146,11 +149,11 @@ enum HybridPlan {
             let ev = deep ? max(bracketEv, 2.0) : bracketEv
             let target = n * pow(2, ev)
             let cap = min(times.upperBound, handheldCap(nShutterNs))
-            var ns = nShutterNs
-            if deep {
-                ns = max(nShutterNs, min(round(Double(nShutterNs) * pow(2, ev)), min(cap, max(nShutterNs, bracketSafeShutterNs))))
-                ns = flickerSafe(max(nShutterNs, min(ns, times.upperBound)), nShutterNs)
-            }
+            // iOS: the light of a long frame comes from its shutter (Android: its ISO, the deep shadows' shutter up to 1/60 s): the
+            // iPad's RAW keeps no ISO above ~200 (LONG at ISO x2 measured x1.016, the merge's GAIN CHECK), so the shutter grows to
+            // the handheld cap first and the ISO only takes what is left
+            var ns = flickerSafe(max(nShutterNs, min(cap, round(target / Double(nIso)))), nShutterNs)
+            if deep { ns = max(ns, flickerSafe(max(nShutterNs, min(round(Double(nShutterNs) * pow(2, ev)), min(cap, max(nShutterNs, bracketSafeShutterNs)))), nShutterNs)) }
             let gainWanted = target / (Double(ns) * Double(nIso))
             let gain = deep ? min(gainWanted, 2.0) : gainWanted
             let iso = Int(max(Int64(isos.lowerBound), min(Int64(isos.upperBound), round(Double(nIso) * gain))))
@@ -248,3 +251,52 @@ enum Wide169 {
 
     static func firstRow(_ width: Int, _ height: Int) -> Int { ((height - rows(width, height)) / 2) & ~7 }
 }
+
+/// Ettr (capture/Ettr.java): the tail of the brightest channel of the 2x2 quads and the boost that brings it to TARGET of the
+/// sensor's range, at most MAX_EV; changes under MIN_STEP_EV are none.
+enum EttrMeter {
+    static let target = 0.85, maxEv = 2.0, minStep = 0.3
+
+    /// PreferenceKeys.isEttr: «ETTR» (scam_dev.txt "ettr" over it)
+    static var enabled: Bool {
+        if let dev = ScamDevFile.values()["ettr"] { return dev != 0 }
+        return StoredPrefs.bool("pref_ettr", false)
+    }
+
+    /// The level (0..1 of white over black) the brightest `share` of the quads' brightest site reach (every 4th quad each way)
+    static func tail(_ base: UnsafeMutableRawPointer, width: Int, height: Int, rowBytes: Int, black: [Float], white: Float, share: Double) -> Double {
+        let blackMean = black.reduce(0, +) / Float(max(1, black.count))
+        let range = max(1, white - blackMean)
+        var histogram = [Int](repeating: 0, count: 1024)
+        var total = 0
+        var y = 0
+        while y + 1 < height {
+            let r0 = base.advanced(by: y * rowBytes).assumingMemoryBound(to: UInt16.self)
+            let r1 = base.advanced(by: (y + 1) * rowBytes).assumingMemoryBound(to: UInt16.self)
+            var x = 0
+            while x + 1 < width {
+                let m = max(max(r0[x], r0[x + 1]), max(r1[x], r1[x + 1]))
+                let level = (Float(m) - blackMean) / range
+                histogram[min(1023, max(0, Int(level * 1023)))] += 1
+                total += 1
+                x += 8
+            }
+            y += 8
+        }
+        guard total > 0 else { return 1 }
+        var above = 0
+        let wanted = Int(Double(total) * share)
+        for bin in stride(from: 1023, through: 0, by: -1) {
+            above += histogram[bin]
+            if above > wanted { return Double(bin) / 1023 }
+        }
+        return 0
+    }
+
+    /// The boost (EV, 0 .. maxEv) for a tail level; a clipped tail none
+    static func boost(_ tail: Double) -> Double {
+        guard tail > 0.001, tail < 0.995 else { return 0 }
+        return max(0, min(maxEv, log2(target / tail)))
+    }
+}
+

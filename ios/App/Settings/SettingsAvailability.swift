@@ -513,7 +513,6 @@ struct SettingsAvailability {
         case "pref_webp_quality", "pref_webp_lossless", "pref_avif_quality", "pref_avif_lossless", "pref_avif_depth", "pref_avif_chroma",
              "pref_avif_speed":
             return L("set.na.webp_avif")
-        case "pref_ettr": return L("set.na.ettr")
         case "pref_jpeg_fast_encoder": return L("set.na.jpeg_fast")
         case "scamera_full_debug": return L("set.na.full_debug")
         case "pref_hide_gallery_icon_key": return L("set.na.gallery_icon")

@@ -47,9 +47,18 @@ extension PhotoCapture {
         let started = Date()
         let perRequest = max(1, min(count, output.maxBracketedCapturePhotoCount))
         var clock = BurstClock()
+        let ettr = await ettrExposure(bayer: bayer, device: device, burst: &burst)
+        let format = device.activeFormat
         while burst.frames.count < count {
             let n = min(perRequest, count - burst.frames.count)
-            let bracket = (0..<n).map { _ in AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(exposureTargetBias: 0) }
+            let bracket: [AVCaptureBracketedStillImageSettings] = (0..<n).map { _ -> AVCaptureBracketedStillImageSettings in
+                if let ettr {
+                    return AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(
+                        exposureDuration: CMTime(value: ettr.ns, timescale: 1_000_000_000),
+                        iso: min(max(Float(ettr.iso), format.minISO), format.maxISO))
+                }
+                return AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(exposureTargetBias: 0)
+            }
             let first = burst.frames.isEmpty
             func request(withProcessed: Bool) -> AVCapturePhotoBracketSettings {
                 let processed: [String: Any]? = withProcessed ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
@@ -91,7 +100,7 @@ extension PhotoCapture {
     /// lens's ranges as SENSOR_INFO_EXPOSURE_TIME_RANGE / SENSITIVITY_RANGE; nil in «Движение», with «HDR кадры» off or «Oldstyle».
     private func extrasPlan(for burst: BayerBurst, device: AVCaptureDevice) -> HybridPlan.Plan? {
         guard !HybridPlan.oneExposure, let newest = burst.frames.max(by: { $0.timestampNs < $1.timestampNs }) else { return nil }
-        let levels = DngInfo(dng: burst.dng)
+        let levels = Self.bufferLevels(DngInfo(dng: burst.dng))
         let measure = FrameMeasure.shares(newest.raw, width: burst.width, height: burst.height, black: levels.black, white: levels.white)
         let format = device.activeFormat
         let tLow = Int64((format.minExposureDuration.seconds * 1e9).rounded(.up)), tHigh = Int64((format.maxExposureDuration.seconds * 1e9).rounded(.down))
@@ -173,6 +182,47 @@ extension PhotoCapture {
         finish(&burst)
         burst.report.append("flash shot: 1 frame (flash \(flash.rawValue)) in \(ms(since: started)) ms")
         return burst
+    }
+
+    /// The DNG's levels in the 14-bit buffer's units (BurstProcessor.bufferScale: 528 / 4095 x 4 on the iPad and the iPhones)
+    static func bufferLevels(_ info: DngInfo) -> (black: [Float], white: Float) {
+        let r = 16383 / max(info.white, 1)
+        let k: Float = r >= 1.5 ? Float(1 << min(4, max(0, Int(log2(r).rounded())))) : 1
+        return (info.black.map { $0 * k }, info.white * k)
+    }
+
+    /// P356 ETTR on the iPhone («ETTR», pref_ettr): one auto-exposed RAW frame before the series - the brightest channel's tail of
+    /// its quads (Ettr.tail) against the white - and the N frames then as manual brackets at its ISO with the shutter longer by the
+    /// boost (light, not gain: P377), at most 2 EV and one 30 fps frame; nil: no boost (off, held, under 0.3 EV, refused)
+    private func ettrExposure(bayer: OSType, device: AVCaptureDevice, burst: inout BayerBurst) async -> (ns: Int64, iso: Int)? {
+        guard EttrMeter.enabled, device.exposureMode != .custom, !HybridPlan.oneExposure else { return nil }
+        let meter = AVCapturePhotoBracketSettings(rawPixelFormatType: bayer, processedFormat: nil,
+                                                  bracketedSettings: [AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(exposureTargetBias: 0)])
+        meter.maxPhotoDimensions = output.maxPhotoDimensions
+        silence(meter)
+        guard let photo = try? await capturePhotos(meter).first(where: { $0.isRawPhoto }), let buffer = photo.pixelBuffer,
+              let dng = photo.fileDataRepresentation() else {
+            burst.report.append("ETTR: the metering frame was refused, no boost")
+            return nil
+        }
+        let (baseNs, baseIso) = Self.measured(photo)
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let w = CVPixelBufferGetWidth(buffer) & ~1, h = CVPixelBufferGetHeight(buffer) & ~1, row = CVPixelBufferGetBytesPerRow(buffer)
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+        let levels = Self.bufferLevels(DngInfo(dng: dng))
+        let share = HybridPlan.bentoMode > 0 ? 0.005 : 0.001
+        let tail = EttrMeter.tail(base, width: w, height: h, rowBytes: row, black: levels.black, white: levels.white, share: share)
+        let format = device.activeFormat
+        let maxNs = Int64((format.maxExposureDuration.seconds * 1e9).rounded(.down))
+        let wanted = EttrMeter.boost(tail)
+        // at most one frame of the 30 fps viewfinder (Android: one ring frame), never shorter than the AE's own shutter
+        let frameCap = max(baseNs, Int64(33_333_333))
+        let ns = HybridPlan.flickerSafe(min(maxNs, frameCap, HybridPlan.round(Double(baseNs) * pow(2, wanted))), baseNs)
+        let ev = log2(Double(ns) / Double(max(baseNs, 1)))
+        burst.report.append(String(format: "ETTR: tail %.3f of white (top %.1f%%), boost %.2f EV wanted, %.2f EV: shutter %.3f -> %.3f ms at ISO %ld",
+                                   tail, share * 100, wanted, ev, Double(baseNs) / 1e6, Double(ns) / 1e6, baseIso))
+        return ev >= EttrMeter.minStep ? (ns, baseIso) : nil
     }
 
     /// The first frame's exposure and time the others are relative to
