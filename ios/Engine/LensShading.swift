@@ -67,7 +67,8 @@ enum LensShading {
             switch layouts[burst.cfa][dy * 2 + dx] { case "R": return 0; case "B": return 3; default: return dy == 0 ? 1 : 2 }
         }
         let qw = w / 2, qh = h / 2
-        let halfX = max(4, qw / (gridW - 1) / 2), halfY = max(4, qh / (gridH - 1) / 2)
+        // a quarter of the spacing: an edge window, clipped to the frame, sits only an eighth of the spacing inside its point
+        let halfX = max(4, qw / (gridW - 1) / 4), halfY = max(4, qh / (gridH - 1) / 4)
         var means = [Double](repeating: 0, count: gridW * gridH * 4)
         for frame in normals {
             frame.raw.withUnsafeBytes { p in
@@ -81,7 +82,7 @@ enum LensShading {
                         let x0 = max(0, cx - halfX), x1 = min(qw - 1, cx + halfX)
                         var sum = [Double](repeating: 0, count: 4)
                         var n = 0.0
-                        // every second quad: plenty of samples for a mean
+                        // every quad of the window
                         var qy = y0
                         while qy <= y1 {
                             var qx = x0
@@ -91,12 +92,44 @@ enum LensShading {
                                     for dx in 0..<2 { sum[channel(dy, dx)] += Double(v[row + qx * 2 + dx]) }
                                 }
                                 n += 1
-                                qx += 2
+                                qx += 1
                             }
-                            qy += 2
+                            qy += 1
                         }
                         for c in 0..<4 { means[(gy * gridW + gx) * 4 + c] += sum[c] / max(n, 1) / Double(normals.count) }
                     }
+                }
+            }
+        }
+        // the edge points' windows are clipped by the frame: their means sit at the window's centre, inside the point - carried out
+        // to the point along the line through the next point's mean (rows, then columns)
+        func centres(_ n: Int, _ q: Int, _ half: Int) -> (point: [Double], window: [Double]) {
+            var point: [Double] = [], window: [Double] = []
+            for g in 0..<n {
+                let c = g * (q - 1) / (n - 1)
+                point.append(Double(c))
+                window.append(Double(max(0, c - half) + min(q - 1, c + half)) / 2)
+            }
+            return (point, window)
+        }
+        let xs = centres(gridW, qw, halfX), ys = centres(gridH, qh, halfY)
+        func carry(_ m: Double, _ next: Double, _ at: Double, _ nextAt: Double, _ target: Double) -> Double {
+            guard abs(nextAt - at) > 1e-9 else { return m }
+            return m + (m - next) * (target - at) / (at - nextAt)
+        }
+        for gy in 0..<gridH {
+            for (gx, nx) in [(0, 1), (gridW - 1, gridW - 2)] {
+                for c in 0..<4 {
+                    let i = (gy * gridW + gx) * 4 + c, j = (gy * gridW + nx) * 4 + c
+                    means[i] = carry(means[i], means[j], xs.window[gx], xs.window[nx], xs.point[gx])
+                }
+            }
+        }
+        for gx in 0..<gridW {
+            for (gy, ny) in [(0, 1), (gridH - 1, gridH - 2)] {
+                for c in 0..<4 {
+                    let i = (gy * gridW + gx) * 4 + c, j = (ny * gridW + gx) * 4 + c
+                    means[i] = carry(means[i], means[j], ys.window[gy], ys.window[ny], ys.point[gy])
                 }
             }
         }

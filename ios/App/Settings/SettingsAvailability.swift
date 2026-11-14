@@ -520,7 +520,6 @@ struct SettingsAvailability {
         case "pref_zsl_buffer_count_key": return L("set.na.zsl_buffer")
         case "pref_raw_stream_format": return L("set.na.raw_stream")
         case "pref_cfa_key": return L("set.na.cfa")
-        case "pref_raw_black_from_data", "pref_raw_lsc_mode": return L("set.na.raw_levels")
         case "pref_raw_crop_auto", "pref_raw_crop_left", "pref_raw_crop_top", "pref_raw_crop_right", "pref_raw_crop_bottom", "raw_crop_preview":
             return L("set.na.raw_crop")
         default: return nil

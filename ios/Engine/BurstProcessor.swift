@@ -55,6 +55,35 @@ enum BurstProcessor {
     /// rawOnly («Только RAW», pref_save_raw_key 2): the merge and its DNG only (ScamProcessor returns after the DNG): no photo.
     /// How many times the frames' codes exceed the DNG's levels (1, 2, 4, ... ; nil when it cannot be told): the 14-bit buffer's full
     /// scale against the DNG's white.
+    /// The data floor: the smallest mean of a 64 x 64 block of one CFA site over the reference frame (every fourth block row and
+    /// column), nil without one
+    static func blackFloor(_ burst: BayerBurst, black: [Float]) -> Float? {
+        guard let first = burst.frames.first, burst.width >= 256, burst.height >= 256 else { return nil }
+        let w = burst.width, h = burst.height, bs = 64
+        var lowest = Float.greatestFiniteMagnitude
+        first.raw.withUnsafeBytes { p in
+            let v = p.bindMemory(to: UInt16.self)
+            guard v.count >= w * h else { return }
+            for by in stride(from: 0, to: h / 2 / bs, by: 2) {
+                for bx in stride(from: 0, to: w / 2 / bs, by: 2) {
+                    for site in 0..<4 {
+                        let dy = site >> 1, dx = site & 1
+                        var sum = 0.0, n = 0.0
+                        var qy = by * bs
+                        while qy < (by + 1) * bs {
+                            let row = (qy * 2 + dy) * w
+                            var qx = bx * bs
+                            while qx < (bx + 1) * bs { sum += Double(v[row + qx * 2 + dx]); n += 1; qx += 2 }
+                            qy += 2
+                        }
+                        if n > 0 { lowest = min(lowest, Float(sum / n)) }
+                    }
+                }
+            }
+        }
+        return lowest == .greatestFiniteMagnitude ? nil : lowest
+    }
+
     static func bufferScale(_ burst: BayerBurst, info: DngInfo, log: (String) -> Void) -> Float? {
         let black = info.black.reduce(0, +) / 4
         guard info.white > black + 16, let first = burst.frames.first else { return nil }
@@ -92,6 +121,31 @@ enum BurstProcessor {
         if let k = Self.bufferScale(burst, info: info, log: { log.append($0) }), k != 1 {
             info.black = info.black.map { $0 * k }
             info.white *= k
+        }
+        // «Чёрный из данных» (pref_raw_black_from_data, Parameters.refineBlackLevel / applyBlackFloor): the darkest 64 x 64 block
+        // mean of the reference frame below the declared black (by more than ~1 DN of a 10-bit range) is the black
+        if PostSettings.bool("pref_raw_black_from_data", true), let floor = Self.blackFloor(burst, black: info.black),
+           info.black.contains(where: { $0 > floor + max(1, info.white / 1023) }) {
+            let before = info.black
+            info.black = info.black.map { $0 > floor + max(1, info.white / 1023) ? floor : $0 }
+            log.append("RAW black level from data: \(before) -> \(info.black) (data floor \(floor))")
+        }
+        // «Калибровка виньетирования» armed: this series (an evenly lit plain surface) becomes its lens's shading map
+        let lscKey = LensShading.key(lens: burst.lens, width: burst.width, height: burst.height)
+        if LensShading.armed {
+            LensShading.armed = false
+            let note: String
+            do {
+                let map = try LensShading.measure(burst, frames: frames, black: info.black, white: info.white)
+                try LensShading.save(map, key: lscKey)
+                let corner = map.gains[1]
+                note = Lang.t("Виньетирование откалибровано", "Vignetting calibrated")
+                log.append("lens shading: calibrated \(map.width)x\(map.height) for \(lscKey), green corner gain \(String(format: "%.2f", corner))")
+            } catch {
+                note = Lang.t("Калибровка не удалась: ", "Calibration failed: ") + error.localizedDescription
+                log.append("lens shading: calibration refused: \(error.localizedDescription)")
+            }
+            Task { @MainActor in MessageCenter.shared.info(note) }
         }
         let blackMean = info.black.reduce(0, +) / 4
         // the frame the DNG is (the series' first); the noise of the others is its profile at their ISO (Camera2 gives each frame its
@@ -151,7 +205,9 @@ enum BurstProcessor {
         }
         let photo: SCAMPhoto
         do {
-            photo = try SCAMShot.processBurst(atPath: nch.path, dng: burst.dng, settings: PostSettings.json(),
+            // the stored lens shading map of this lens and frame size (used where the DNG has none)
+            let extra: [String: Any] = LensShading.wire(lscKey).map { ["ios_lsc_map": ["s", $0]] } ?? [:]
+            photo = try SCAMShot.processBurst(atPath: nch.path, dng: burst.dng, settings: PostSettings.json(extra: extra),
                                               faces: faces.boxes.map { NSNumber(value: $0) }, facesDetected: faces.detected, front: burst.front,
                                               dngFacts: dngFacts, rawOnly: rawOnly && dngFacts != nil, shaders: shaders.path)
         } catch let error as NSError {

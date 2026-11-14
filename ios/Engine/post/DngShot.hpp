@@ -206,7 +206,28 @@ inline void shadingMap(const DngShot& s, Parameters& p, const std::function<void
     p.mapSize = Point{1, 1};
     p.gainMap = std::vector<float>{1.f, 1.f, 1.f, 1.f};
     p.hasGainMap = false;
-    if (s.gainMaps.empty() || s.cfa < 0) { log("lens shading: no GainMap in the DNG (neutral gains)"); return; }
+    // «Коррекция виньетирования RAW» (pref_raw_lsc_mode): «Не применять» drops the map (Parameters.rawShadingAlreadyApplied)
+    if (Settings::current().getString("pref_raw_lsc_mode", "auto") == "skip") { log("lens shading: pref_raw_lsc_mode skip (neutral gains)"); return; }
+    if (s.gainMaps.empty() || s.cfa < 0) {
+        // the lens's map from «Калибровка виньетирования» (LensShading.swift: "w,h,gains"), as Android's stored plain map
+        std::vector<float> v;
+        std::stringstream text(Settings::current().getString("ios_lsc_map", ""));
+        for (std::string part; std::getline(text, part, ',');) {
+            try { v.push_back(std::stof(part)); } catch (...) { v.clear(); break; }
+        }
+        if (v.size() >= 2) {
+            const int w = int(v[0]), h = int(v[1]);
+            if (w >= 2 && h >= 2 && v.size() == size_t(2 + w * h * 4)) {
+                p.mapSize = Point{w, h};
+                p.gainMap = std::vector<float>(v.begin() + 2, v.end());
+                p.hasGainMap = true;
+                log("lens shading map " + std::to_string(w) + "x" + std::to_string(h) + " (stored, the lens's calibration: the DNG has none)");
+                return;
+            }
+        }
+        log("lens shading: no GainMap in the DNG (neutral gains)");
+        return;
+    }
     static const char* layouts[4] = {"RGGB", "GRBG", "GBRG", "BGGR"};
     const DngGainMap& g0 = s.gainMaps[0];
     const int w = g0.pointsH, h = g0.pointsV;

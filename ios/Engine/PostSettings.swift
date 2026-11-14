@@ -6,7 +6,13 @@ enum PostSettings {
     static let prefsKey = "scam.prefs"
     static let devKey = "scam.dev"
 
-    static func json() -> String {
+    /// A stored switch as the pipeline reads it (absent: the fallback)
+    static func bool(_ key: String, _ fallback: Bool) -> Bool {
+        (UserDefaults.standard.dictionary(forKey: prefsKey)?[key] as? NSNumber)?.boolValue ?? fallback
+    }
+
+    /// `extra`: shot-specific lines in the same form (["s", text] ...), e.g. the lens's stored shading map
+    static func json(extra: [String: Any] = [:]) -> String {
         let defaults = UserDefaults.standard
         var prefs: [String: Any] = [:]
         for (key, value) in defaults.dictionary(forKey: prefsKey) ?? [:] {
@@ -24,6 +30,7 @@ enum PostSettings {
         }
         // NoiseModelProfile: a chosen profile's coefficients for DngShot.noiseModel (the merge takes them in BurstProcessor)
         if let profile = NoiseModelProfile.active() { prefs["ios_noise_profile"] = ["s", profile.wire] }
+        for (key, value) in extra { prefs[key] = value }
         // the app's own developer values, then Documents/scam_dev.txt over them (ScamDevFile: Android's file, its lines win)
         var dev = defaults.dictionary(forKey: devKey) as? [String: Double] ?? [:]
         for (key, value) in ScamDevFile.values() { dev[key] = value }

@@ -219,6 +219,8 @@ enum SettingsExtras {
     @ViewBuilder static func categoryContent(_ key: String?) -> some View {
         if key == "root_modules" {
             ModulesCard()
+        } else if key == "lens_levels_category" {
+            LensShadingCard()
         }
     }
 
@@ -235,5 +237,37 @@ enum SettingsExtras {
         case "output_settings_screen": return PhotoEncoding.codec.uppercased()
         default: return nil
         }
+    }
+}
+
+/// «Калибровка виньетирования» (iOS: the iPad's DNG has no lens shading map): the next SHDR shot of an evenly lit plain surface
+/// becomes the lens's map (LensShading), used wherever the DNG brings none
+struct LensShadingCard: View {
+    @State private var armed = LensShading.armed
+    @State private var stored = LensShading.count
+    @State private var confirmClear = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: Binding(get: { armed }, set: { armed = $0; LensShading.armed = $0 })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(Lang.t("Калибровка виньетирования", "Vignetting calibration"))
+                    Text(armed ? Lang.t("Следующий снимок SHDR станет калибровочным: снимите ровно освещённую светлую стену или лист без рисунка, заполнив весь кадр, без пересветов.",
+                                        "The next SHDR shot calibrates: fill the frame with an evenly lit plain light wall or sheet, nothing clipped.")
+                               : Lang.t("Для камер, в RAW которых нет карты виньетирования (iPad): карта снимается по ровной светлой поверхности, отдельно для каждого объектива.",
+                                        "For cameras whose RAW has no vignetting map (the iPad): the map is taken from an even light surface, for each lens."))
+                        .font(.app(12)).foregroundStyle(.secondary)
+                }
+            }
+            if stored > 0 {
+                Button(role: .destructive) { confirmClear = true } label: {
+                    Text(Lang.t("Сбросить калибровки (\(stored))", "Clear the calibrations (\(stored))"))
+                }
+                .confirmationDialog(Lang.t("Удалить все калибровки виньетирования?", "Delete every vignetting calibration?"), isPresented: $confirmClear) {
+                    Button(Lang.t("Удалить", "Delete"), role: .destructive) { LensShading.clearAll(); stored = 0 }
+                }
+            }
+        }
+        .onAppear { armed = LensShading.armed; stored = LensShading.count }
     }
 }
