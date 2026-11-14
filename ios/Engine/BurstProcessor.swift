@@ -58,34 +58,23 @@ enum BurstProcessor {
     static func bufferScale(_ burst: BayerBurst, info: DngInfo, log: (String) -> Void) -> Float? {
         let black = info.black.reduce(0, +) / 4
         guard info.white > black + 16, let first = burst.frames.first else { return nil }
-        let normals = burst.frames.indices.filter { burst.frames[$0].role == NchWriter.roleNormal }
-        var ratio: Float?
-        var how = ""
-        if let profile = info.noise, profile.0 > 0, normals.count >= 2,
-           let measured = NoiseEstimate.fromPair(burst.frames[normals[0]].raw, burst.frames[normals[1]].raw, width: burst.width,
-                                                 height: burst.height, cfa: burst.cfa, black: black, white: info.white),
-           measured.0 > 0 {
-            let iso0 = Float(max(first.iso, 1)), iso = Float(max(burst.frames[normals[0]].iso, 1))
-            ratio = measured.0 / (profile.0 * iso / iso0)
-            how = "noise slope measured / NoiseProfile"
-        } else {
-            // the 0.1 % darkest sites sit at the black level plus its noise
-            var samples: [UInt16] = []
-            first.raw.withUnsafeBytes { p in
-                let v = p.bindMemory(to: UInt16.self)
-                var i = 0
-                while i < v.count { samples.append(v[i]); i += 97 }
-            }
-            samples.sort()
-            if !samples.isEmpty, black > 0 {
-                ratio = Float(samples[samples.count / 1000]) / black
-                how = "darkest sites / black"
-            }
+        // the frames are AVFoundation's 14-bit Bayer buffers (BayerBurst takes only those): the DNG's white against the buffer's
+        // full scale gives the whole extra bits. (A noise slope measured on a frame pair is no measure of it: hand shake between the
+        // frames adds texture to the difference - 18-20x on a shaken series instead of 4x.)
+        let r = 16383 / info.white
+        let k: Float = r >= 1.5 ? Float(1 << min(4, max(0, Int(log2(r).rounded())))) : 1
+        // the check in the log: the darkest 0.1 % of the sites sit at the black level (x k), the brightest at most at the white (x k)
+        var samples: [UInt16] = []
+        first.raw.withUnsafeBytes { p in
+            let v = p.bindMemory(to: UInt16.self)
+            var i = 0
+            while i < v.count { samples.append(v[i]); i += 97 }
         }
-        guard let r = ratio, r.isFinite, r > 0 else { return nil }
-        // only whole extra bits, and only with clear evidence (a NoiseProfile 1.5x off must not move the levels)
-        let k: Float = r >= 2.8 ? Float(1 << min(4, max(1, Int((log2(r)).rounded())))) : 1
-        log("frame codes against the DNG levels (\(black) / \(info.white)): \(how) = \(String(format: "%.2f", r)) -> levels x\(Int(k))")
+        samples.sort()
+        let dark = samples.isEmpty || black <= 0 ? 0 : Float(samples[samples.count / 1000]) / black
+        let top = samples.last.map { Float($0) / info.white } ?? 0
+        log("frame codes against the DNG levels (\(black) / \(info.white)): 14-bit buffer -> levels x\(Int(k))"
+            + " (darkest sites / black \(String(format: "%.2f", dark)), brightest / white \(String(format: "%.2f", top)))")
         return k
     }
 
