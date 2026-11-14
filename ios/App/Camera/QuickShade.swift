@@ -253,6 +253,11 @@ enum ShadeCatalog {
         case .format, .size: return v
         case .slider: return CameraStyle.decimal(v)
         default:
+            // «Разрешение»: the photo this lens's SHDR makes at the value (the Android entries name its 12.5 MP sensor's 28 / 50 MP)
+            if long, e.key == "pref_scam_hybrid_output", let i = e.values.firstIndex(of: v) {
+                let scale = ["1.0×", "1.5×", "2.0×"][min(2, i)]
+                return i == 0 ? (e.longLabels.first ?? v) : scale + " (≈" + FormatState.size(camera) + ")"
+            }
             if let i = e.values.firstIndex(of: v) {
                 let l = long ? e.longLabels : e.labels
                 return i < l.count ? l[i] : v

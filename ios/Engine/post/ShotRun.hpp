@@ -267,6 +267,9 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
         f.write(reinterpret_cast<const char*>(&sabreH), 4);
         if (!f) throw std::runtime_error("cannot write the burst header " + mergePath);
     }
+    if (!plan.twoX)
+        log("hybrid output: the sensor grid " + std::to_string(plan.outWidth) + "x" + std::to_string(plan.outHeight) + " («Разрешение» "
+            + s.hybridOutputMode() + (keepCrop ? ", a crop shot without upscale" : "") + ")");
     if (plan.twoX)
         log("hybrid output: Sabre " + plan.outputMode + " grid " + std::to_string(plan.outWidth) + "x" + std::to_string(plan.outHeight)
             + ", final " + std::to_string(plan.finalWidth) + "x" + std::to_string(plan.finalHeight));
