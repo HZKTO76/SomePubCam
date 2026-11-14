@@ -40,6 +40,7 @@ struct Parameters {
     bool dcgShot{};
     int loficLog2{};
     float dcgIsoScale{1.f};
+    float yuvAeScale{};
     std::optional<std::vector<float>> dcgNoise;
     int analogIso{};
     int iso{};
@@ -150,6 +151,7 @@ struct Parameters {
         if (const Json& v = in["dcgShot"]; !v.isNull()) p.dcgShot = v.boolean();
         if (const Json& v = in["loficLog2"]; !v.isNull()) p.loficLog2 = v.integer();
         if (const Json& v = in["dcgIsoScale"]; !v.isNull()) p.dcgIsoScale = float(v.number());
+        if (const Json& v = in["yuvAeScale"]; !v.isNull()) p.yuvAeScale = float(v.number());
         if (const Json& v = in["dcgNoise"]; !v.isNull()) p.dcgNoise = floats(v);
         if (const Json& v = in["analogIso"]; !v.isNull()) p.analogIso = v.integer();
         if (const Json& v = in["iso"]; !v.isNull()) p.iso = v.integer();
@@ -263,6 +265,7 @@ struct Parameters {
         o.put("dcgShot", dcgShot);
         o.put("loficLog2", loficLog2);
         o.put("dcgIsoScale", dcgIsoScale);
+        o.put("yuvAeScale", yuvAeScale);
         o.put("dcgNoise", dcgNoise);
         o.put("analogIso", analogIso);
         o.put("iso", iso);
