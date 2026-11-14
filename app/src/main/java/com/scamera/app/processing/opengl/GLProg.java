@@ -183,11 +183,56 @@ public class GLProg implements AutoCloseable {
 
     /** P470: {@link #warmUp(java.util.function.BooleanSupplier)} reporting (done, total) after each program it looked at. */
     public static void warmUp(java.util.function.BooleanSupplier idle, java.util.function.BiConsumer<Integer, Integer> progress) {
+        warmUp(idle, progress, false);
+    }
+
+    /**
+     * P683: {@code withDefaults} - the APK's default recipes too, whatever was kept (the first-run dialog after an install, an update
+     * or a new system build: every program the code names compiled there, not in the first shot); else only on a clean install.
+     */
+    public static void warmUp(java.util.function.BooleanSupplier idle, java.util.function.BiConsumer<Integer, Integer> progress,
+                              boolean withDefaults) {
+        // (the first-run dialog's run goes ahead even after the idle one: it compiles what that one left out)
+        if (!WARMED.compareAndSet(false, true) && !withDefaults) return;
+        warmUpRun(idle, progress, withDefaults);
+    }
+
+    /** P713: set while a post pipeline runs (GLBasePipeline.runAllToBitmap): the warm-up beside the merge stops then. */
+    public static volatile boolean postRunning;
+
+    /**
+     * P713 (Pixel 6 Pro, Mali-G78, 2026-11-14: the first shot after the camera opened compiled scamhdr/scamrgb and why/combine in its
+     * post, 1872 ms, the idle warm-up being due only 4 s after the camera opened): when this process has not warmed up yet, the kept
+     * recipes whose driver binary is missing are compiled on a background thread as soon as a shot's merge starts (1.1 - 2.5 s on
+     * the GPU of the merge worker's process), until its post starts - a program the post needs meanwhile is waited for (COMPILING),
+     * not compiled twice. The programs and the photo are the same. scam_dev gl_warm_up_merge 0: as before.
+     */
+    public static void warmUpBesideMerge() {
+        try {
+            if (WARMED.get() || !com.scamera.app.settings.PreferenceKeys.scamDevSwitch("gl_warm_up", true)
+                    || !com.scamera.app.settings.PreferenceKeys.scamDevSwitch("gl_warm_up_merge", true)) return;
+        } catch (RuntimeException | LinkageError e) {
+            return;
+        }
         if (!WARMED.compareAndSet(false, true)) return;
+        final Thread t = new Thread(() -> {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+            Log.i(TAG, "program warm-up beside the merge (none ran in this process yet)");
+            // stopped by the post before every program was looked at: the idle warm-up of this process does the rest later
+            if (!warmUpRun(() -> !postRunning, null, false)) WARMED.set(false);
+        }, "scam-gl-warm-merge");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** The warm-up's work; false when {@code idle} stopped it before every program was looked at. */
+    private static boolean warmUpRun(java.util.function.BooleanSupplier idle, java.util.function.BiConsumer<Integer, Integer> progress,
+                                  boolean withDefaults) {
+        boolean stopped = false;
         final GLProgramDiskCache cache = disk();
-        if (cache == null) return;
+        if (cache == null) return true;
         GLContext context = null;
-        int done = 0, failed = 0, wanted = 0, built = 0, recipeKeys = 0;
+        int done = 0, failed = 0, wanted = 0, built = 0, recipeKeys = 0, defaultKeys = 0;
         final long t0 = android.os.SystemClock.elapsedRealtime();
         warmTid = android.os.Process.myTid(); // P371 (review m5): a shot waiting for one of its compiles raises this thread
         // P662 (item 3): the shared context the first shot takes (GLContext(w, h, true)) is made here: the recipes' programs linked
@@ -206,9 +251,18 @@ public class GLProg implements AutoCloseable {
             // install compiled every one of them: 46 in 836 ms on the X8U), then the kept sources this driver lacks (P237)
             final java.util.LinkedHashSet<String> keys = new java.util.LinkedHashSet<>();
             if (recipesOn()) {
-                for (String recipe : cache.recipes(RECIPE_WARM_UP_LIMIT)) {
+                final java.util.List<String> kept = cache.recipes(RECIPE_WARM_UP_LIMIT);
+                for (String recipe : kept) {
                     final String key = recipeKey(recipe, GLProg::assetSource);
                     if (key != null && keys.add(key)) recipeKeys++;
+                }
+                // P683: a clean install has kept none («50 compiled in 2004 ms ... disk 0 hit / 50 miss» on its first shot): the
+                // APK's default recipes (assets/shaders/default_recipes.txt, read off the code by tools/make_default_recipes.py)
+                if (kept.isEmpty() || withDefaults) {
+                    for (String recipe : defaultRecipes(assetSource(DEFAULT_RECIPES))) {
+                        final String key = recipeKey(recipe, GLProg::assetSource);
+                        if (key != null && keys.add(key)) defaultKeys++;
+                    }
                 }
             }
             keys.addAll(cache.missingSources(id, WARM_UP_LIMIT));
@@ -225,7 +279,7 @@ public class GLProg implements AutoCloseable {
                     continue;
                 }
                 wanted++;
-                if (idle != null && !idle.getAsBoolean()) break;
+                if (idle != null && !idle.getAsBoolean()) { stopped = true; break; }
                 // P371: a shot that needs this program meanwhile waits for it instead of compiling it a second time
                 final java.util.concurrent.CountDownLatch compiling = new java.util.concurrent.CountDownLatch(1);
                 if (COMPILING.putIfAbsent(key, compiling) != null) continue;
@@ -256,9 +310,10 @@ public class GLProg implements AutoCloseable {
         }
         Log.i(TAG, "program warm-up: " + done + " of " + wanted + " missing binaries compiled in idle time in "
                 + (android.os.SystemClock.elapsedRealtime() - t0) + " ms" + (failed > 0 ? ", " + failed + " failed" : "")
-                + " (" + recipeKeys + " programs from kept recipes, " + built + " built)"
+                + " (" + recipeKeys + " programs from kept recipes, " + defaultKeys + " from the APK's defaults, " + built + " built)"
                 + (intoShared ? "; shared context: " + linkedShared + " programs linked from driver binaries in " + linkMs + " ms, checks "
-                + (checks.isEmpty() ? "none" : checks) + " in " + checksMs + " ms" : ""));
+                + (checks.isEmpty() ? "none" : checks) + " in " + checksMs + " ms" : "") + (stopped ? "; stopped by a shot" : ""));
+        return !stopped;
     }
 
     /**
@@ -393,6 +448,36 @@ public class GLProg implements AutoCloseable {
         } catch (RuntimeException e) {
             return null; // an asset this APK no longer has, an #import gone
         }
+    }
+
+    /** P683: the APK's default recipes (tools/make_default_recipes.py). */
+    static final String DEFAULT_RECIPES = "shaders/default_recipes.txt";
+
+    /**
+     * P683: the recipes of {@code text} - one per line, "<kind A|U> <name> <compute 0|1> NAME=VALUE ..." ('-': no defines; '#':
+     * a comment) - as {@link #recipe} makes them; a damaged line is left out. None for null.
+     */
+    static java.util.List<String> defaultRecipes(String text) {
+        final java.util.List<String> out = new java.util.ArrayList<>();
+        if (text == null) return out;
+        for (String line : text.split("\n")) {
+            line = line.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
+            final String[] f = line.split("\\s+");
+            if (f.length < 4 || f[0].length() != 1 || !"AU".contains(f[0]) || !("0".equals(f[2]) || "1".equals(f[2]))) continue;
+            java.util.ArrayList<String[]> defines = null;
+            if (!(f.length == 4 && "-".equals(f[3]))) {
+                defines = new java.util.ArrayList<>();
+                for (int i = 3; i < f.length; i++) {
+                    final int eq = f[i].indexOf('=');
+                    if (eq <= 0) { defines = null; break; }
+                    defines.add(new String[]{f[i].substring(0, eq), f[i].substring(eq + 1)});
+                }
+                if (defines == null) continue;
+            }
+            out.add(recipe(f[0].charAt(0), f[1], "1".equals(f[2]), defines));
+        }
+        return out;
     }
 
     private static String assetSource(String path) {
@@ -924,6 +1009,25 @@ public class GLProg implements AutoCloseable {
         drawBlocks(size.x, size.y);
     }
 
+    /**
+     * P713: {@link #drawBlocks(GLTexture)}, or - when the pipeline armed it (GLDeferredDraw.arm: the post's last full-size pass of a
+     * streamed JPEG) - only recorded here and drawn band by band in step with the final output's tiles (the same draws).
+     */
+    public void drawBlocksDeferrable(GLTexture target) {
+        if (GLDeferredDraw.capture(this, target)) return;
+        drawBlocks(target);
+    }
+
+    /** P713: the quad's vertex attribute in the program in use (GLDeferredDraw draws it later). */
+    int positionAttribute() {
+        return location("vPosition", true);
+    }
+
+    /** P713: the full-viewport quad with its corners in {@code attribute} (GLDeferredDraw's bands). */
+    void drawQuad(int attribute) {
+        quad.draw(attribute);
+    }
+
     public void drawBlocks(GLTexture target) {
         target.renderInto();
         // P479: every pixel of the target is drawn below (no post shader discards): its old contents need not be loaded
@@ -945,6 +1049,24 @@ public class GLProg implements AutoCloseable {
         final String pass = activeName;
         for (int y = 0; y < h; ) {
             final int rows = Math.min(h - y, flush ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS) : GLDrawParams.TILE_ROWS);
+            glViewport(0, y, w, rows);
+            draw();
+            if (flush) {
+                glFlush();
+                GpuPace.submitted(pass, (long) w * rows);
+            }
+            y += rows;
+        }
+    }
+
+    /** P713: the program over rows [{@code y0}, {@code y1}) of {@code target} only, in the bands {@link #drawBlocks(int, int)} draws. */
+    public void drawRows(GLTexture target, int y0, int y1) {
+        target.renderInto();
+        final boolean flush = !PostGlMode.legacy();
+        final int w = target.size.x;
+        final String pass = activeName;
+        for (int y = Math.max(0, y0); y < Math.min(y1, target.size.y); ) {
+            final int rows = Math.min(Math.min(y1, target.size.y) - y, flush ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS) : GLDrawParams.TILE_ROWS);
             glViewport(0, y, w, rows);
             draw();
             if (flush) {

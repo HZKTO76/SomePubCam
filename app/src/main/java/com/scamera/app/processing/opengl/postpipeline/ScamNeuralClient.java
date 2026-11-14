@@ -464,7 +464,6 @@ public final class ScamNeuralClient {
                         // P679: a LOFIC shot's result is scaled in place after the merge: never the read-only hardware buffer
                         &&!(scamBurst instanceof ScamHybridBurst&&((ScamHybridBurst)scamBurst).loficLog2()>0);
             }
-            if(adopted==null)writeDumpForward(context,dir);
             final long assetsDone=android.os.SystemClock.elapsedRealtime();
             File input=new File(dir,"input.f32"),output=new File(dir,"output.f32");
             // SCAM: burst and result through shared memory (memfd) instead of ~0.6 GB
@@ -692,7 +691,7 @@ public final class ScamNeuralClient {
                 ScamHybridBurst.lastHlMask=new ScamHybridBurst.HlMask(hlMask.slice().order(ByteOrder.nativeOrder()),scamBurst.width()/2,scamBurst.height()/2);
                 log.accept("CLIENT: base highlight mask "+(scamBurst.width()/2)+"x"+(scamBurst.height()/2)+" for the dezipper pass");
             }
-            {ScamHybridBurst.lastMergedDng=null;ScamHybridBurst.lastEffectiveFrames=null;ScamRgb.dropClipFlags();
+            {ScamHybridBurst.dropMergedDng();ScamHybridBurst.dropEffectiveFrames();ScamRgb.dropClipFlags(); // P681: freed (native)
                 // P371: the report as it stands at the completion line (the reader may still append the worker's last lines)
                 final String rep;
                 synchronized(report){ScamHybridBurst.lastEffectiveMedian=effMedian[0];rep=report.toString();}
@@ -773,22 +772,33 @@ public final class ScamNeuralClient {
                 }catch(Exception e){com.scamera.app.util.Allocator.free(clip);log.accept("CLIENT: clip flags not read: "+e);}
             }else if(scamBurst.clipFlags())log.accept("CLIENT: clip flags asked for but not returned");
             if(shrink)scamOut.truncate(expected+dngBytes+effBytes);
-            // P27 any resolution: the two optional trailers live on the Java heap (1 B per output pixel each); a failed allocation
-            // (OutOfMemoryError, not an Exception) skips the trailer instead of the shot.
+            // P681: the frame map and the merged DNG are views of the result memfd as the RGB and the clip flags (no 2 B / sensor
+            // pixel + 1 B / output pixel copied out; review B1: made before the arena's release below, which punches nothing of an
+            // adopted arena), freed by their consumers (ScamHybridBurst.dropEffectiveFrames, the DNG's writer). Without a view: a
+            // native copy (P27: was a Java heap buffer for the map, returned whenever a GC ran), a failed allocation skips the trailer.
             ByteBuffer eff=null;
-            if(effBytes>0)try{eff=ByteBuffer.allocateDirect((int)effBytes);}catch(OutOfMemoryError oom){log.accept("CLIENT: effective-frame map skipped: "+oom);}
-            if(eff!=null){
+            boolean effViewed=false,dngViewed=false;
+            if(effBytes>0&&viewed&&adoptedArena>0){
+                eff=com.scamera.app.util.Allocator.arenaView(adoptedArena,expected+dngBytes,(int)effBytes);
+                if(eff!=null){effViewed=true;ScamHybridBurst.keepNativeEffectiveFrames(eff);}
+            }
+            if(effBytes>0&&!effViewed){eff=com.scamera.app.util.Allocator.allocate((int)effBytes);if(eff==null)log.accept("CLIENT: effective-frame map skipped: no memory for "+effBytes+" B");}
+            if(eff!=null&&!effViewed){
                 try{
                     if(scamOut!=null)scamOut.readFully(eff,expected+dngBytes);
                     else try(FileChannel channel=new FileInputStream(output).getChannel()){
                         long position=expected+dngBytes;
                         while(eff.hasRemaining()){int n=channel.read(eff,position);if(n<0)throw new EOFException(Lang.t("Неполная карта кадров","Incomplete frame map"));position+=n;}
                     }
-                    eff.flip();ScamHybridBurst.lastEffectiveFrames=eff;
-                }catch(Exception e){log.accept("CLIENT: effective-frame map not read: "+e);}
+                    eff.flip();ScamHybridBurst.keepNativeEffectiveFrames(eff);
+                }catch(Exception e){com.scamera.app.util.Allocator.free(eff);log.accept("CLIENT: effective-frame map not read: "+e);}
             }
             if(shrink)scamOut.truncate(expected+dngBytes);
-            if(dngBytes>0){
+            if(dngBytes>0&&viewed&&adoptedArena>0){
+                final ByteBuffer dng=com.scamera.app.util.Allocator.arenaView(adoptedArena,expected,(int)dngBytes);
+                if(dng!=null){dng.order(ByteOrder.nativeOrder());dngViewed=true;ScamHybridBurst.lastMergedDng=dng;}
+            }
+            if(dngBytes>0&&!dngViewed){
                 ByteBuffer dng=com.scamera.app.util.Allocator.allocate((int)dngBytes);
                 if(dng!=null){
                     dng.order(ByteOrder.nativeOrder());
@@ -811,9 +821,12 @@ public final class ScamNeuralClient {
                 result.flip();
                 log.accept("CLIENT: "+(outputBytes>>20)+" MB read from the end, the memfd shortened behind each read");
             }
-            // the merged DNG and the effective map are copies now: their pages of the result go back (as the memfd did when the
-            // job closed it; the views keep the RGB and the clip flags)
-            if(adoptedArena>0&&dngBytes+effBytes>0)com.scamera.app.util.Allocator.arenaPunch(adoptedArena,expected,dngBytes+effBytes);
+            // the merged DNG and the effective map read into copies: their pages of the result go back (as the memfd did when the
+            // job closed it; the views keep the RGB, the clip flags and, P681, the DNG and the map that are views themselves)
+            if(adoptedArena>0&&dngBytes>0&&!dngViewed)com.scamera.app.util.Allocator.arenaPunch(adoptedArena,expected,dngBytes);
+            if(adoptedArena>0&&effBytes>0&&!effViewed)com.scamera.app.util.Allocator.arenaPunch(adoptedArena,expected+dngBytes,effBytes);
+            if(adoptedArena>0&&(dngViewed||effViewed))log.accept("CLIENT: "+(dngViewed?"merged DNG ("+(dngBytes>>20)+" MB)":"")
+                    +(dngViewed&&effViewed?" and ":"")+(effViewed?"frame map ("+(effBytes>>20)+" MB)":"")+" read in place (views of the memfd, no copy)");
             if(adoptedArena>0&&hlBytes>0)com.scamera.app.util.Allocator.arenaPunch(adoptedArena,expected+dngBytes+effBytes+clipBytes,hlBytes); // P480: a copy too
             taken=true;
             }finally{
@@ -821,6 +834,8 @@ public final class ScamNeuralClient {
                     if(!taken){ // the views go with the arena (the copy route frees its own buffers above)
                         if(viewed&&result!=null)com.scamera.app.util.Allocator.free(result);
                         if(clipKept)ScamRgb.dropClipFlags(clip);
+                        ScamHybridBurst.dropEffectiveFrames(); // P681: a view of it, or its copy
+                        ScamHybridBurst.dropMergedDng();
                     }
                     com.scamera.app.util.Allocator.arenaRelease(adoptedArena); // the views keep it mapped
                 }
@@ -899,23 +914,11 @@ public final class ScamNeuralClient {
     }
 
     /**
-     * Developer switch (adb: touch /sdcard/Download/SCAMERA/dump-forward): dump the network's input/output tiles. P191: the
-     * marker and the dumps are in Download/SCAMERA, not Android/data (owner, 2026-10-17: «переноси всё туда чтобы в data ничего
-     * не хранилось»)
-     */
-    private static void writeDumpForward(Context context,File dir) throws IOException {
-        if(com.scamera.app.util.ScameraFiles.exists(context,"dump-forward")){
-            File dumps=com.scamera.app.util.ScameraFiles.dir();
-            try(java.io.FileWriter marker=new java.io.FileWriter(new File(dir,"dump-forward"))){marker.write(dumps.getAbsolutePath());}
-        }
-    }
-
-    /**
      * P371 (speed, worker_prespawn): the files the worker reads before its go byte and the environment it starts with, as one
      * text: a worker spawned at the shutter is taken only when they are what the job would give it now.
      */
     private static String preGoKey(Context context,boolean creOff){
-        return creSourceMarker()+"|"+creOff+"|"+com.scamera.app.util.ScameraFiles.exists(context,"dump-forward")
+        return creSourceMarker()+"|"+creOff
                 +"|"+com.scamera.app.util.WorkerEnv.gpuNormalPriority()+"|"+com.scamera.app.util.WorkerEnv.workerNice();
     }
 
@@ -1167,7 +1170,6 @@ public final class ScamNeuralClient {
                 final boolean creOff=ScamHybridBurst.avoidedSteps.contains(ScamHybridBurst.STEP_CRE);
                 if(creOff&&!new File(dir,"cre-off").createNewFile())throw new IOException("CRE marker");
                 writeGlCache(context,dir);
-                writeDumpForward(context,dir);
                 // P602: the keys the worker reads before its go, as this session's job will send them (the job's whole tuning
                 // replaces the file before the go)
                 final String preTuning=expectedPreGoTuning();

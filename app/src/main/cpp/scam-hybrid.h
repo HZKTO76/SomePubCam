@@ -18,6 +18,7 @@
 // float) in base units, canonical RGGB geometry (the caller restores the sensor origin), plus the
 // effective-frames map and the merged Bayer RAW for the DNG.
 #include "scam-superres-gpu.h"
+#include "scam-merge.h" // mergeRowBands, fastParallelFor; scam-pool.h: scamComputeThreads
 #include "scam-chroma-gpu.h" // P80 mosaicChromaMedian on the GPU
 #include "scam-la-gpu.h"     // P308 the F6 alignment on the GPU (laGpu)
 #include "scam-fast-gpu.h"    // the fast merge route's GPU side (tune fastMerge, scam-fast-merge.h at the end)
@@ -1258,6 +1259,12 @@ struct HybridTuning {
     // P627: the fast route's column bands (a frame wider than the GPU's limits): the whole frame's frame pick, base first (internal,
     // not a tuning file key); empty = the route's own selector
     std::vector<int> fastPick;
+    // P685: the fast route's row bands (a merge above the memory it may take, scam-fast-merge.h): the whole frame's decisions every
+    // band takes (internal, not tuning file keys) - its white balance (fastBandWb[0] > 0), its clip fraction for the highlight path
+    // (>= 0), its HALF height for the rejection's size-relative thresholds (> 0) and its effective-map code scale (> 0)
+    std::array<float,3> fastBandWb{{0.f,0.f,0.f}};
+    float fastBandClip=-1.f,fastBandEffScale=0.f;
+    int fastBandHalfH=0;
     // P484 fast-merge speed keys (output within one level of the final 8-bit image; 0 = the previous behaviour):
     // fmFilterGather 1: the rejection filter (sh089) reads its 7x7 window by textureGather (output identical).
     // fmMergeBatch N (1..8, default 1 = off): the merges of N consecutive frames are drawn back to back after their front ends (the
@@ -1267,6 +1274,20 @@ struct HybridTuning {
     // glFlush (the front end; the batch's merges after the batch's last frame). Row strips: 1.
     int fmFilterGather=1;
     int fmMergeBatch=1;
+    // P712 fast-merge speed keys (1 = the faster program, the same result; 0 = the previous program, for an A/B on the phone):
+    // fmOutTile: the output pass's Quad filters on a shared-memory tile (kFastOutput tiled: bit for bit the same output).
+    int fmOutTile=1;
+    // fmGuideCells: the Quad / Tetra guide (sh035) reads its cells' values made once per frame (kFastQuadCells: bit for bit the same).
+    int fmGuideCells=1;
+    // fmLatticeTiled: the Quad lattice's 32-tap sums on shared memory, its phase medians by a network (the same output).
+    int fmLatticeTiled=1;
+    // fmKeepContext: the row bands of one merge (P685) take one GPU context, its programs made once (each band made its own).
+    int fmKeepContext=1;
+    // fmChromaFused: the chroma median's box pairs (horizontal, then vertical) in one pass each (kChromaGlslBox2: the same output).
+    int fmChromaFused=1;
+    // fmAhb: hardware buffers for the readback (bit 1) and the RAW upload ring (bit 2); 3 = as before. An A/B of their GPU side on the
+    // phone (the output pass and the unpack); the same photo either way.
+    int fmAhb=3;
     // P488 (owner, 2026-11-03: the reference's Sport merge in our «Спорт»): fastMergeSport bit 1 = the reference Sport's rejection
     // overrides in the fast merge (extra_motion_robustness_boost 10 for 6, u_pixel_difference_threshold 0.35 for 0.5), bit 2 = its
     // Sport frame selector's donor gate (translation <= 15 thumbnail px for 35, sharpness >= 0.75 x the base's for 0.6; the base
@@ -1379,8 +1400,9 @@ inline std::string hybridDngReport(float headroom,int w,int h,float ceiling=0.f,
 inline void shiftOrigin(std::vector<float>& v,int w,int h,int channels,int dx,int dy) {
     if(dx==0&&dy==0)return;
     // P30: bands of rows on all cores, each bottom-up as before; the dy rows above a band (another band writes them) are read
-    // from a copy taken first. Every pixel gets the same source value as in the single pass.
-    const int threads=std::max(1,std::min(8,int(std::thread::hardware_concurrency())));
+    // from a copy taken first. Every pixel gets the same source value as in the single pass. P704: on the stage's threads
+    // (scamComputeThreads: the big cores, at least 4) instead of every hardware thread
+    const int threads=scamComputeThreads();
     const int bands=std::max(1,std::min(threads,h/std::max(64,4*dy+4)));
     const size_t row=size_t(w)*channels;
     std::vector<std::vector<float>> above(bands);
@@ -1720,6 +1742,7 @@ inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::functi
             ||set("fastLightFill",&t.fastLightFill) // P607
             ||set("fastNightMotion",&t.fastNightMotion) // P675
             ||set("fmFilterGather",nullptr,&t.fmFilterGather)||set("fmMergeBatch",nullptr,&t.fmMergeBatch)
+            ||set("fmOutTile",nullptr,&t.fmOutTile)||set("fmGuideCells",nullptr,&t.fmGuideCells)||set("fmLatticeTiled",nullptr,&t.fmLatticeTiled)||set("fmKeepContext",nullptr,&t.fmKeepContext)||set("fmChromaFused",nullptr,&t.fmChromaFused)||set("fmAhb",nullptr,&t.fmAhb) // P712
             ||set("fastMergeSport",nullptr,&t.fastMergeSport)||set("rejPixDiff",&t.rejPixDiff)||set("donorShiftMax",&t.donorShiftMax) // P488
             ||set("denoise",nullptr,&t.denoise); // P600
         }
@@ -1733,12 +1756,12 @@ inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::functi
 }
 
 // ---------------------------------------------------------------------------------------------
-// GLSL. kCommonShader (scam-superres-gpu.h) provides the strip-uploaded frames, sampleRaw()
+// GLSL. The common part (after the former kCommonShader of scam-superres-gpu.h) provides the strip-uploaded frames, sampleRaw()
 // (canonical RGGB coordinates, normalised by black/white, clipped at 1.0) and origin() (the backward
 // homography of frame f at reference pixel (x,y)).
 // ---------------------------------------------------------------------------------------------
-// The common part of every hybrid program (kCommonShader of scam-superres-gpu.h without its mosaic sampling, which only
-// SCAM HDR uses). P14b: the per-frame tables are one std140 uniform block instead of default-block arrays: those were limited to
+// The common part of every hybrid program (the former kCommonShader of scam-superres-gpu.h without its mosaic sampling, which
+// only SCAM HDR used). P14b: the per-frame tables are one std140 uniform block instead of default-block arrays: those were limited to
 // 32 frames (48 for fParam) by the uniform slots of the merge program, and a mosaic burst merges 4 sub-frames per frame.
 static const char* kHybCommon=R"(#version 310 es
 precision highp float;
@@ -6383,10 +6406,7 @@ void main(){
 }
 )";
 
-// P30: directory of the GPU program binary cache (empty = no cache), set by the worker from the job's "gl-cache" file.
-// Compiling the merge programs cost ~0.6 s of every shot (OPPO Adreno 750: 637 ms of a 702 ms init); a program loaded from
-// its own driver binary runs the identical code.
-inline std::string& hybridProgramCacheDir(){static std::string dir;return dir;}
+// P30: hybridProgramCacheDir (the GPU program binary cache directory) is in scam-chroma-gpu.h (P682: its context takes it too).
 // P568: the native merge's choice between its original and its shared-memory twin on this GPU and driver (renderer + GL_VERSION;
 // a current context): -1 none kept (or no cache directory), else 0 / 1. A file "nat-tile.choice" in the program cache.
 inline std::string hybridNatTileKey(const std::string& renderer){
@@ -6601,51 +6621,75 @@ template<class Work> inline void hybridPureBands(std::vector<float>& rgb,int W,i
 // of the luma, gaussian [1 4 6 4 1] / 16. P531: the CPU twin of ChromaMedianGpu::mosaicPost (bands of 64 rows, a 2s + 2-row halo,
 // hybridPureBands). s (P531, Tetra): the step of the gaussian's taps and of the taps along the edge (1 Quad; 2 Tetra: its 4 px
 // stairs). Returns the pixels changed.
-inline size_t hybridAlongEdge(std::vector<float>& rgb,int W,int H,const std::vector<float>& eff,int dx,int dy,float K,float strength,
-                              int s=1){
-    if(W<8||H<8||strength<=0.f||eff.size()<size_t(W)*H||rgb.size()<size_t(W)*H*3)return 0;
+// P682 (speed, memory): the band's buffers (luma, tensor, its row pass, the band's result, its coverage rows) come from a free list of
+// the call (one set per thread at most, freed at its end; they were allocated per band of 64 rows, ~22 MB each at 50 MP), the
+// coverage of the band's rows from effRows(y0, y1, dst) (dst[(y - y0) W + x]: the coverage of pixel (x, y) as share() read it -
+// the fast Tetra pass makes them from its half grid per band instead of a W x H map, 200 MB at 50 MP), and the row passes of the
+// Sobel and of the gaussian have their interior columns without clamps (vectorised; every value the same expression on the same
+// operands, so the same floats).
+template<class EffRows> inline size_t hybridAlongEdgeRows(std::vector<float>& rgb,int W,int H,const EffRows& effRows,float K,float strength,int s){
+    if(W<8||H<8||strength<=0.f||rgb.size()<size_t(W)*H*3)return 0;
     const float k=std::max(K,0.01f),st=std::min(strength,1.f);
-    auto share=[&](int x,int y){
-        const float F=eff[size_t(std::max(0,y-dy))*W+std::max(0,x-dx)]-1.f,u=std::clamp(F/k,0.f,1.f);
+    auto shareOf=[&](float e){
+        const float F=e-1.f,u=std::clamp(F/k,0.f,1.f);
         return st*(1.f-u*u*(3.f-2.f*u));
     };
     s=std::clamp(s,1,4);
     const int B=64,R=2*s+2,bands=(H+B-1)/B;
     std::vector<size_t> changed(static_cast<size_t>(bands),0);
+    struct Buffers { std::vector<float> L,j,t,band,ef; };
+    std::mutex freeLock;std::vector<std::unique_ptr<Buffers>> freeList;
     hybridPureBands(rgb,W,H,B,R,[&](int b,const HybridPureRows& row){
         const int y0=b*B,y1=std::min(H,y0+B);
+        std::unique_ptr<Buffers> bufs;
+        {std::lock_guard<std::mutex> l(freeLock);if(!freeList.empty()){bufs=std::move(freeList.back());freeList.pop_back();}}
+        if(!bufs)bufs=std::make_unique<Buffers>();
+        struct GiveBack { std::unique_ptr<Buffers>& b;std::mutex& m;std::vector<std::unique_ptr<Buffers>>& list;
+            ~GiveBack(){try{std::lock_guard<std::mutex> l(m);list.push_back(std::move(b));}catch(...){}} } giveBack{bufs,freeLock,freeList};
+        std::vector<float>& ef=bufs->ef;
+        ef.resize(size_t(y1-y0)*W);
+        effRows(y0,y1,ef.data());
+        auto share=[&](int x,int y){return shareOf(ef[size_t(y-y0)*W+x]);};
         bool any=false;
         for(int y=y0;y<y1&&!any;++y)for(int x=0;x<W;++x)if(share(x,y)>1e-3f){any=true;break;}
         if(!any)return;
         // rows [ya, yb): the band and R rows each side (Sobel 1 + the 5-tap gaussian 2s, one spare)
         const int ya=std::max(0,y0-R),yb=std::min(H,y1+R),n=yb-ya;
         const size_t np=size_t(n)*W;
-        std::vector<float> L(np),j(np*3),t(np*3);
+        std::vector<float>& L=bufs->L;std::vector<float>& j=bufs->j;std::vector<float>& t=bufs->t;
+        L.resize(np);j.resize(np*3);t.resize(np*3); // every value written below before it is read
         for(int r=0;r<n;++r){const float* p=row(ya+r);for(int x=0;x<W;++x)L[size_t(r)*W+x]=0.25f*p[3*x]+0.5f*p[3*x+1]+0.25f*p[3*x+2];}
         for(int r=0;r<n;++r){ // Sobel, products interleaved (j11, j22, j12)
             const float* up=&L[size_t(std::max(r-1,0))*W];const float* mid=&L[size_t(r)*W];const float* dn=&L[size_t(std::min(r+1,n-1))*W];
             float* o=&j[size_t(r)*W*3];
-            for(int x=0;x<W;++x){
-                const int xl=x>0?x-1:0,xr=x<W-1?x+1:W-1;
+            auto px=[&](int x,int xl,int xr){
                 const float gx=(up[xr]+2.f*mid[xr]+dn[xr])-(up[xl]+2.f*mid[xl]+dn[xl]);
                 const float gy=(dn[xl]+2.f*dn[x]+dn[xr])-(up[xl]+2.f*up[x]+up[xr]);
                 o[3*x]=gx*gx;o[3*x+1]=gy*gy;o[3*x+2]=gx*gy;
-            }
+            };
+            px(0,0,1);
+            for(int x=1;x<W-1;++x)px(x,x-1,x+1);
+            px(W-1,W-2,W-1);
         }
         // gaussian [1 4 6 4 1] / 16 (sigma ~1), rows then columns, the three products at once
         for(int r=0;r<n;++r){
             const float* v=&j[size_t(r)*W*3];float* o=&t[size_t(r)*W*3];
-            for(int x=0;x<W;++x){
+            auto px=[&](int x){
                 const int a=std::max(x-2*s,0),b1=std::max(x-s,0),c1=std::min(x+s,W-1),d=std::min(x+2*s,W-1);
                 for(int q=0;q<3;++q)o[3*x+q]=(v[3*a+q]+v[3*d+q]+4.f*(v[3*b1+q]+v[3*c1+q])+6.f*v[3*x+q])*(1.f/16.f);
-            }
+            };
+            const int e0=std::min(2*s,W),e1=std::max(e0,W-2*s);
+            for(int x=0;x<e0;++x)px(x);
+            const int s3=3*s,s6=6*s;
+            for(int q=3*e0;q<3*e1;++q)o[q]=(v[q-s6]+v[q+s6]+4.f*(v[q-s3]+v[q+s3])+6.f*v[q])*(1.f/16.f);
+            for(int x=e1;x<W;++x)px(x);
         }
         for(int y=y0;y<y1;++y){
             const int r=y-ya;
             const float* a=&t[size_t(std::max(r-2*s,0))*W*3];const float* b2=&t[size_t(std::max(r-s,0))*W*3];const float* c=&t[size_t(r)*W*3];
             const float* d2=&t[size_t(std::min(r+s,n-1))*W*3];const float* e=&t[size_t(std::min(r+2*s,n-1))*W*3];
             float* o=&j[size_t(r)*W*3];
-            for(int x=0;x<W;++x)for(int q=0;q<3;++q)o[3*x+q]=(a[3*x+q]+e[3*x+q]+4.f*(b2[3*x+q]+d2[3*x+q])+6.f*c[3*x+q])*(1.f/16.f);
+            for(int q=0;q<3*W;++q)o[q]=(a[q]+e[q]+4.f*(b2[q]+d2[q])+6.f*c[q])*(1.f/16.f);
         }
         auto sample=[&](float fx,float fy,float* o){
             fx=std::clamp(fx,0.f,float(W-1));fy=std::clamp(fy,0.f,float(H-1));
@@ -6653,7 +6697,8 @@ inline size_t hybridAlongEdge(std::vector<float>& rgb,int W,int H,const std::vec
             const float* p00=row(yA)+size_t(x0)*3;const float* p01=p00+3;const float* p10=row(yA+1)+size_t(x0)*3;const float* p11=p10+3;
             for(int q=0;q<3;++q)o[q]=(p00[q]*(1.f-ax)+p01[q]*ax)*(1.f-ay)+(p10[q]*(1.f-ax)+p11[q]*ax)*ay;
         };
-        std::vector<float> band(rgb.begin()+std::ptrdiff_t(size_t(y0)*W*3),rgb.begin()+std::ptrdiff_t(size_t(y1)*W*3)); // the band's result
+        std::vector<float>& band=bufs->band; // the band's result
+        band.assign(rgb.begin()+std::ptrdiff_t(size_t(y0)*W*3),rgb.begin()+std::ptrdiff_t(size_t(y1)*W*3));
         size_t count=0;
         for(int y=y0;y<y1;++y)for(int x=0;x<W;++x){
             const float sh=share(x,y);
@@ -6687,6 +6732,16 @@ inline size_t hybridAlongEdge(std::vector<float>& rgb,int W,int H,const std::vec
     size_t n=0;
     for(size_t c:changed)n+=c;
     return n;
+}
+inline size_t hybridAlongEdge(std::vector<float>& rgb,int W,int H,const std::vector<float>& eff,int dx,int dy,float K,float strength,
+                              int s=1){
+    if(W<8||H<8||strength<=0.f||eff.size()<size_t(W)*H||rgb.size()<size_t(W)*H*3)return 0;
+    return hybridAlongEdgeRows(rgb,W,H,[&](int y0,int y1,float* dst){
+        for(int y=y0;y<y1;++y){
+            const float* e=&eff[size_t(std::max(0,y-dy))*W];float* d=dst+size_t(y-y0)*W;
+            for(int x=0;x<W;++x)d[x]=e[std::max(0,x-dx)];
+        }
+    },K,strength,s);
 }
 // P529: the notch's frequency (cycles / px on both axes, period 10 px: the phase from x mod 10, as the GPU's table) and its band of the
 // coverage: lowFrac .. highFrac of the static part of the frame (the 80th percentile of eff, every 13th pixel), from 2 frames up.
@@ -6766,23 +6821,37 @@ inline size_t hybridLatticeNotch(std::vector<float>& rgb,int W,int H,const std::
                 o[4*x]=L*cp;o[4*x+1]=-L*sp;o[4*x+2]=L*cm;o[4*x+3]=-L*sm;
             }
         }
+        // P682 (speed): the row pass's interior columns and the column pass accumulate by rows (vectorised, no clamp per tap): every
+        // value the sum of the same products in the same order q = -R .. R from 0, as the pixel loops it replaced
+        const int xi0=std::min(R,W),xi1=std::max(xi0,W-R);
         for(int r=0;r<n;++r){
             const float* v=&Pl[size_t(r)*W*4];float* o=&T[size_t(r)*W*4];
-            for(int x=0;x<W;++x){
+            auto edge=[&](int x){
                 float a0=0,a1=0,a2=0,a3=0;
                 for(int q=-R;q<=R;++q){const int xx=std::clamp(x+q,0,W-1);const float w=g[q+R];a0+=w*v[4*xx];a1+=w*v[4*xx+1];a2+=w*v[4*xx+2];a3+=w*v[4*xx+3];}
                 o[4*x]=a0;o[4*x+1]=a1;o[4*x+2]=a2;o[4*x+3]=a3;
-            }
+            };
+            for(int x=0;x<xi0;++x)edge(x);
+            float* oi=o+4*xi0;const int ni=4*(xi1-xi0);
+            for(int i=0;i<ni;++i)oi[i]=0.f;
+            if(ni>0)for(int q=-R;q<=R;++q){const float w=g[q+R];const float* vi=v+4*(xi0+q);for(int i=0;i<ni;++i)oi[i]+=w*vi[i];}
+            for(int x=xi1;x<W;++x)edge(x);
         }
         std::vector<float> band(rgb.begin()+std::ptrdiff_t(size_t(y0)*W*3),rgb.begin()+std::ptrdiff_t(size_t(y1)*W*3));
+        std::vector<float> shRow(static_cast<size_t>(W)),acc(size_t(W)*4);
         size_t count=0;
         for(int y=y0;y<y1;++y){
             const int r=y-ya;const float c2=cosT[y%P],s2=sinT[y%P];
-            for(int x=0;x<W;++x){
-                const float sh=share(x,y);
+            int xa=W,xb=-1; // the columns the row changes
+            for(int x=0;x<W;++x){shRow[size_t(x)]=share(x,y);if(shRow[size_t(x)]>1e-3f){xa=std::min(xa,x);xb=x;}}
+            if(xb<xa)continue;
+            float* ac=acc.data()+size_t(xa)*4;const int na=4*(xb+1-xa);
+            for(int i=0;i<na;++i)ac[i]=0.f;
+            for(int q=-R;q<=R;++q){const int rr=std::clamp(r+q,0,n-1);const float* v=&T[(size_t(rr)*W+xa)*4];const float w=g[q+R];for(int i=0;i<na;++i)ac[i]+=w*v[i];}
+            for(int x=xa;x<=xb;++x){
+                const float sh=shRow[size_t(x)];
                 if(sh<=1e-3f)continue;
-                float a0=0,a1=0,a2=0,a3=0;
-                for(int q=-R;q<=R;++q){const int rr=std::clamp(r+q,0,n-1);const float* v=&T[(size_t(rr)*W+x)*4];const float w=g[q+R];a0+=w*v[0];a1+=w*v[1];a2+=w*v[2];a3+=w*v[3];}
+                const float a0=acc[size_t(x)*4],a1=acc[size_t(x)*4+1],a2=acc[size_t(x)*4+2],a3=acc[size_t(x)*4+3];
                 const float c1=cosT[x%P],s1=sinT[x%P];
                 const float cp=c1*c2-s1*s2,sp=s1*c2+c1*s2,cm=c1*c2+s1*s2,sm=s1*c2-c1*s2;
                 // 2 Re(A exp(+i phase)) per diagonal
@@ -6900,26 +6969,34 @@ inline size_t hybridClipLatticeNotch(std::vector<float>& rgb,int W,int H,const s
         }
         groups.push_back(std::move(g));
     }
+    // P682 (speed): the row pass's interior columns without a clamp per tap and the column pass by rows (vectorised; each value the
+    // sum of the same products in the same order i = -r .. r from 0, as the pixel loops it replaced)
     auto blur=[](std::vector<float>& a,int w,int h,float sigma){
         const int r=int(std::ceil(3.f*sigma));std::vector<float> k(size_t(2*r+1));float sum=0;
         for(int i=-r;i<=r;++i){k[size_t(i+r)]=std::exp(-0.5f*float(i*i)/(sigma*sigma));sum+=k[size_t(i+r)];}
         for(float& v:k)v/=sum;
         std::vector<float> t(a.size());
-        for(int y=0;y<h;++y)for(int x=0;x<w;++x){float acc=0;for(int i=-r;i<=r;++i)acc+=k[size_t(i+r)]*a[size_t(y)*w+std::clamp(x+i,0,w-1)];t[size_t(y)*w+x]=acc;}
-        for(int y=0;y<h;++y)for(int x=0;x<w;++x){float acc=0;for(int i=-r;i<=r;++i)acc+=k[size_t(i+r)]*t[size_t(std::clamp(y+i,0,h-1))*w+x];a[size_t(y)*w+x]=acc;}
+        const int x0=std::min(r,w),x1=std::max(x0,w-r);
+        for(int y=0;y<h;++y){
+            const float* src=&a[size_t(y)*w];float* o=&t[size_t(y)*w];
+            auto edge=[&](int x){float acc=0;for(int i=-r;i<=r;++i)acc+=k[size_t(i+r)]*src[std::clamp(x+i,0,w-1)];o[x]=acc;};
+            for(int x=0;x<x0;++x)edge(x);
+            for(int x=x0;x<x1;++x)o[x]=0.f;
+            for(int i=-r;i<=r;++i){const float kk=k[size_t(i+r)];for(int x=x0;x<x1;++x)o[x]+=kk*src[x+i];}
+            for(int x=x1;x<w;++x)edge(x);
+        }
+        for(int y=0;y<h;++y){
+            float* o=&a[size_t(y)*w];
+            for(int x=0;x<w;++x)o[x]=0.f;
+            for(int i=-r;i<=r;++i){const float kk=k[size_t(i+r)];const float* si=&t[size_t(std::clamp(y+i,0,h-1))*w];for(int x=0;x<w;++x)o[x]+=kk*si[x];}
+        }
     };
     const float cs8[8]={1.f,0.70710678f,0.f,-0.70710678f,-1.f,-0.70710678f,0.f,0.70710678f};
     const float sn8[8]={0.f,0.70710678f,1.f,0.70710678f,0.f,-0.70710678f,-1.f,-0.70710678f};
     struct Out{int x0,y0,w,h;std::vector<float> rgb;std::vector<uint8_t> own,clip;std::vector<float> dist,mk,m3,m4;};
     std::vector<Out> outs(groups.size());
-    auto parallel=[](size_t count,const std::function<void(size_t)>& fn){
-        const size_t threads=std::min<size_t>(count,std::max(1u,std::min(8u,std::thread::hardware_concurrency())));
-        std::atomic<size_t> next{0};
-        auto run=[&]{for(size_t k;(k=next.fetch_add(1))<count;)fn(k);};
-        std::vector<std::thread> pool;
-        for(size_t t=1;t<threads;++t)pool.emplace_back(run);
-        run();
-        for(auto& t:pool)t.join();
+    auto parallel=[](size_t count,const std::function<void(size_t)>& fn){ // P682: the persistent team (scamRunTeam)
+        fastParallelFor(int(count),[&](int k){fn(size_t(k));});
     };
     parallel(groups.size(),[&](size_t gi){
         const Group& g=groups[gi];Out& o=outs[gi];
@@ -10203,7 +10280,12 @@ public:
 // carries one), on a stored / declared Quad / Tetra block with mosaicPath 1 the native set with the colour passes off
 // (hybridReconstructMosaicNativeMerge) and its merge program for the block's window. The split (mosaicPath 0) merges plain.
 inline void hybridPrewarmGpu(const HybridTuning& tune,int block,const std::function<void(const std::string&)>& report){
-    const auto t0=std::chrono::steady_clock::now();
+    using PrewarmClock=std::chrono::steady_clock;
+    auto msSince=[](PrewarmClock::time_point a){return std::to_string(int(std::chrono::duration<double,std::milli>(PrewarmClock::now()-a).count()));};
+    // P682: the CPU classes measured once (scamCalibrateCpus; kept: a file read), before the compiles (whose driver threads would
+    // share the cores)
+    if(!scamCpuCalibrationPath().empty())report("HYBRID PREWARM: "+scamCalibrateCpus(scamCpuCalibrationPath()));
+    const auto t0=PrewarmClock::now();
     // P195: with «Наш ремозаик» off (mosaicRemosaic 0) a Quad / Tetra module merges its binned Bayer burst on the plain set
     const bool native=block>1&&tune.mosaicRemosaic!=0&&tune.mosaicPath==1&&(block==2||tune.mosaicTetra!=0);
     HybridTuning t=tune;
@@ -10223,17 +10305,27 @@ inline void hybridPrewarmGpu(const HybridTuning& tune,int block,const std::funct
     }
     // P308: the GPU F6's programs as well (laGpu: «Где считать F6» = GPU), in their own context (the merge's made current again
     // by its own cleanup); a failure costs only their compile at the shot
-    std::string laNote;
+    std::string laNote=", merge programs "+msSince(t0)+" ms"; // P682: each phase's time
     if(tune.fastMerge>0){ // the fast merge route's programs (scam-fast-merge.h)
-        try{FastMergeGpu ag(hybridProgramCacheDir());laNote=", fast merge "+ag.cacheNote();}
-        catch(const std::exception& e){laNote=std::string(", fast merge failed: ")+e.what();}
+        const auto p0=PrewarmClock::now();
+        try{FastMergeGpu ag(hybridProgramCacheDir());laNote+=", fast merge "+ag.cacheNote()+" "+msSince(p0)+" ms";}
+        catch(const std::exception& e){laNote+=std::string(", fast merge failed: ")+e.what();}
     }
     if(tune.laGpu!=0&&tune.localAlign>0){
-        try{LaGpu f6(hybridProgramCacheDir());f6.prepareHomography();laNote=", F6"+f6.cacheNote();} // P364: the GPU alignment's too
-        catch(const std::exception& e){laNote=std::string(", F6 failed: ")+e.what();}
+        const auto p0=PrewarmClock::now();
+        try{LaGpu f6(hybridProgramCacheDir());f6.prepareHomography();laNote+=", F6"+f6.cacheNote()+" "+msSince(p0)+" ms";} // P364: the GPU alignment's too
+        catch(const std::exception& e){laNote+=std::string(", F6 failed: ")+e.what();}
+    }
+    // P682: a Quad / Tetra module's chroma median context (ChromaMedianGpu: its 7 programs), the post passes (5: the Q route's
+    // along-edge / notch / Tetra smoothing and the fast Tetra pass) and, Quad, the lattice (7) into the cache too: the first shot
+    // after the install compiles none of them (they cost 217 - 335 ms and 118 - 160 ms of a shot)
+    if(block>1&&tune.chromaGpu>0){
+        const auto p0=PrewarmClock::now();
+        try{ChromaMedianGpu cm;cm.ensurePost();if(block==2)cm.ensureQuadLattice();laNote+=", chroma"+cm.cacheNote()+" "+msSince(p0)+" ms";}
+        catch(const std::exception& e){laNote+=std::string(", chroma failed: ")+e.what();}
     }
     report("HYBRID PREWARM: block "+std::to_string(block)+(native?" native mosaic":" plain")+" programs ready in "
-        +std::to_string(int(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count()))+" ms ("+gpu.renderer+";"+gpu.compileMs+laNote+")");
+        +msSince(t0)+" ms ("+gpu.renderer+";"+gpu.compileMs+laNote+")");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -13750,6 +13842,7 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
                                             std::vector<uint16_t>* mergedDng,std::vector<uint8_t>* effMap,
                                             HybridStats* statsOut=nullptr,std::vector<uint8_t>* clipFlags=nullptr,
                                             const HybridPresetAlignment* preset=nullptr,const HybridMosaicNative* native=nullptr) {
+    chromaBoxFused()=tune.fmChromaFused!=0; // P712: the chroma median's box pairs in one pass (both routes; the same output)
     // P600: a tuning built in code with denoise 0 (the file's is applied by loadHybridTuning): the denoise stages off first
     if(tune.denoise==0){
         HybridTuning t=tune;hybridDenoiseSwitch(t,report);
@@ -14292,7 +14385,7 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
             laBase.g0=laGrid(laBase.l0,win,stride,2);laBase.g1=laGrid(laBase.l1,16,8,4);
             const float slope=std::max(input.frames[0].slope,1e-9f),offset=std::max(input.frames[0].offset,0.f); // baseSlope, baseOffset
             laBase.v0=hybridLaV0(input,slope,offset);
-            const int threads=std::clamp(int(std::thread::hardware_concurrency()),1,std::clamp(tune.laThreads,1,8));
+            const int threads=std::clamp(scamComputeThreads(),1,std::clamp(tune.laThreads,1,8)); // P704: the big cores, not every thread
             laStream=std::make_unique<LaStream>(b,std::move(laBase),std::max(offset/std::max(slope,1e-9f),1e-5f),tune,threads,windowed);
         }
         LaStream::Job job;job.f=f;job.raw=input.frames[f].raw;job.gain=1.f/input.frames[f].exposure;job.H=H[f];
@@ -14652,7 +14745,8 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
         };
         std::vector<std::thread> pool;
         // P308: one core left to the GPU F6's feeder (it uploads each aligned frame meanwhile): the same shifts
-        const int cores=std::min(8,int(std::thread::hardware_concurrency()))-(laGpuWorker&&std::thread::hardware_concurrency()>2?1:0);
+        // P704: the stage's threads (scamComputeThreads: the big cores, at least 4) rather than every hardware thread
+        const int cores=scamComputeThreads()-(laGpuWorker&&scamComputeThreads()>2?1:0);
         const int threads=std::max(1,std::min(n-1,cores));
         for(int t=1;t<threads;++t)pool.emplace_back(work);
         work();
@@ -15294,7 +15388,7 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
                     std::atomic<size_t> next{0};
                     auto work=[&]{for(size_t i=next++;i<taken.size();i=next++)LaGpu::stats(taken[i]);};
                     std::vector<std::thread> pool;
-                    const size_t threads=std::min<size_t>(taken.size(),std::max(1u,std::min(8u,std::thread::hardware_concurrency())));
+                    const size_t threads=std::min<size_t>(taken.size(),size_t(scamComputeThreads())); // P704: the big cores
                     for(size_t t=1;t<threads;++t){try{pool.emplace_back(work);}catch(const std::system_error&){break;}}
                     work();
                     for(auto& th:pool)th.join();
@@ -15341,7 +15435,7 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
         std::atomic<bool> laFailed{false};std::string laFailure;std::mutex laFailureMutex;
         if(laGpuDone)report(laGpuNote);
         else {
-            int threads=std::clamp(int(std::thread::hardware_concurrency()),1,std::clamp(tune.laThreads,1,8));
+            int threads=std::clamp(scamComputeThreads(),1,std::clamp(tune.laThreads,1,8)); // P704: the big cores, not every thread
             if(large){ // any RAW size: every worker holds its frame's gray pyramid (1.25 B per pixel), together within MemAvailable / 4
                 const uint64_t avail=hybridMemAvailable();
                 const double perThread=1.25*double(w)*h;
@@ -15913,7 +16007,7 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
         }
         if(!held)held=std::make_unique<HybridGpu>(tune.rimRatio!=0,withLocalAlign,bentoPass,tune.chromaDiff>0.f,report,large,native!=nullptr,
                 tune.hotSigma>0||tune.hotBaseSigma>0,blendPass,hybridDcgZones(input),hybridRejSpec(tune),hybridBlendOptions(tune),hybridPartialSpec(tune,native!=nullptr));
-        HybridGpu& gpu=*held;gpu.trace=report;gpu.profile=tune.profile!=0;gpu.profilePasses=tune.profile>=2;
+        HybridGpu& gpu=*held;gpu.trace=report;gpu.profile=tune.profile!=0;gpu.profilePasses=tune.profile>=2;chromaGpuSyncTimes()=tune.profile>=2; // P682
         gpu.paceDepth=std::clamp(tune.gpuPace,0,64); // P662
         report("HYBRID GPU: "+gpu.renderer+" frames="+std::to_string(in.frames.size())+" limits "+gpu.limits
             +" init ms="+std::to_string(int(millis(Clock::now()-gpuStarted)))+" (compile"+gpu.compileMs+")"+built);
@@ -16890,18 +16984,8 @@ struct MosaicChromaPasses {
 // 8. The phases end at a barrier, so a little core holding the last item holds every thread: on the OPPO X7U (8 Gen 3: two
 // A520 of capacity 379 beside 867..1024) 6 threads took 390 ms where 8 took 460. Without capacities: the hardware threads.
 inline int mosaicChromaThreads(){
-    static const int threads=[]{
-        const int n=int(std::clamp(std::thread::hardware_concurrency(),1u,64u));
-        std::vector<long> capacity;
-        for(int c=0;c<n;++c){
-            std::ifstream f("/sys/devices/system/cpu/cpu"+std::to_string(c)+"/cpu_capacity");long v=0;
-            if(!(f>>v)||v<=0)return std::min(n,8);
-            capacity.push_back(v);
-        }
-        const long top=*std::max_element(capacity.begin(),capacity.end());
-        return int(std::clamp<long>(std::count_if(capacity.begin(),capacity.end(),[&](long v){return 2*v>=top;}),1,8));
-    }();
-    return threads;
+    const int n=int(std::clamp(std::thread::hardware_concurrency(),1u,64u)),big=scamBigCores(); // P682: the count in scam-pool.h
+    return big<=0?std::min(n,8):std::clamp(big,1,8);
 }
 // P213b: the threads of one MosaicChromaStream::advance. body(id) runs on `want` threads (id 0 = the caller; fewer when a thread
 // cannot be started), take() hands out the items of a phase, sync() ends the phase (a spinning barrier: the phases last ~0.1 ms;
@@ -17510,6 +17594,27 @@ inline void mosaicChromaMedian(std::vector<float>& rgb,int w,int h,int block,con
 // and below, the gate 4 % of the mean plus 3 sigma of the site noise), the map = the 5x5 mean of f (clipped at the borders). Every
 // block row of f depends on the RAW only and every row of the map on five rows of f: the map in any bands of rows, on any thread,
 // gives the same floats (the merge's chroma consumer makes it a few rows at a time, MosaicChromaOverlap).
+#if defined(__aarch64__)&&!defined(SCAM_CHROMA_SCALAR)
+// P682 (speed: the oscillation rows took 634 - 720 ms of a 50 MP shot, 1942 ms at 200 MP): mosaicSoftSignChange on two double
+// lanes, branch-free: every lane the operations of the scalar function in the same order (std::min / std::max / std::clamp as
+// compare and select, its early returns as a select of +0, 3 - 2x fused as the compiler contracts it, / 0.5 as x 2: exact), as
+// mosaicSignRow's lanes (P213b)
+inline float32x2_t mosaicSoftSignChange2(float64x2_t p0,float64x2_t p1,float64x2_t gate,double tau){
+    const float64x2_t zero=vdupq_n_f64(0.0),one=vdupq_n_f64(1.0);
+    auto lo=[](float64x2_t a,float64x2_t b){return vbslq_f64(vcltq_f64(b,a),b,a);}; // std::min(a, b)
+    auto hi=[](float64x2_t a,float64x2_t b){return vbslq_f64(vcltq_f64(a,b),b,a);}; // std::max(a, b)
+    auto ss=[&](float64x2_t v){
+        v=vbslq_f64(vcltq_f64(v,zero),zero,vbslq_f64(vcltq_f64(one,v),one,v)); // std::clamp(v, 0, 1)
+        return vmulq_f64(vmulq_f64(v,v),vfmsq_f64(vdupq_n_f64(3.0),vdupq_n_f64(2.0),v));
+    };
+    const uint64x2_t live=vandq_u64(vcgtq_f64(gate,zero),vandq_u64(vceqq_f64(p0,p0),vceqq_f64(p1,p1)));
+    const float64x2_t opp=vaddq_f64(hi(zero,lo(p0,vnegq_f64(p1))),hi(zero,lo(vnegq_f64(p0),p1)));
+    const uint64x2_t open=vandq_u64(live,vcgtq_f64(opp,zero));
+    const float64x2_t a=ss(vdivq_f64(opp,vmulq_f64(vdupq_n_f64(tau),gate)));
+    const float64x2_t b=ss(vmulq_f64(vsubq_f64(vdivq_f64(vaddq_f64(vabsq_f64(p0),vabsq_f64(p1)),gate),vdupq_n_f64(0.75)),vdupq_n_f64(2.0)));
+    return vbsl_f32(vmovn_u64(open),vcvt_f32_f64(vmulq_f64(a,b)),vdup_n_f32(0.f));
+}
+#endif
 struct MosaicOscSource {
     const uint16_t* raw=nullptr;           // the base frame's sensor RAW (W wide), its sites gained by their class...
     const std::array<float,64>* gain=nullptr;
@@ -17535,11 +17640,29 @@ struct MosaicOscSource {
             const double sigma=std::sqrt(std::max(slope*std::max(m,0.0)/range+offset,0.0))*range;
             const double gate=0.04*std::max(m,0.0)+3.0*sigma;
             double changes=0;int pairs=0; // soft counts (mosaicSoftSignChange)
+#if defined(__aarch64__)&&!defined(SCAM_CHROMA_SCALAR)
+            // P682: the pairs' deviations in the scalar loop's order, their soft counts two at a time (mosaicSoftSignChange2), summed
+            // in that order: the same doubles
+            double q0[112],q1[112];float sw[112]; // 2 bq (bq - 1) pairs, bq <= 8
+            for(int c=0;c<bq;++c)for(int a=0;a<bq;++a){
+                const double p0=d[size_t(c)*bq+a]-m;
+                if(a+1<bq){q0[pairs]=p0;q1[pairs]=d[size_t(c)*bq+a+1]-m;++pairs;}
+                if(c+1<bq){q0[pairs]=p0;q1[pairs]=d[size_t(c+1)*bq+a]-m;++pairs;}
+            }
+            {
+                const float64x2_t vg=vdupq_n_f64(gate);
+                int k=0;
+                for(;k+2<=pairs;k+=2)vst1_f32(sw+k,mosaicSoftSignChange2(vld1q_f64(q0+k),vld1q_f64(q1+k),vg,kMosaicOscTau));
+                for(;k<pairs;++k)sw[k]=mosaicSoftSignChange(q0[k],q1[k],gate,kMosaicOscTau);
+                for(k=0;k<pairs;++k)changes+=sw[k];
+            }
+#else
             for(int c=0;c<bq;++c)for(int a=0;a<bq;++a){
                 const double p0=d[size_t(c)*bq+a]-m;
                 if(a+1<bq){++pairs;changes+=mosaicSoftSignChange(p0,d[size_t(c)*bq+a+1]-m,gate,kMosaicOscTau);}
                 if(c+1<bq){++pairs;changes+=mosaicSoftSignChange(p0,d[size_t(c+1)*bq+a]-m,gate,kMosaicOscTau);}
             }
+#endif
             f[I]=pairs?float(changes/pairs):0.f;
         }
     }
@@ -18892,32 +19015,5 @@ struct MappedHybridBurst {
     ~MappedHybridBurst(){if(address!=MAP_FAILED)munmap(address,length);}
 };
 
-// SCAM 7-slot transport (N0..N3, L, S, ES + extra N) seen as a hybrid burst: the longest frame is the
-// bracketed one, the shortest of S/ES the ultrashort one, S otherwise dropped.
-inline HybridInput hybridFromScamBurst(const Burst& b) {
-    HybridInput in;in.w=b.w;in.h=b.h;in.cfa=b.cfa;in.white=b.white;in.black=b.black;in.diagnostics=b.diagnostics;in.mergedDng=b.mergedDng;
-    const ScamNoise nn=b.hasNormalNoise?b.normalNoise:b.cameraNoise?b.noise:imx06cHdrNoise(b.iso[forwardReferenceSlot]);
-    auto add=[&](const uint16_t* raw,int role,float exposure,unsigned iso,ScamNoise noise){
-        HybridFrame f;f.raw=raw;f.role=role;f.exposure=exposure;f.iso=iso;f.slope=noise.slope;f.offset=noise.offset;in.frames.push_back(f);
-    };
-    add(b.raw[forwardReferenceSlot],kRoleNormal,1.f,b.iso[forwardReferenceSlot],nn);
-    for(int s=0;s<4;++s)if(s!=forwardReferenceSlot&&b.raw[s]!=b.raw[forwardReferenceSlot])add(b.raw[s],kRoleNormal,1.f,b.iso[s],nn);
-    for(const uint16_t* e:b.extraNormals)add(e,kRoleNormal,1.f,b.iso[forwardReferenceSlot],nn);
-    // L (slot 4): bracketed when it is a real longer exposure; its noise model = the N model at its gain.
-    if(b.syntheticLong<=0&&b.exposure[4]>1.5f&&b.raw[4]!=b.raw[forwardReferenceSlot]){
-        ScamNoise ln=b.noiseReferenceSlot==4&&b.cameraNoise?b.noise:nn;
-        add(b.raw[4],kRoleBracketed,b.exposure[4],b.iso[4],ln);
-    }
-    // Ultrashort: the short frame closest to SCAM's TET_base/8 (S at -3 EV rather than ES at -6 EV when both exist).
-    auto distance=[&](int s){return std::abs(std::log(std::max(b.exposure[s],1e-6f)*8.f));};
-    const int shortest=distance(6)<distance(5)?6:5;
-    if(b.exposure[shortest]<1.f&&b.raw[shortest]!=b.raw[forwardReferenceSlot]){
-        // the short frame runs at a lower gain than N: read noise scales with gain^2, shot noise with gain
-        const float gRatio=float(b.iso[shortest])/float(std::max(1u,b.iso[forwardReferenceSlot]));
-        ScamNoise sn{nn.slope*gRatio,nn.offset*gRatio*gRatio};
-        add(b.raw[shortest],kRoleUltrashort,b.exposure[shortest],b.iso[shortest],sn);
-    }
-    return in;
-}
 } // namespace scam
 #include "scam-fast-merge.h" // the fast merge route (tune fastMerge)

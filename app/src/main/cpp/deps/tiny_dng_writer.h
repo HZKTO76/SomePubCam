@@ -365,6 +365,22 @@ class DNGImage {
   /// Set image data.
   bool SetImageData(const unsigned char *data, const size_t data_len);
 
+  /// SCAMERA P681: the strip as a reference to the caller's `data` (alive and unchanged until the file is written) instead of
+  /// a copy in the data area: the file's bytes are SetImageData's. Nothing may be added to the data area after it.
+  bool SetImageDataRef(const unsigned char *data, const size_t data_len);
+
+  /// P681: whether the strip is a reference (SetImageDataRef) whose data area stayed as it was laid out around it.
+  bool HasStripRef() const { return strip_ref_ != nullptr; }
+  bool StripRefIntact() const { return strip_ref_ == nullptr || data_os_.str().size() == ref_prefix_; }
+  const unsigned char *StripRef() const { return strip_ref_; }
+  /// P681: the data area in front of a referenced strip (the whole data area otherwise).
+  std::string DataPrefix() const { return data_os_.str(); }
+  /// P681: whether the strip's samples are byte-swapped on the way out (a 16 / 32 / 64-bit strip of the other byte order).
+  bool SwapsStrip() const {
+    return swap_endian_ && data_strip_bytes_ != 0 && !bits_per_samples_.empty()
+        && (bits_per_samples_[0] == 16 || bits_per_samples_[0] == 32 || bits_per_samples_[0] == 64);
+  }
+
   /// Set image data.
   bool SetImageDataJpeg(const unsigned short *data, unsigned int width, unsigned int height, unsigned int bpp);
 
@@ -388,7 +404,10 @@ class DNGImage {
   bool SetCustomFieldLong(const unsigned short tag, const int value);
   bool SetCustomFieldULong(const unsigned short tag, const unsigned int value);
 
-  size_t GetDataSize() const { return data_os_.str().length(); }
+  size_t GetDataSize() const {
+    // P681: a referenced strip (and its pad byte) follows the data area
+    return strip_ref_ ? ref_prefix_ + data_strip_bytes_ + (data_strip_bytes_ % 2) : data_os_.str().length();
+  }
 
   size_t GetStripOffset() const { return data_strip_offset_; }
   size_t GetStripBytes() const { return data_strip_bytes_; }
@@ -425,6 +444,9 @@ class DNGImage {
   // TODO(syoyo): Support multiple strips
   size_t data_strip_offset_{0};
   size_t data_strip_bytes_{0};
+  // SCAMERA P681: the caller's strip (SetImageDataRef) and the data area's size in front of it; null: the strip is a copy
+  const unsigned char *strip_ref_ = nullptr;
+  size_t ref_prefix_ = 0;
 
   mutable std::string err_;  // Error message
 
@@ -468,6 +490,12 @@ class DNGWriter {
   /// Sets `size` to the size of allocated memory upon success.
   /// Returns nullptr upon failure.
   void* WriteToMemory(size_t *size, std::string *err, size_t* strip_offset = nullptr) const;
+
+  /// SCAMERA P681: the bytes WriteToMemory gives, in three parts for a caller that streams them out itself instead of one
+  /// buffer of the whole file: `head` (the TIFF header and the data area in front of the strip), the strip (`*strip`,
+  /// `*strip_bytes`: the image's own bytes, SetImageDataRef's), `tail` (the strip's pad byte, then the IFD entries). One image
+  /// whose strip is a reference, stored as it is (no byte swap); false (`err`) otherwise.
+  bool Layout(std::string *head, const unsigned char **strip, size_t *strip_bytes, std::string *tail, std::string *err) const;
 private:
   bool swap_endian_;
   bool dng_big_endian_;  // Endianness of DNG file.
@@ -501,6 +529,9 @@ private:
 #include <iostream>
 #include <sstream>
 #include <limits>
+#include <array>
+#include <thread>
+#include <vector>
 
 // Undef if you want to use builtin function for clz
 #if 0
@@ -1047,6 +1078,145 @@ void writeBody(lje *self) {
   self->encodedWritten = w;
 }
 
+// P704 (DNG save speed): the encoder's two passes for the common call - no delinearize table, the image one contiguous tile
+// (skipLength 0; DngCreator's mosaic as 2W x H/2) - with the same predictor 6, the same histogram, Huffman table and bit
+// stream, byte for byte (tools/check_dng_lj92.cpp against the passes above). The histogram is integer counts summed over
+// row bands on up to 4 threads; the body packs each sample's Huffman code and value bits (at most 32) into a 64-bit
+// accumulator instead of bit by bit, and grows its buffer when needed (the 3 bytes per sample above could be overrun by 16-bit
+// data: up to 4 bytes plus the 0xFF stuffing per sample).
+static inline int lj92Ssss(int diff, int bitdepth) {
+  const int half = 1 << (bitdepth - 1);
+  const unsigned full_mask = (1U << bitdepth) - 1U;
+  diff = (int)(((unsigned)diff + (unsigned)half) & full_mask) - half;
+  return diff == 0 ? 0 : (32 - __builtin_clz((unsigned)abs(diff)));
+}
+static inline int lj92Predict(const uint16_t *cur, const uint16_t *prev, int col, int bitdepth) {
+  if (!prev) return col == 0 ? 1 << (bitdepth - 1) : cur[col - 1];
+  if (col == 0) return prev[0];
+  return prev[col] + ((cur[col - 1] - prev[col - 1]) >> 1);
+}
+static int frequencyScanRows(const lje *self, int row0, int row1, int *hist) {
+  const int width = self->width, bitdepth = self->bitdepth, maxval = 1 << bitdepth;
+  for (int row = row0; row < row1; ++row) {
+    const uint16_t *cur = self->image + (size_t)row * width;
+    const uint16_t *prev = row > 0 ? cur - width : nullptr;
+    for (int col = 0; col < width; ++col) {
+      if (cur[col] >= maxval) return LJ92_ERROR_TOO_WIDE;
+      hist[lj92Ssss(cur[col] - lj92Predict(cur, prev, col, bitdepth), bitdepth)]++;
+    }
+  }
+  return LJ92_ERROR_NONE;
+}
+static int frequencyScanFast(lje *self) {
+  const int height = self->height;
+  int threads = (int)std::min(4u, std::max(1u, std::thread::hardware_concurrency()));
+  if ((size_t)self->width * height < ((size_t)1 << 20)) threads = 1;
+  std::vector<std::array<int, 18>> hists((size_t)threads, std::array<int, 18>{});
+  std::vector<int> errors((size_t)threads, LJ92_ERROR_NONE);
+  std::vector<std::thread> pool;
+  auto band = [&](int t) {
+    errors[(size_t)t] = frequencyScanRows(self, (int)((int64_t)height * t / threads), (int)((int64_t)height * (t + 1) / threads),
+                                          hists[(size_t)t].data());
+  };
+  for (int t = 1; t < threads; ++t) {
+    try { pool.emplace_back(band, t); } catch (...) { break; }
+  }
+  // (a band whose thread could not start runs here)
+  for (int t = (int)pool.size() + 1; t < threads; ++t) band(t);
+  band(0);
+  for (auto &th : pool) th.join();
+  for (int t = 0; t < threads; ++t) {
+    if (errors[(size_t)t] != LJ92_ERROR_NONE) return errors[(size_t)t];
+    for (int i = 0; i < 18; ++i) self->hist[i] += hists[(size_t)t][(size_t)i];
+  }
+  return LJ92_ERROR_NONE;
+}
+static bool writeBodyFast(lje *self) {
+  const int width = self->width, height = self->height, bitdepth = self->bitdepth;
+  uint32_t code[17];
+  int length[17];
+  for (int ssss = 0; ssss < 17; ++ssss) {
+    const int index = self->huffsym[ssss];
+    code[ssss] = self->huffenc[index];
+    length[ssss] = self->huffbits[index];
+  }
+  // the exact bit count from the histogram; the stuffing bytes (one per 0xFF) come on top: grown when they are many
+  uint64_t bits = 0;
+  for (int ssss = 0; ssss < 17; ++ssss) bits += (uint64_t)self->hist[ssss] * (uint64_t)(length[ssss] + ssss);
+  size_t capacity = (size_t)self->encodedWritten + (size_t)(bits / 8) + (size_t)(bits / 8 / 128) + 4096;
+  if (capacity > (size_t)self->encodedLength) {
+    uint8_t *grown = (uint8_t *)realloc(self->encoded, capacity);
+    if (!grown) return false;
+    self->encoded = grown;
+    self->encodedLength = (int)std::min<size_t>(capacity, (size_t)INT32_MAX);
+  }
+  uint8_t *out = self->encoded;
+  size_t w = (size_t)self->encodedWritten, cap = (size_t)self->encodedLength;
+  uint64_t acc = 0;
+  int nacc = 0; // bits in acc not yet written (below 32 between samples; a sample adds at most 32)
+  const int half = 1 << (bitdepth - 1);
+  const unsigned full_mask = (1U << bitdepth) - 1U;
+  for (int row = 0; row < height; ++row) {
+    const uint16_t *cur = self->image + (size_t)row * width;
+    const uint16_t *prev = row > 0 ? cur - width : nullptr;
+    if (cap - w < (size_t)width * 10 + 16) { // (a row's worst case: 32 bits a sample, every byte stuffed)
+      const size_t want = std::max(cap + cap / 2, w + (size_t)width * 10 + 16);
+      if (want > (size_t)INT32_MAX) return false;
+      uint8_t *grown = (uint8_t *)realloc(self->encoded, want);
+      if (!grown) return false;
+      self->encoded = out = grown;
+      cap = want;
+    }
+    // (the predictor of row 0 and column 0 apart: the rest of the row without a branch per sample)
+    auto put = [&](int col, int predicted) {
+      int diff = cur[col] - predicted;
+      diff = (int)(((unsigned)diff + (unsigned)half) & full_mask) - half;
+      const int ssss = diff == 0 ? 0 : (32 - __builtin_clz((unsigned)abs(diff)));
+      const int vt = ssss > 0 ? (1 << (ssss - 1)) : 0;
+      if (diff < vt) diff += (1 << ssss) - 1;
+      const int len = length[ssss] + ssss;
+      acc = (acc << len) | ((uint64_t)code[ssss] << ssss) | ((uint64_t)(unsigned)diff & ((1ull << ssss) - 1));
+      nacc += len;
+      if (nacc >= 32) { // four whole bytes: stored at once unless one of them is 0xFF (stuffed one by one)
+        nacc -= 32;
+        const uint32_t word = (uint32_t)(acc >> nacc);
+        const bool anyFF = ((word & 0xffu) == 0xffu) || ((word & 0xff00u) == 0xff00u) || ((word & 0xff0000u) == 0xff0000u)
+                           || ((word & 0xff000000u) == 0xff000000u);
+        if (!anyFF) {
+          out[w] = (uint8_t)(word >> 24); out[w + 1] = (uint8_t)(word >> 16); out[w + 2] = (uint8_t)(word >> 8); out[w + 3] = (uint8_t)word;
+          w += 4;
+        } else {
+          for (int k = 24; k >= 0; k -= 8) {
+            const uint8_t byte = (uint8_t)(word >> k);
+            out[w++] = byte;
+            if (byte == 0xff) out[w++] = 0x0;
+          }
+        }
+      }
+    };
+    put(0, prev ? prev[0] : 1 << (bitdepth - 1));
+    if (prev) {
+      for (int col = 1; col < width; ++col) put(col, prev[col] + ((cur[col - 1] - prev[col - 1]) >> 1));
+    } else {
+      for (int col = 1; col < width; ++col) put(col, cur[col - 1]);
+    }
+  }
+  while (nacc >= 8) { // the whole bytes left
+    nacc -= 8;
+    const uint8_t byte = (uint8_t)(acc >> nacc);
+    out[w++] = byte;
+    if (byte == 0xff) out[w++] = 0x0;
+  }
+  if (nacc > 0) { // the final bits, padded with zeros
+    const uint8_t byte = (uint8_t)(acc << (8 - nacc));
+    out[w++] = byte;
+    if (byte == 0xff) out[w++] = 0x0;
+  }
+  self->encodedLength = (int)cap;
+  self->encodedWritten = (int)w;
+  return true;
+}
+
 /* Encoder
  * Read tile from an image and encode in one shot
  * Return the encoded data
@@ -1066,14 +1236,18 @@ int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
   self->skipLength = skipLength;
   self->delinearize = delinearize;
   self->delinearizeLength = delinearizeLength;
-  self->encodedLength = width * height * 3 + 200;
+  // P704: the common call (no delinearize table, one contiguous tile) takes the fast passes above; its buffer starts at the
+  // header's size and is sized from the histogram (no 3 bytes per sample reserved up front)
+  const bool fast = delinearize == NULL && skipLength == 0 && width > 0 && height > 0 && bitdepth >= 2 && bitdepth <= 16
+                    && getenv("SCAM_LJ92_REFERENCE") == NULL;
+  self->encodedLength = fast ? 4096 : width * height * 3 + 200;
   self->encoded = (uint8_t*)malloc(self->encodedLength);
   if (self->encoded == NULL) {
     free(self);
     return LJ92_ERROR_NO_MEMORY;
   }
   // Scan through data to gather frequencies of ssss prefixes
-  ret = frequencyScan(self);
+  ret = fast ? frequencyScanFast(self) : frequencyScan(self);
   if (ret != LJ92_ERROR_NONE) {
     free(self->encoded);
     free(self);
@@ -1084,7 +1258,15 @@ int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
   // Write JPEG head and scan header
   writeHeader(self);
   // Scan through and do the compression
-  writeBody(self);
+  if (fast) {
+    if (!writeBodyFast(self)) {
+      free(self->encoded);
+      free(self);
+      return LJ92_ERROR_NO_MEMORY;
+    }
+  } else {
+    writeBody(self);
+  }
   // Finish
   writePost(self);
 #ifdef DEBUG
@@ -2772,6 +2954,27 @@ bool DNGImage::SetImageData(const unsigned char *data, const size_t data_len) {
   return true;
 }
 
+bool DNGImage::SetImageDataRef(const unsigned char *data, const size_t data_len) {
+  // SCAMERA P681: SetImageData's layout (the strip word-aligned, an odd strip padded) with the bytes left where they are
+  if ((data == NULL) || (data_len < 1) || strip_ref_ != nullptr) {
+    return false;
+  }
+  if (size_t(data_os_.tellp()) % 2) data_os_.put('\0');
+  data_strip_offset_ = size_t(data_os_.tellp());
+  data_strip_bytes_ = data_len;
+  ref_prefix_ = data_strip_offset_;
+  strip_ref_ = data;
+
+  unsigned int count = 1;
+  unsigned int bytes = static_cast<unsigned int>(data_len);
+  if (!WriteTIFFTag(static_cast<unsigned short>(TIFFTAG_STRIP_BYTE_COUNTS), TIFF_LONG, count,
+                    reinterpret_cast<const unsigned char *>(&bytes), &ifd_tags_, NULL)) {
+    return false;
+  }
+  num_fields_++;
+  return true;
+}
+
 bool DNGImage::SetImageDataJpeg(const unsigned short *data, unsigned int width,
                                 unsigned int height, unsigned int bpp) {
   if ((data == NULL) || (height % 2 == 1) || (width % 2 == 1)) {
@@ -2954,6 +3157,13 @@ static bool IFDComparator(const IFDTag &a, const IFDTag &b) {
 }
 
 bool DNGImage::WriteDataToStream(std::ostream *ofs) const {
+  if (strip_ref_ != nullptr) {
+    // P681: through WriteDataTo's bytes (a referenced strip is the caller's)
+    std::vector<unsigned char> all(GetDataSize());
+    if (!WriteDataTo(all.data())) return false;
+    ofs->write(reinterpret_cast<const char *>(all.data()), static_cast<std::streamsize>(all.size()));
+    return true;
+  }
   if ((data_os_.str().length() == 0)) {
     err_ += "Empty IFD data and image data.\n";
     return false;
@@ -3026,6 +3236,28 @@ bool DNGImage::WriteDataToStream(std::ostream *ofs) const {
 bool DNGImage::WriteDataTo(unsigned char *dst) const {
   // P187: the checks and the endian swap of WriteDataToStream, without its vector copy of the data
   const std::string data = data_os_.str();
+  if (strip_ref_ != nullptr) {
+    // P681: the data area, the caller's strip and its pad byte, laid out as a copied strip would be
+    if (!StripRefIntact()) {
+      err_ += "Data written after a referenced strip.\n";
+      return false;
+    }
+    if (bits_per_samples_.empty() || samples_per_pixels_ == 0) {
+      err_ += "BitsPerSample / SamplesPerPixels not set\n";
+      return false;
+    }
+    memcpy(dst, data.data(), data.size());
+    memcpy(dst + ref_prefix_, strip_ref_, data_strip_bytes_);
+    if (data_strip_bytes_ % 2) dst[ref_prefix_ + data_strip_bytes_] = 0;
+    if (SwapsStrip()) {
+      const uint32_t bps = bits_per_samples_[0];
+      unsigned char *s = dst + ref_prefix_;
+      if (bps == 16) for (size_t i = 0; i < data_strip_bytes_ / 2; i++) swap2(reinterpret_cast<uint16_t *>(s) + i);
+      else if (bps == 32) for (size_t i = 0; i < data_strip_bytes_ / 4; i++) swap4(reinterpret_cast<uint32_t *>(s) + i);
+      else for (size_t i = 0; i < data_strip_bytes_ / 8; i++) swap8(reinterpret_cast<uint64_t *>(s) + i);
+    }
+    return true;
+  }
   if ((data.length() == 0)) {
     err_ += "Empty IFD data and image data.\n";
     return false;
@@ -3395,6 +3627,49 @@ void* DNGWriter::WriteToMemory(size_t *size, std::string *err, size_t* strip_off
   }
   memcpy(memory + head.size() + data_len, ifd.data(), ifd.size());
   return memory;
+}
+
+bool DNGWriter::Layout(std::string *head, const unsigned char **strip, size_t *strip_bytes, std::string *tail,
+                       std::string *err) const {
+  // SCAMERA P681: WriteToMemory's steps 1.-2. and its IFD stream for one image; the strip stays where the caller keeps it
+  if (images_.size() != 1 || !images_[0]->HasStripRef()) {
+    if (err) (*err) = "Layout: one image with a referenced strip.\n";
+    return false;
+  }
+  const DNGImage *image = images_[0];
+  if (!image->StripRefIntact() || image->SwapsStrip()) {
+    if (err) (*err) = "Layout: data after the strip, or a strip to byte-swap.\n";
+    return false;
+  }
+  std::ostringstream header;
+  if (!WriteTIFFVersionHeader(&header, dng_big_endian_)) {
+    if (err) (*err) = "Failed to write TIFF version header.\n";
+    return false;
+  }
+  const size_t data_len = image->GetDataSize();
+  const unsigned int ifd_offset = kHeaderSize + static_cast<unsigned int>(data_len);
+  Write4(ifd_offset, &header, swap_endian_);
+
+  std::ostringstream ifds;
+  if (!image->WriteIFDToStream(0, static_cast<unsigned int>(image->GetStripOffset()), &ifds)) {
+    if (err) (*err) = "Failed to write IFD at image[0]. err = " + image->Error() + "\n";
+    return false;
+  }
+  unsigned int next_ifd_offset = 0;  // the last IFD (WriteToMemory's zero, swapped or not)
+  ifds.write(reinterpret_cast<const char *>(&next_ifd_offset), 4);
+
+  const std::string prefix = image->DataPrefix();
+  if (prefix.size() != image->GetStripOffset()) {
+    if (err) (*err) = "Layout: the data area does not end at the strip.\n";
+    return false;
+  }
+  *head = header.str() + prefix;
+  *strip = image->StripRef();
+  *strip_bytes = image->GetStripBytes();
+  tail->clear();
+  if (*strip_bytes % 2) tail->push_back('\0');
+  *tail += ifds.str();
+  return true;
 }
 
 #ifdef __clang__

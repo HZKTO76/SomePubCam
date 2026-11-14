@@ -150,6 +150,7 @@ final class LiveRawRenderer {
         java.util.Arrays.fill(stagingPbo,0);java.util.Arrays.fill(staging,null);java.util.Arrays.fill(stagingMapped,false);
         java.util.Arrays.fill(stagingFence,0);stagingFailed=false;
         frameSession=-1; failed=false; uniforms.clear(); programUniforms.clear(); meter.reset(); lastView=null; boundFresh=false;
+        linearProgram=0;linearFailed=false; // P711
     }
     private int loc(String name) {return uniforms.computeIfAbsent(name,n->GLES20.glGetUniformLocation(program,n));}
     /** P365: the uniform locations of the fused program(s) (LiveWhyTone's why/combine RAW_SOURCE 1), per program. */
@@ -170,7 +171,35 @@ final class LiveRawRenderer {
     }
     boolean drawLinear(FloatBuffer vertices,FloatBuffer coords,float[] rotation,boolean mirror,
                        com.scamera.app.processing.color.FilmSim.Settings film) {
+        // P711: LiveWhyTone's gather pass (preview/rawlinear_fs) when it is linked: the same RGBA16F texels from 5 gathers a quad
+        final int p=linearProgram;
+        if(p!=0){
+            final Boolean drawn=drawLinearWith(p,vertices,coords,rotation,mirror,film);
+            if(drawn!=null)return drawn;
+            linearFailed=true;linearProgram=0; // a driver error: rawdevelop_fs's linear frame from now on, this frame too
+            Log.w("LiveRawRenderer","gather linear pass failed: rawdevelop_fs draws the linear frame");
+        }
         return draw(vertices,coords,rotation,mirror,0,true,maxAgeNs,film);
+    }
+    /**
+     * P711: the program of the gather linear pass (LiveWhyTone.linearProgram: preview/rawlinear_fs, linked; 0 none), set by
+     * MainRenderer before each tone. It failed in this context: {@link #linearFailed()}.
+     */
+    private int linearProgram;
+    private boolean linearFailed;
+    void setLinearProgram(int p){linearProgram=linearFailed?0:p;}
+    boolean linearFailed(){return linearFailed;}
+    /**
+     * P711: the linear frame by {@code p} (rawdevelop_fs's uniforms, the RAW on unit 9 and the shading map on unit 10: bindFrame)
+     * into the bound target at the viewport. True drawn, false no frame young enough (as {@link #drawLinear}), null a GL error.
+     */
+    private Boolean drawLinearWith(int p,FloatBuffer vertices,FloatBuffer coords,float[] rotation,boolean mirror,
+                                   com.scamera.app.processing.color.FilmSim.Settings film){
+        if(!bindFrame(p,rotation,mirror,film))return failed?null:false;
+        GLES20.glUniform1i(loc(p,"u_signed_hue"),WhyTone.signedHue()?1:0); // P370 (B2), as draw() sets it
+        drawBound(vertices,coords);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        return GLES20.glGetError()==GLES20.GL_NO_ERROR?Boolean.TRUE:null;
     }
     /**
      * P301: the frame drawn last ({@link #drawLinear}): its ISO and noise for the WHY tone's AE; P314 with its visible crop and the
@@ -511,11 +540,15 @@ final class LiveRawRenderer {
     }
     /**
      * LiveRawMeter on a frame it has not measured (the viewfinder's own look exposes by it), then SceneLuma (P212h). P365: vf_fused 0
-     * - on every new frame, as before; else only for the own look ({@code linear} false) or while SceneLuma wants a value.
+     * - on every new frame, as before; else only for the own look ({@code linear} false) or while SceneLuma wants a value. P683: not
+     * for the WHY tone's linear frame with vf_fused 0 either - rawdevelop_fs returns its linear values before it reads the meter's
+     * exposure, contrast or multipliers (u_linear_out), so the meter's work was for nothing on every new frame on the GL thread
+     * (scam_dev vf_meter_async 0: as before).
      */
     private void meter(LiveRawFrame.Frame f,boolean linear){
         if(meteredVersion==f.version)return;
-        if(fusedOn() && linear && !(f.sceneLuma && com.scamera.app.manual.SceneLuma.wanted()))return;
+        if((fusedOn() || com.scamera.app.processing.opengl.postpipeline.LiveWhyTone.linearMeterSkipped()) && linear
+                && !(f.sceneLuma && com.scamera.app.manual.SceneLuma.wanted()))return;
         final long meterStart=System.nanoTime();
         meter.update(f);
         sceneLuma(f);
