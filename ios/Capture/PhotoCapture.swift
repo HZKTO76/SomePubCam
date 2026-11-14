@@ -63,8 +63,17 @@ final class PhotoCapture {
 
     /// Settings in order of preference; the next one is tried when AVFoundation raises on the previous one.
     func candidateSettings(for request: PhotoRequest, device: AVCaptureDevice) -> [(AVCapturePhotoSettings, String)] {
-        let codec: AVVideoCodecType = output.availablePhotoCodecTypes.contains(.hevc) ? .hevc : .jpeg
+        // «Формат фото» and its quality (PhotoEncoding): the camera encodes the photo in the chosen codec at its quality (HEIC: HEVC
+        // where the camera has it), so its own photo is written once (CameraPhotoFinish); each kind of request again without the
+        // quality where AVFoundation refuses it
+        let format = PhotoEncoding.current()
+        let codecs = output.availablePhotoCodecTypes
+        let codec: AVVideoCodecType = format.type == .heic && codecs.contains(.hevc) ? .hevc
+            : codecs.contains(.jpeg) ? .jpeg : codecs.contains(.hevc) ? .hevc : .jpeg
+        let quality = min(1, max(0.01, format.quality))
+        let processedWithQuality: [String: Any] = [AVVideoCodecKey: codec, AVVideoCompressionPropertiesKey: [AVVideoQualityKey: quality]]
         let processed: [String: Any] = [AVVideoCodecKey: codec]
+        let qualityLabel = " q\(Int((quality * 100).rounded()))"
         let bayer = output.availableRawPhotoPixelFormatTypes.first { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
         let proRAW = output.availableRawPhotoPixelFormatTypes.first { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }
         var raws: [(OSType, String)] = []
@@ -78,20 +87,34 @@ final class PhotoCapture {
         }
         var result: [(AVCapturePhotoSettings, String)] = []
         for (type, label) in raws {
-            let settings = AVCapturePhotoSettings(rawPixelFormatType: type, processedFormat: processed)
-            // ProRAW: the least of Apple's own processing (no multi-frame fusion, the lightest denoise the camera allows)
-            let proraw = AVCapturePhotoOutput.isAppleProRAWPixelFormat(type)
-            configure(settings, request: request, priority: proraw ? .speed : .balanced)
-            if proraw {
-                settings.isAutoRedEyeReductionEnabled = false
-                if output.isContentAwareDistortionCorrectionSupported { settings.isAutoContentAwareDistortionCorrectionEnabled = false }
+            for (processedFormat, q) in [(processedWithQuality, qualityLabel), (processed, "")] {
+                guard let settings = Self.made({ AVCapturePhotoSettings(rawPixelFormatType: type, processedFormat: processedFormat) }) else { continue }
+                // ProRAW: the least of Apple's own processing (no multi-frame fusion, the lightest denoise the camera allows)
+                let proraw = AVCapturePhotoOutput.isAppleProRAWPixelFormat(type)
+                configure(settings, request: request, priority: proraw ? .speed : .balanced)
+                if proraw {
+                    settings.isAutoRedEyeReductionEnabled = false
+                    if output.isContentAwareDistortionCorrectionSupported { settings.isAutoContentAwareDistortionCorrectionEnabled = false }
+                }
+                result.append((settings, "\(label) + \(codec.rawValue)\(q) priority=\(settings.photoQualityPrioritization.rawValue)"))
             }
-            result.append((settings, "\(label) + \(codec.rawValue) priority=\(settings.photoQualityPrioritization.rawValue)"))
         }
-        let plain = AVCapturePhotoSettings(format: processed)
-        configure(plain, request: request, priority: .quality)
-        result.append((plain, codec.rawValue + (request.raw == .off ? "" : " (no RAW)")))
+        for (processedFormat, q) in [(processedWithQuality, qualityLabel), (processed, "")] {
+            guard let plain = Self.made({ AVCapturePhotoSettings(format: processedFormat) }) else { continue }
+            configure(plain, request: request, priority: .quality)
+            result.append((plain, codec.rawValue + q + (request.raw == .off ? "" : " (no RAW)")))
+        }
         return result
+    }
+
+    /// Settings AVFoundation accepts (an exception from their initialiser: nil, the next candidate then)
+    private static func made(_ make: () -> AVCapturePhotoSettings) -> AVCapturePhotoSettings? {
+        var settings: AVCapturePhotoSettings?
+        if let reason = SCAMObjC.catchException({ settings = make() }) {
+            SessionLog.w("PhotoCapture", "photo settings refused: \(reason)")
+            return nil
+        }
+        return settings
     }
 
     private func configure(_ settings: AVCapturePhotoSettings, request: PhotoRequest, priority: AVCapturePhotoOutput.QualityPrioritization) {

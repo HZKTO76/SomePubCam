@@ -286,7 +286,14 @@ struct SettingsView: View {
         .preferredColorScheme(.dark)
         .onAppear { SettingsTips.tipOnce() }
         // the modules' names, ratios, buttons and copies (ModuleSettings) reach the camera when the settings close
-        .onDisappear { if let camera { Task { await camera.reloadModules() } } }
+        // and the device-level settings (focus, faces, low light, Sport / Oldstyle) reach the open lens
+        .onDisappear {
+            if let camera {
+                Task {
+                    await camera.reloadModules()
+                }
+            }
+        }
         .overlay(alignment: .bottom) { SettingsTips.Toast() }
     }
 }
@@ -314,11 +321,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         let availability = SettingsAvailability(store.values)
-        let hidden = { (n: SettingsNode) -> Bool in
-            guard let key = n.key else { return SettingsRow.emptyNote(n) }
-            return availability.hidden(key) || SettingsExtras.codeHidden.contains(key) || SettingsRow.emptyNote(n)
-        }
-        let shown = { (nodes: [SettingsNode]?) -> [SettingsNode] in (nodes ?? []).filter { !hidden($0) } }
+        let shown = { (nodes: [SettingsNode]?) -> [SettingsNode] in (nodes ?? []).filter { Self.shows($0, availability) } }
         // P385: the page in the user's order (SettingsLayout); a group left without rows by it is not shown
         let page = SettingsLayout.arranged(node, stored: store.string(SettingsLayout.key, ""))
         let children = shown(page.children)
@@ -373,6 +376,20 @@ struct SettingsScreen: View {
                 if !root { PageResetButton(node: node) }
             }
         }
+    }
+}
+
+extension SettingsScreen {
+    /// Whether a row shows: not hidden by SettingsAvailability or by the page's code, not an empty note; a page or a group with rows
+    /// in the tree only while one of them shows (a page or group built in code - no rows in the tree, or code content - always)
+    static func shows(_ n: SettingsNode, _ availability: SettingsAvailability) -> Bool {
+        if let key = n.key {
+            if availability.hidden(key) || SettingsExtras.codeHidden.contains(key) { return false }
+            if SettingsExtras.codeContent.contains(key) { return true }
+        }
+        if SettingsRow.emptyNote(n) { return false }
+        guard n.type == "screen" || n.type == "category", let children = n.children, !children.isEmpty else { return true }
+        return children.contains { shows($0, availability) }
     }
 }
 
@@ -439,7 +456,7 @@ struct SettingsRow: View {
                 // a group inside a group: its rows in place, its title as a caption
                 VStack(alignment: .leading) {
                     Text(catalog.text(node.title) ?? "").font(.app(12)).foregroundStyle(.secondary)
-                    ForEach(node.children ?? []) { SettingsRow(node: $0) }
+                    ForEach((node.children ?? []).filter { SettingsScreen.shows($0, availability) }) { SettingsRow(node: $0) }
                 }
             case "switch":
                 if let key = node.key {
@@ -517,6 +534,8 @@ struct SettingsRow: View {
         switch node.key ?? "" {
         case "pref_oldstyle_tone_reset":
             OldstyleResetRow(label: label(detail: nil))
+        case "scam_recent_messages":
+            MessagesRow(label: label(detail: nil))
         case "shdr_capture_report":
             NavigationLink { ShdrReportPage() } label: { label(detail: nil) }
         case "scamera_log_clear":

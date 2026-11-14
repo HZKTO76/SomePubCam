@@ -178,6 +178,7 @@ struct CameraView: View {
                  focus.point, focus.dimmed, focus.pulse, exposurePoint, sunEv, flipTurn)
         let _ = hudMode > 0 ? CameraHud.shared.sample : nil
         let _ = tablet
+        let _ = store.bool(Wide169Mask.key, false)
         return VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 TopRowBar(camera: camera, chrome: chrome, lutOn: lut.anyOn, lutOpen: lut.open,
@@ -270,6 +271,8 @@ struct CameraView: View {
                              onHardwareShutter: { pressShutter() },
                              onFling: { t, v, start, view in fling(t, v, start, view, size: size) })
             .frame(width: width, height: height)
+            // «16:9» (pref_wide169_key): the photo's frame inside the 4:3 viewfinder
+            .overlay { if store.bool(Wide169Mask.key, false) { Wide169Mask() } }
             .overlay { ViewfinderOverlay(grid: chrome.gridType, horizon: false) }
             .overlay { SubjectOverlay() }
             .overlay {
@@ -721,4 +724,34 @@ struct ActivityView: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// «16:9» (pref_wide169_key, Wide169 / CameraPhotoFinish.wideCrop): the photo keeps the frame's centred 16:9 - the long side whole,
+/// the short side long x 9 / 16 - so the viewfinder's 4:3 frame is dimmed outside it (Android re-frames its viewfinder for it,
+/// CameraUIViewImpl.wideFrame; here the frame stays and the bands show the cut). Touches pass through.
+struct Wide169Mask: View {
+    static let key = "pref_wide169_key"
+
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, h = g.size.height
+            let keep = min(min(w, h), max(w, h) * 9 / 16)
+            let band = max(0, (min(w, h) - keep) / 2)
+            if h >= w {
+                HStack(spacing: 0) {
+                    Color.black.opacity(0.6).frame(width: band)
+                    Spacer(minLength: 0)
+                    Color.black.opacity(0.6).frame(width: band)
+                }
+            } else {
+                VStack(spacing: 0) {
+                    Color.black.opacity(0.6).frame(height: band)
+                    Spacer(minLength: 0)
+                    Color.black.opacity(0.6).frame(height: band)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
 }

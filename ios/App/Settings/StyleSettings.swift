@@ -1,100 +1,271 @@
 import SwiftUI
 
-/// PhotoStyle (settings/PhotoStyle.java): Обычный, Чёрно-белый or Плёнка - a view over the black-and-white filter
-/// (pref_scam_hybrid_colour_mono), the film LUT (pref_film_lut) and the film simulation (pref_film_sim_stock). Leaving a style
-/// remembers its choice (ui_style_last_*), so coming back restores the same filter, LUT or stock.
+/// PhotoStyle (settings/PhotoStyle.java, P718): «Стиль снимка» - a tone preset, Насыщенный (Vivid), Обычный (Normal) or Нейтральный
+/// (Neutral), in that order on every card row, stored in pref_photo_style; the photo's V2 tone takes it as factors on the user's own
+/// tone rows (Engine/post/why/WhyV2Ae.hpp applyStyle), which keep their values. Choosing a preset puts «Why тон» on V2. Black and
+/// white and the film colours are no styles any more: their own rows (the black-and-white filter, the film LUT, the film simulation)
+/// hold them, untouched by the style; a user who had one keeps it and reads Обычный here, as nothing was stored.
 enum PhotoStyle {
-    static let normal = 0, mono = 1, film = 2
-    static let monoKey = "pref_scam_hybrid_colour_mono", lutKey = "pref_film_lut"
-    static let stockKey = "pref_film_sim_stock", strengthKey = "pref_film_sim_strength"
-    static let lastMono = "ui_style_last_mono", lastLut = "ui_style_last_lut"
-    static let lastStock = "ui_style_last_stock", lastStockLut = "ui_style_last_stock_lut"
-    static let defaultLut = "scam:warm400"
+    /// WhyV2Ae.STYLE_NORMAL / STYLE_VIVID / STYLE_NEUTRAL
+    static let normal = 0, vivid = 1, neutral = 2
+    /// The stored preset: "normal" (also unset), "vivid" or "neutral"
+    static let key = "pref_photo_style"
+    /// «Why тон» (PreferenceKeys.whyToneV2) and its V2 value
+    static let toneVersionKey = "pref_scam_hybrid_tone_version", v2 = "v2"
+    /// The cards' order (owner, 2026-11-14: «Порядок плиток сделай Насыщенный/Обычный/Нейтральный»)
+    static let order = [vivid, normal, neutral]
 
-    /// The stock in effect (a known stock at a strength above 0), or nil
-    static func stock(_ s: SettingsStore) -> String? {
-        let id = s.string(stockKey, "")
-        guard !id.trimmingCharacters(in: .whitespaces).isEmpty, FilmCatalog.stock(id) != nil else { return nil }
-        return PrefValue.number(s.values[strengthKey], 100) > 0 ? id : nil
-    }
+    /// The stored preset (anything else, or nothing: Normal)
+    static func current(_ s: SettingsStore) -> Int { of(s.string(key, "")) }
 
-    static func current(_ s: SettingsStore) -> Int {
-        if stock(s) != nil { return film }
-        let m = s.string(monoKey, "off")
-        if m != "off" { return mono }
-        return s.string(lutKey, "").isEmpty ? normal : film
-    }
-
-    static func apply(_ s: SettingsStore, _ style: Int) {
-        let m = s.string(monoKey, "off"), lut = s.string(lutKey, ""), inEffect = Self.stock(s)
-        let oldLastMono = s.string(lastMono, "neutral"), oldLastLut = s.string(lastLut, defaultLut)
-        let oldLastStock = s.string(lastStock, ""), oldLastStockLut = s.string(lastStockLut, "")
-        if m != "off" { s.set(lastMono, m) }
-        if !lut.isEmpty { s.set(lastLut, lut) }
-        if let inEffect {
-            s.set(lastStock, inEffect)
-            s.set(lastStockLut, lut)
-        } else if !lut.isEmpty {
-            s.set(lastStock, nil)   // the last film was a LUT alone: «Плёнка» brings that back
+    /// The preset of a stored value
+    static func of(_ value: String?) -> Int {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "vivid": return vivid
+        case "neutral": return neutral
+        default: return normal
         }
-        let last: String? = inEffect != nil ? inEffect : !lut.isEmpty ? nil : oldLastStock
+    }
+
+    /// The stored value (and the cards' tag suffix) of a preset
+    static func id(_ style: Int) -> String {
         switch style {
-        case mono:
-            s.set(monoKey, oldLastMono)
-            s.set(lutKey, "")
-            s.set(stockKey, "")
-        case film:
-            s.set(monoKey, "off")
-            if let last, FilmCatalog.stock(last) != nil {   // the film that was on, with its LUT
-                s.set(stockKey, last)
-                s.set(lutKey, inEffect != nil ? lut : oldLastStockLut)
-            } else {
-                s.set(lutKey, oldLastLut)
-            }
-        default:
-            s.set(monoKey, "off")
-            s.set(lutKey, "")
-            s.set(stockKey, "")
+        case vivid: return "vivid"
+        case neutral: return "neutral"
+        default: return "normal"
         }
+    }
+
+    /// Stores style and puts «Why тон» on V2 (every preset is a V2 tone); the other settings stay as they are
+    static func apply(_ s: SettingsStore, _ style: Int) {
+        s.set(key, id(style))
+        s.set(toneVersionKey, v2)
+    }
+
+    /// The next style in the cards' order (the shade's «Стиль» tile cycles)
+    static func next(_ style: Int) -> Int {
+        guard let i = order.firstIndex(of: style) else { return normal }
+        return order[(i + 1) % order.count]
     }
 
     static func name(_ style: Int) -> String {
         switch style {
-        case mono: return Lang.t("Ч/б", "B&W")
-        case film: return Lang.t("Плёнка", "Film")
+        case vivid: return Lang.t("Насыщенный", "Vivid")
+        case neutral: return Lang.t("Нейтральный", "Neutral")
         default: return Lang.t("Обычный", "Normal")
+        }
+    }
+
+    /// What a preset does, in a line (the settings' long press, the cards' description)
+    static func about(_ style: Int) -> String {
+        switch style {
+        case vivid: return Lang.t("Больше HDR: светлее тени, мягче яркие места, сочнее приглушённые цвета.",
+                                  "More HDR: brighter shadows, softer bright areas, richer muted colours.")
+        case neutral: return Lang.t("Спокойнее: мягче контраст, меньше подъём теней, сдержаннее цвета.",
+                                    "Calmer: gentler contrast, less shadow lift, quieter colours.")
+        default: return Lang.t("Тон камеры как есть: ваши настройки тона без изменений.",
+                               "The camera's tone as it is: your tone settings unchanged.")
         }
     }
 }
 
-/// PhotoStylePreference: one card of three radio rows - Обычный, Чёрно-белый, Плёнка - over PhotoStyle.
+/// LookThumbs.preset (P718): a «Стиль» preset's thumbnail - the settings' drawn sunset sample (LutSamples «Закат»: a bright sky and
+/// sun over dark ridges and trees) through a cheap CPU sketch of WhyV2Ae.applyStyle, not the photo's tone: the fusion's shadow lift
+/// and highlight compression as an exposure over the local base (the log luma box-blurred over a tenth of the side), liftEV /
+/// compressEV EV per unit of the preset's factor, the macro contrast on the cube root of the luminance round 0.40 (the default
+/// 1.1's excess by the preset's factor), the vibrance on the chroma (muted / saturated colours, the sky and light-tone terms).
+/// Every term `emphasis` x its change from Normal, so the difference reads on a 53 pt card.
+enum StyleThumbs {
+    /// The picture's size in pixels (LookThumbs.SIZE)
+    static let size = 112
+    /// LookThumbs.PRESET_SAMPLE: «Закат»
+    static let sample = 1
+    /// how much more than the photo's change a card shows (the photo's own +-0.24 EV and +-8-15 % chroma vanish at 53 pt)
+    static let emphasis: Float = 2
+    /// EV per unit of the shadow / highlight factor (1.8 x 0.45 and 2.5 x 0.3)
+    static let liftEV: Float = 0.81, compressEV: Float = 0.75
+    private static let luma: [Float] = [0.2126, 0.7152, 0.0722]
+
+    /// WhyV2Ae.Style: shadow, highlight, macro, boost, vibrance, vibSaturated, vibTerms (WhyV2Ae.STYLES, index PhotoStyle's)
+    struct Factors { let shadow, highlight, macro, boost, vibrance, vibSaturated, vibTerms: Float }
+    static func factors(_ style: Int) -> Factors {
+        switch style {
+        case PhotoStyle.vivid: return Factors(shadow: 1.7, highlight: 1.6, macro: 1.5, boost: 1, vibrance: 0.30, vibSaturated: 0, vibTerms: 1)
+        case PhotoStyle.neutral: return Factors(shadow: 0.85, highlight: 1, macro: 0.3, boost: 1 / 3, vibrance: -0.12, vibSaturated: -0.12, vibTerms: 0.55)
+        default: return Factors(shadow: 1, highlight: 1, macro: 1, boost: 1, vibrance: 0, vibSaturated: 0, vibTerms: 1)
+        }
+    }
+
+    /// The card's picture of a preset (drawn off the main thread, kept in SampleCache)
+    static func picture(_ style: Int) -> SamplePixels { pixels(LutSamples.draw(sample, size, size), style: style) }
+
+    /// LookThumbs.presetPixels on RGBA8 pixels (Normal: the sample itself)
+    static func pixels(_ src: SamplePixels, style: Int) -> SamplePixels {
+        if style == PhotoStyle.normal { return src }
+        let s = factors(style)
+        let w = src.width, h = src.height, n = w * h
+        let bytes = [UInt8](src.rgba)
+        guard bytes.count >= n * 4 else { return src }
+        var lin = [Float](repeating: 0, count: n * 3), lg = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            var y: Float = 0
+            for k in 0..<3 {
+                let v = toLinear(Float(bytes[i * 4 + k]) / 255)
+                lin[i * 3 + k] = v
+                y += luma[k] * v
+            }
+            lg[i] = Float(log(Double(Swift.max(y, Float(1e-4)))) / log(2.0))
+        }
+        let base = box(box(lg, w, h, Swift.max(1, w / 10), true), w, h, Swift.max(1, h / 10), false)
+        let e = emphasis
+        let contrast: Float = 1 + e * ((1 + 0.1 * s.macro) / 1.1 - 1)
+        var out = [UInt8](repeating: 255, count: n * 4)
+        var d: [Float] = [0, 0, 0]
+        for i in 0..<n {
+            let b = base[i]
+            let dark = ramp(-1.0, -4.0, b), bright = ramp(-1.5, 0, b)
+            let ev: Float = e * (liftEV * (s.shadow - 1) * dark - compressEV * (s.highlight - 1) * bright)
+            var gain = Float(pow(2.0, Double(ev)))
+            var yl: Float = 0
+            for k in 0..<3 { yl += luma[k] * lin[i * 3 + k] * gain }
+            if yl > 1e-6 {
+                let l = Float(cbrt(Double(yl))), lc = Swift.max(Float(0.0001), 0.4 + (l - 0.4) * contrast)
+                gain *= (lc / l) * (lc / l) * (lc / l)
+            }
+            var y: Float = 0
+            for k in 0..<3 {
+                d[k] = toDisplay(lin[i * 3 + k] * gain)
+                y += luma[k] * d[k]
+            }
+            // the chroma: muted -> saturated colours by its size, the sky (blue) and light-tone terms by their masks
+            let chroma = Swift.max(Swift.max(d[0], d[1]), d[2]) - Swift.min(Swift.min(d[0], d[1]), d[2])
+            let satT = ramp(0.08, 0.35, chroma)
+            let sky: Float = d[2] > d[0] ? Swift.min(1, (d[2] - d[0]) / Swift.max(chroma, 1e-4)) : 0
+            let light = ramp(0.6, 0.8, y) * (1 - ramp(0.88, 0.98, y))
+            let boost = s.vibrance + (s.vibSaturated - s.vibrance) * satT + (s.vibTerms - 1) * 0.25 * (sky + light)
+            let sat = Swift.max(Float(0), 1 + e * boost)
+            for k in 0..<3 {
+                let v = Swift.max(Float(0), Swift.min(Float(1), y + (d[k] - y) * sat))
+                out[i * 4 + k] = UInt8((v * 255 + 0.5).rounded(.down))
+            }
+        }
+        return SamplePixels(rgba: Data(out), width: w, height: h)
+    }
+
+    private static func ramp(_ from: Float, _ to: Float, _ v: Float) -> Float {
+        let t = Swift.max(0, Swift.min(1, (v - from) / (to - from)))
+        return t * t * (3 - 2 * t)
+    }
+
+    private static func toLinear(_ v: Float) -> Float {
+        v <= 0.04045 ? v / 12.92 : Float(pow(Double((v + 0.055) / 1.055), Double(Float(2.4))))
+    }
+
+    private static func toDisplay(_ x: Float) -> Float {
+        let v = Swift.max(0, Swift.min(1, x))
+        return v <= 0.0031308 ? v * 12.92 : 1.055 * Float(pow(Double(v), Double(Float(1) / Float(2.4)))) - 0.055
+    }
+
+    /// A box mean along x (horizontal) or y with radius r, the edges clamped
+    private static func box(_ a: [Float], _ w: Int, _ h: Int, _ r: Int, _ horizontal: Bool) -> [Float] {
+        var out = [Float](repeating: 0, count: a.count)
+        let len = horizontal ? w : h, lines = horizontal ? h : w
+        func at(_ line: Int, _ i: Int) -> Int { horizontal ? line * w + i : i * w + line }
+        for line in 0..<lines {
+            var sum: Double = 0
+            for j in -r...r { sum += Double(a[at(line, Swift.max(0, Swift.min(len - 1, j)))]) }
+            for i in 0..<len {
+                out[at(line, i)] = Float(sum / Double(2 * r + 1))
+                sum += Double(a[at(line, Swift.min(len - 1, i + r + 1))]) - Double(a[at(line, Swift.max(0, i - r))])
+            }
+        }
+        return out
+    }
+}
+
+/// PhotoStylePreference + StyleCards (P718): the tone presets as the wizard shows them - a row of three cards, Насыщенный / Обычный /
+/// Нейтральный (PhotoStyle.order), each with the preset's thumbnail (StyleThumbs: the sunset sample through the preset, as the LUT
+/// tray's cards), its name and the wizard card's fill, ring and tick - and a line on what the chosen one does; a tap stores the
+/// preset and puts «Why тон» on V2 (PhotoStyle.apply). Black and white and film have their own rows below.
 struct PhotoStylePicker: View {
     private var store: SettingsStore { SettingsStore.shared }
-    private static let rows: [(String, String)] = [
-        (Lang.t("Обычный", "Normal"), Lang.t("Естественные цвета, как их видит камера. Плёночные цвета и чёрно-белый режим выключены.",
-                                         "Natural colours as the camera sees them. Film colours and black and white are off.")),
-        (Lang.t("Чёрно-белый", "Black and white"), Lang.t("Снимок без цвета. Ниже можно выбрать цветной фильтр, как у чёрно-белой плёнки: он меняет яркость неба, листвы и кожи.",
-                                                       "A photo without colour. Below you can pick a colour filter as on black-and-white film: it changes how bright the sky, leaves and skin come out.")),
-        (Lang.t("Плёнка", "Film"), Lang.t("Снимок в цветах плёнки: их задаёт выбранный ниже LUT (таблица цветов) или симуляция плёнки.",
-                                       "The photo in a film's colours: the LUT (colour table) or the film simulation chosen below sets them.")),
-    ]
 
     var body: some View {
-        let now = PhotoStyle.current(store)
-        ForEach(0..<3, id: \.self) { i in
-            Button { PhotoStyle.apply(store, i) } label: {
-                HStack(spacing: 12) {
-                    Image("cs_ic_palette").resizable().frame(width: 22, height: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.rows[i].0).foregroundStyle(.primary)
-                        Text(Self.rows[i].1).font(.app(12)).foregroundStyle(.secondary)
+        let chosen = PhotoStyle.current(store)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                ForEach(PhotoStyle.order, id: \.self) { style in
+                    StyleCard(style: style, on: style == chosen) {
+                        guard style != chosen else { return }
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) { PhotoStyle.apply(store, style) }
                     }
-                    Spacer()
-                    Image(systemName: i == now ? "largecircle.fill.circle" : "circle").foregroundStyle(i == now ? Color.accentColor : .secondary)
                 }
             }
-            .accessibilityAddTraits(i == now ? .isSelected : [])
+            Text(PhotoStyle.about(chosen))
+                .font(.app(13)).foregroundStyle(.secondary)
+                .padding(.horizontal, 4).padding(.top, 10)
+                .accessibilityIdentifier("style_about")
         }
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("photo_style")
+    }
+}
+
+/// StyleCards' card (SettingsWizard.Card with a picture): the preset's thumbnail, its name on one line (shrinking to fit), the tick;
+/// chosen: the accent ring, an accent-tinted fill and the tick shown
+private struct StyleCard: View {
+    let style: Int
+    let on: Bool
+    let pick: () -> Void
+    private static let thumb: CGFloat = 53, thumbCorner: CGFloat = 14, corner: CGFloat = 18
+
+    var body: some View {
+        let accent = AccentPalette.settingsColor
+        let preset = style
+        Button(action: pick) {
+            VStack(spacing: 0) {
+                Group {
+                    if let img = SampleCache.shared.get("preset|\(preset)", { StyleThumbs.picture(preset) })?.image {
+                        Image(decorative: img, scale: 1).resizable().scaledToFill()
+                    } else {
+                        Color(white: 0.2)
+                    }
+                }
+                .frame(width: Self.thumb, height: Self.thumb)
+                .clipShape(RoundedRectangle(cornerRadius: Self.thumbCorner))
+                .overlay(RoundedRectangle(cornerRadius: Self.thumbCorner).strokeBorder(Color.white.opacity(0.12)))
+                .padding(.bottom, 8)
+                Text(PhotoStyle.name(style))
+                    .font(.app(15, 600)).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(10.0 / 15.0)
+                    .frame(maxWidth: .infinity)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 14, weight: .bold)).foregroundStyle(accent)
+                    .frame(width: 20, height: 20)
+                    .opacity(on ? 1 : 0)
+                    .scaleEffect(on ? 1 : 0.6)
+                    .padding(.top, 4)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(on ? accent.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: Self.corner))
+            .background(Color(white: 0.23), in: RoundedRectangle(cornerRadius: Self.corner))
+            .overlay(RoundedRectangle(cornerRadius: Self.corner).strokeBorder(accent.opacity(on ? 1 : 0), lineWidth: 2))
+            .contentShape(RoundedRectangle(cornerRadius: Self.corner))
+        }
+        .buttonStyle(StyleCardPress())
+        .accessibilityLabel(PhotoStyle.name(style) + ". " + PhotoStyle.about(style))
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityIdentifier("style_option_" + PhotoStyle.id(style))
+    }
+}
+
+/// Motion.press(view, .97f): the card a little smaller while held
+private struct StyleCardPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

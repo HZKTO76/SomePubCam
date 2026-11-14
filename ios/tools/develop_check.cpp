@@ -1,7 +1,8 @@
 // P665 host check of the gallery developer's C++ (Engine/post/DevelopRecord.hpp, DevelopRun.hpp, DevelopDefaults.hpp,
 // Editor/EditDevelop.hpp) on the cases of the Android tests (DevelopRecordTest, DevelopRunTest, DevelopDefaultsTest, EditDevelopTest): the record through a file and back (zlib as the
 // platform's deflate), the Parameters field for field, a reduced grid and a Sabre 2x shot's final size, the settings with the
-// changes, the maps' resampling, the crops, the demosaics and the halves. No GL: the pipeline's run itself is the post checks'.
+// changes, the maps' resampling, the crops, the demosaics and the halves; P696 / P706: a DNG without the record (DngRaw's tags, opcode
+// lists and shading map, EditDevelop's refusal and facts, the developer's GainMaps). No GL: the pipeline's run itself is the post checks'.
 //   g++ -std=c++17 -O1 -ffp-contract=off -Iios/ScamGL/include -Iapp/src/main/cpp -Iapp/src/main/cpp/third_party/tone_port/include
 //       ios/tools/develop_check.cpp -lz -pthread -o develop_check && ./develop_check
 #include "../Engine/post/DevelopDefaults.hpp"
@@ -11,7 +12,9 @@
 
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 
 using namespace scam_post;
@@ -124,6 +127,136 @@ static DevelopRecord record(const Parameters& p, float headroom, float zoom, boo
     Settings s = prefs();
     return throughTheFile(DevelopRecord::make(p.toJson(), s, worker(), headroom, 4096, 3072, zoom, isz, 665));
 }
+
+/// P696 / P706: a little-endian DNG in memory - IFD 0 the 16-bit Bayer raw itself (8 x 6, its tags), an Exif IFD - as the editor's
+/// reader takes another camera's or our own DNG (DngRawTest's fixtures)
+struct TestDng {
+    struct Entry { uint16_t tag, type; uint32_t count; std::vector<uint8_t> data; };
+    std::vector<Entry> ifd0, exif;
+    static constexpr int W = 8, H = 6;
+
+    static void le(std::vector<uint8_t>& b, uint64_t v, int n) { for (int i = 0; i < n; i++) b.push_back(uint8_t(v >> (8 * i))); }
+    static void put(std::vector<Entry>& to, uint16_t tag, uint16_t type, uint32_t count, std::vector<uint8_t> data) {
+        to.push_back({tag, type, count, std::move(data)});
+    }
+    static std::vector<uint8_t> shorts(std::initializer_list<int> v) { std::vector<uint8_t> b; for (int x : v) le(b, uint16_t(x), 2); return b; }
+    static std::vector<uint8_t> longs(std::initializer_list<long long> v) { std::vector<uint8_t> b; for (long long x : v) le(b, uint32_t(x), 4); return b; }
+    static std::vector<uint8_t> rationals(std::initializer_list<std::pair<long long, long long>> v) {
+        std::vector<uint8_t> b;
+        for (const auto& [n, d] : v) { le(b, uint32_t(n), 4); le(b, uint32_t(d), 4); }
+        return b;
+    }
+    static std::vector<uint8_t> doubles(const std::vector<double>& v) {
+        std::vector<uint8_t> b;
+        for (double x : v) { uint64_t u; std::memcpy(&u, &x, 8); le(b, u, 8); }
+        return b;
+    }
+    static std::vector<uint8_t> text(const std::string& s) { std::vector<uint8_t> b(s.begin(), s.end()); b.push_back(0); return b; }
+    /// big-endian GainMap opcodes (id 9), each {top, left, pitch, pointsV, pointsH, gains...} over the whole raw
+    static std::vector<uint8_t> opcodes(const std::vector<std::array<int, 5>>& maps, const std::vector<std::vector<float>>& gains) {
+        std::vector<uint8_t> b;
+        auto be = [&b](uint64_t v, int n) { for (int i = n - 1; i >= 0; i--) b.push_back(uint8_t(v >> (8 * i))); };
+        auto bed = [&be](double x) { uint64_t u; std::memcpy(&u, &x, 8); be(u, 8); };
+        be(maps.size(), 4);
+        for (size_t m = 0; m < maps.size(); m++) {
+            const auto [top, left, pitch, pv, ph] = maps[m];
+            be(9, 4); be(0x01030000, 4); be(0, 4); be(76 + 4 * gains[m].size(), 4);
+            for (int v : {top, left, H, W, 0, 1, pitch, pitch, pv, ph}) be(uint32_t(v), 4);
+            bed(1.0 / std::max(1, pv - 1)); bed(1.0 / std::max(1, ph - 1)); bed(0); bed(0);
+            be(1, 4);
+            for (float g : gains[m]) { uint32_t u; std::memcpy(&u, &g, 4); be(u, 4); }
+        }
+        return b;
+    }
+
+    /// the raw (every site value) and the base tags: RGGB, black 64, white 1023, orientation, Software, the exposure in the Exif IFD
+    TestDng(int value, int orientation, const std::string& software) {
+        put(ifd0, 0xFE, 4, 1, longs({0}));
+        put(ifd0, 0x100, 4, 1, longs({W}));
+        put(ifd0, 0x101, 4, 1, longs({H}));
+        put(ifd0, 0x102, 3, 1, shorts({16}));
+        put(ifd0, 0x103, 3, 1, shorts({1}));
+        put(ifd0, 0x106, 3, 1, shorts({32803}));
+        put(ifd0, 0x112, 3, 1, shorts({orientation}));
+        put(ifd0, 0x115, 3, 1, shorts({1}));
+        put(ifd0, 0x116, 4, 1, longs({H}));
+        put(ifd0, 0x117, 4, 1, longs({W * H * 2}));
+        if (!software.empty()) put(ifd0, 0x131, 2, uint32_t(software.size() + 1), text(software));
+        put(ifd0, 0x828D, 3, 2, shorts({2, 2}));
+        put(ifd0, 0x828E, 1, 4, {0, 1, 1, 2});
+        put(ifd0, 0xC612, 1, 4, {1, 4, 0, 0});
+        put(ifd0, 0xC61A, 3, 1, shorts({64}));
+        put(ifd0, 0xC61D, 3, 1, shorts({1023}));
+        put(ifd0, 0xC761, 12, 6, doubles({2e-4, 4e-7, 3e-4, 5e-7, 4e-4, 6e-7}));
+        put(exif, 0x8827, 3, 1, shorts({50}));
+        put(exif, 0x829A, 5, 1, rationals({{1, 254}}));
+        put(exif, 0x829D, 5, 1, rationals({{227, 100}}));
+        put(exif, 0x920A, 5, 1, rationals({{2248, 100}}));
+        raw.assign(size_t(W) * H, uint16_t(value));
+    }
+    std::vector<uint16_t> raw;
+
+    void colour() {
+        std::vector<uint8_t> cm;
+        for (std::pair<long long, long long> v : {std::pair<long long, long long>{9, 10}, {-3, 10}, {-1, 10}, {-4, 10}, {13, 10}, {1, 10}, {-5, 100}, {2, 10}, {6, 10}}) {
+            le(cm, uint32_t(int32_t(v.first)), 4);
+            le(cm, uint32_t(v.second), 4);
+        }
+        put(ifd0, 0xC621, 10, 9, cm);
+        put(ifd0, 0xC65A, 3, 1, shorts({21}));
+        put(ifd0, 0xC628, 5, 3, rationals({{1, 2}, {1, 1}, {7, 10}}));
+    }
+
+    std::vector<uint8_t> build() const {
+        std::vector<uint8_t> out = {'I', 'I', 42, 0, 0, 0, 0, 0};
+        const uint32_t strip = uint32_t(out.size());
+        for (uint16_t v : raw) le(out, v, 2);
+        auto write = [&out](std::vector<Entry> entries) {
+            std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.tag < b.tag; });
+            std::vector<uint32_t> at(entries.size());
+            for (size_t i = 0; i < entries.size(); i++) {
+                if (entries[i].data.size() <= 4) continue;
+                if (out.size() & 1) out.push_back(0);
+                at[i] = uint32_t(out.size());
+                out.insert(out.end(), entries[i].data.begin(), entries[i].data.end());
+            }
+            if (out.size() & 1) out.push_back(0);
+            const uint32_t ifd = uint32_t(out.size());
+            le(out, entries.size(), 2);
+            for (size_t i = 0; i < entries.size(); i++) {
+                le(out, entries[i].tag, 2);
+                le(out, entries[i].type, 2);
+                le(out, entries[i].count, 4);
+                if (entries[i].data.size() <= 4) {
+                    std::vector<uint8_t> field = entries[i].data;
+                    field.resize(4, 0);
+                    out.insert(out.end(), field.begin(), field.end());
+                } else {
+                    le(out, at[i], 4);
+                }
+            }
+            le(out, 0, 4);
+            return ifd;
+        };
+        const uint32_t exifAt = write(exif);
+        std::vector<Entry> top = ifd0;
+        top.push_back({0x111, 4, 1, longs({strip})});
+        top.push_back({0x8769, 4, 1, longs({exifAt})});
+        const uint32_t ifd0At = write(top);
+        for (int i = 0; i < 4; i++) out[size_t(4 + i)] = uint8_t(ifd0At >> (8 * i));
+        return out;
+    }
+};
+
+/// DngCreator's lens shading: one map a 2x2 site (pitch 2), 3 x 2 points, a constant gain a site (R 2, G 1.5 / 1.25, B 3)
+static std::vector<uint8_t> camera2Maps() {
+    std::vector<std::vector<float>> g;
+    for (float v : {2.f, 1.5f, 1.25f, 3.f}) g.push_back(std::vector<float>(6, v));
+    return TestDng::opcodes({{0, 0, 2, 2, 3}, {0, 1, 2, 2, 3}, {1, 0, 2, 2, 3}, {1, 1, 2, 2, 3}}, g);
+}
+
+/// one GainMap of gain over every site (pitch 1, 2 x 2 points): no Camera2 map
+static std::vector<uint8_t> flatMap(float gain) { return TestDng::opcodes({{0, 0, 1, 2, 2}}, {std::vector<float>(4, gain)}); }
 
 int main() {
     // the record: the shot's Parameters field for field, its settings, dev lines, the merge's numbers, headroom
@@ -423,6 +556,119 @@ int main() {
         CHECK(ShotExif::lensModel("vivo X200 Ultra", "front", 4.5, 2.0) == "vivo X200 Ultra front camera 4.5mm f/2");
         CHECK(ShotExif::lensModel("vivo X200 Ultra", "", NAN, NAN) == "vivo X200 Ultra camera");
         CHECK(ShotExif::uniqueCameraModel("vivo", "V2454A", 3) == "vivo V2454A camera 3");
+    }
+    // P696 / P706: a DNG without the record, read by the editor (DngRaw: the opcode lists by the specification, Software, NoiseProfile,
+    // the Exif exposure, the Camera2 shading map; EditDevelop: refusal, facts) and the developer's decode of its GainMaps
+    {
+        using scam_edit::DngRaw;
+        namespace dev = scam_edit::develop;
+        const float plain = 300.f / 959.f;
+        auto at = [](const DngRaw::Image& img, int x, int y) { return img.linear[size_t(y) * img.width + x]; };
+        // ours (Software SCAMERA, with spaces round it), OpcodeList2 = the Camera2 map, BaselineExposure 1 (headroom 2), rotated 90
+        TestDng t(364, 6, "  SCAMERA 9.9 (99) abc ");
+        t.put(t.ifd0, 0xC62A, 10, 1, TestDng::rationals({{1, 1}}));
+        const std::vector<uint8_t> ops = camera2Maps();
+        t.put(t.ifd0, 0xC741, 7, uint32_t(ops.size()), ops);
+        const std::vector<uint8_t> file = t.build();
+        const DngRaw::Info info = DngRaw::probe(file.data(), file.size());
+        CHECK(info.software == "SCAMERA 9.9 (99) abc" && dev::ours(info));
+        CHECK(info.noiseProfile && info.noiseProfile->size() == 6 && (*info.noiseProfile)[3] == 5e-7);
+        CHECK(info.iso == 50 && info.fNumber == 2.27 && info.focalLength == 22.48);
+        NEAR(info.exposureTime, 1 / 254.0, 1e-15);
+        CHECK(!info.asShotGiven && info.whiteLevel == 1023 && info.blackLevel == 64 && info.gainMap);
+        CHECK(info.shadingMap && info.shadingW == 3 && info.shadingH == 2 && info.shadingMap->size() == 24);
+        if (info.shadingMap)
+            for (int i = 0; i < 6; i++)
+                CHECK((*info.shadingMap)[size_t(4 * i)] == 2.f && (*info.shadingMap)[size_t(4 * i + 1)] == 1.5f
+                      && (*info.shadingMap)[size_t(4 * i + 2)] == 1.25f && (*info.shadingMap)[size_t(4 * i + 3)] == 3.f);
+        // the editor's decode applies OpcodeList2 (read as OpcodeList1 before P706: never applied); the developer leaves it to the
+        // pipeline, with a record and from the tags alike (the map is the record's)
+        const DngRaw::Image edit = DngRaw::decodeLinear(file.data(), file.size(), 1);
+        NEAR(at(edit, 0, 0), plain * 2, 1e-6);
+        NEAR(at(edit, 1, 0), plain * 1.5, 1e-6);
+        NEAR(at(edit, 0, 1), plain * 1.25, 1e-6);
+        NEAR(at(edit, 1, 1), plain * 3, 1e-6);
+        for (bool fromRecord : {true, false}) {
+            const DngRaw::Image d = DngRaw::decodeForDevelop(file.data(), file.size(), 1, fromRecord);
+            CHECK(!d.info.gainMap);
+            for (float v : d.linear) NEAR(v, plain, 1e-6);
+        }
+        CHECK(!dev::refusal(info));
+        const DevelopDefaults::Facts f = dev::facts(info);
+        CHECK(f.width == 8 && f.height == 6 && f.rotationDeg == 90 && f.headroom == 2.f && f.iso == 50 && f.whiteLevel == 1023 && f.blackLevel == 64.f);
+        CHECK(f.fNumber == 2.27f && f.focalMm == 22.48f && f.software == info.software && !f.cameraToXyzD50);
+        CHECK(f.neutral == (std::vector<float>{1.f, 1.f, 1.f}) && f.noiseProfile == info.noiseProfile);
+        CHECK(f.shadingMap == info.shadingMap && f.shadingW == 3 && f.shadingH == 2);
+        // its record: from the tags, the DNG's map as the shot's lens shading
+        Settings now;
+        now.prefs["pref_scam_hybrid_why_sharp_gain"] = Pref::string("1.4");
+        const DevelopRecord r = throughTheFile(DevelopDefaults::record(f, now, 696));
+        CHECK(DevelopDefaults::fromTags(&r) && r.meta["software"].text() == "SCAMERA 9.9 (99) abc");
+        NEAR(r.headroom(), 2.f, 0);
+        const Parameters rp = Develop::parameters(r, 8, 6);
+        CHECK(rp.toJson() == DevelopDefaults::parameters(f, now).toJson());
+        CHECK(rp.mapSize && *rp.mapSize == (Point{3, 2}) && rp.gainMap && *rp.gainMap == *info.shadingMap && rp.cameraRotation == 90);
+        CHECK(Develop::settings(r, {}).getString("pref_scam_hybrid_why_sharp_gain", "") == "1.4");
+    }
+    {
+        using scam_edit::DngRaw;
+        namespace dev = scam_edit::develop;
+        const float plain = 300.f / 959.f;
+        // another app's DNG: developed only with its colour matrix and as-shot white; its BaselineExposure is no headroom
+        TestDng t(364, 1, "Other Camera 1.0");
+        t.put(t.ifd0, 0xC62A, 10, 1, TestDng::rationals({{1, 1}}));
+        std::vector<uint8_t> file = t.build();
+        DngRaw::Info info = DngRaw::probe(file.data(), file.size());
+        CHECK(!dev::ours(info) && dev::refusal(info) && dev::refusal(info)->find("colour matrix") != std::string::npos);
+        t.colour();
+        file = t.build();
+        info = DngRaw::probe(file.data(), file.size());
+        CHECK(info.asShotGiven && info.colour.hasMatrices() && !dev::refusal(info));
+        const DevelopDefaults::Facts f = dev::facts(info);
+        CHECK(f.headroom == 1.f && f.rotationDeg == 0 && f.cameraToXyzD50 && f.cameraToXyzD50->size() == 9 && !f.shadingMap);
+        NEAR(f.neutral[0], .5f, 1e-7);
+        NEAR(f.neutral[2], .7f, 1e-7);
+        CHECK(f.sceneCct > 1000.f && f.sceneCct < 50000.f);
+        CHECK(DevelopDefaults::parameters(f, Settings()).colourSource == "DNG_FM");
+        // a mirrored orientation, a missing Software: refused / not ours
+        TestDng m(364, 2, "SCAMERA 1");
+        info = DngRaw::probe(m.build().data(), m.build().size());
+        CHECK(dev::refusal(info) && dev::refusal(info)->find("mirrored") != std::string::npos);
+        TestDng none(364, 8, "");
+        info = DngRaw::probe(none.build().data(), none.build().size());
+        CHECK(info.software.empty() && !dev::ours(info) && dev::refusal(info) && dev::rotation(8) == 270);
+        // OpcodeList2 maps that are no Camera2 map: applied by the developer from the tags (the pipeline has none), not with a record
+        TestDng one(364, 1, "SCAMERA 1");
+        const std::vector<uint8_t> flat = flatMap(2.f);
+        one.put(one.ifd0, 0xC741, 7, uint32_t(flat.size()), flat);
+        file = one.build();
+        info = DngRaw::probe(file.data(), file.size());
+        CHECK(info.gainMap && !info.shadingMap);
+        const DngRaw::Image tags = DngRaw::decodeForDevelop(file.data(), file.size(), 1, false);
+        CHECK(tags.info.gainMap);
+        for (float v : tags.linear) NEAR(v, plain * 2, 1e-6);
+        const DngRaw::Image rec = DngRaw::decodeForDevelop(file.data(), file.size(), 1, true);
+        CHECK(!rec.info.gainMap);
+        for (float v : rec.linear) NEAR(v, plain, 1e-6);
+        // OpcodeList1 (0xC740, read as OpcodeList2 before P706): applied by every decode (the record path: unless the shot's
+        // Parameters carry the map, as before); with it the OpcodeList2 maps are no Camera2 map
+        TestDng l1(364, 1, "SCAMERA 1");
+        const std::vector<uint8_t> c2 = camera2Maps();
+        l1.put(l1.ifd0, 0xC740, 7, uint32_t(flat.size()), flat);
+        l1.put(l1.ifd0, 0xC741, 7, uint32_t(c2.size()), c2);
+        file = l1.build();
+        info = DngRaw::probe(file.data(), file.size());
+        CHECK(info.gainMap && !info.shadingMap);
+        const DngRaw::Image both = DngRaw::decode(file.data(), file.size(), 1);
+        NEAR(float(both.data[0]) / DngRaw::FIXED_ONE, plain * 2 * 2, 2e-4);
+        const DngRaw::Image recordL1 = DngRaw::decodeForDevelop(file.data(), file.size(), 1, true);
+        for (float v : recordL1.linear) NEAR(v, plain * 2, 1e-6);
+        const DngRaw::Image recordNone = DngRaw::decodeForDevelop(file.data(), file.size(), 1, true, false);
+        CHECK(!recordNone.info.gainMap);
+        for (float v : recordNone.linear) NEAR(v, plain, 1e-6);
+        const DngRaw::Image tagsBoth = DngRaw::decodeForDevelop(file.data(), file.size(), 1, false);
+        NEAR(tagsBoth.linear[0], plain * 2 * 2, 1e-6);
+        NEAR(tagsBoth.linear[1], plain * 2 * 1.5, 1e-6);
     }
     std::printf(failures ? "develop_check: %d failure(s)\n" : "develop_check: all passed\n", failures);
     return failures ? 1 : 0;

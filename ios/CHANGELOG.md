@@ -8,6 +8,10 @@
 - iPad: portrait screen, upright controls when the window turns; vignetting calibration for lenses without a lens map.
 - Long bracket frame really brighter (shutter, not ISO); ETTR works.
 - DCP colour profiles, noise model profiles, «Чёрный из данных», the fringe net («Нейросеть») and the lab (merge the last series again).
+- Ultrashort frames and highlight recovery work on iPhone / iPad (white level from the frame, as on Android).
+- Faster processing: whole-frame GPU passes, cached shader translations, frames written during capture.
+- «Стиль» Vivid / Normal / Neutral; «Проявка» of any DNG; RAW series and processing stages can be kept.
+- Settings apply at once; options the iPhone cannot use are hidden; 16:9 viewfinder frame.
 
 ## 0.3 — Android updates of 2026-11-14
 - iPad: a native iPad app - full-screen camera, wider gallery grids, settings and editor sized for the tablet.

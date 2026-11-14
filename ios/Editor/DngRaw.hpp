@@ -1,6 +1,6 @@
 // The editor's RAW source (gallery/dng: DngPreview's TIFF reader, DngRaw, Lj92Decoder, DngColor) one to one: the largest raw IFD
 // of a DNG (CFA or LinearRaw; uncompressed 8..16-bit strips / tiles or lossless JPEG) as 16-bit fixed-point linear samples
-// ((value - black) / (white - black) x the OpcodeList2 gain maps, FIXED_ONE = white), a Quad CFA halved, binned bin x bin; the
+// ((value - black) / (white - black) x the OpcodeList1 / OpcodeList2 gain maps, FIXED_ONE = white), a Quad CFA halved, binned bin x bin; the
 // automatic lift; the DNG colour model (CCT / Duv white balance through the interpolated matrices, camera -> linear sRGB).
 #pragma once
 
@@ -12,6 +12,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -39,8 +40,10 @@ struct DngIfd {
     std::vector<int> activeArea;
     std::vector<double> cropOrigin, cropSize, blackDeltaH, blackDeltaV;
     bool hasActive = false, hasCropOrigin = false, hasCropSize = false, hasDeltaH = false, hasDeltaV = false;
-    std::vector<uint8_t> opcodeList2;
-    bool hasOpcodes = false;
+    /// P706: OpcodeList1 (0xC740: on the raw values as stored) and OpcodeList2 (0xC741: on the linearised values - the lens
+    /// shading of our and Camera2's DNGs) as the DNG specification numbers them (0xC740 was read as OpcodeList2 before)
+    std::vector<uint8_t> opcodeList1, opcodeList2;
+    bool hasOpcodes1 = false, hasOpcodes2 = false;
 };
 
 class DngFile {
@@ -55,6 +58,14 @@ public:
     double baselineExposure = 0;
     int illuminant1 = 0, illuminant2 = 0;
     bool dng = false;
+    /// P696 (the gallery developer of a DNG without its develop record): Software (0x131), NoiseProfile (0xC761) and the exposure
+    /// (ISO 0x8827, ExposureTime 0x829A, FNumber 0x829D, FocalLength 0x920A) of IFD 0 or of the Exif IFD (0x8769); the first
+    /// value found is kept, empty / 0 when absent.
+    std::string software;
+    bool hasSoftware = false;
+    std::vector<double> noiseProfile;
+    bool hasNoiseProfile = false;
+    double iso = 0, exposureTime = 0, fNumber = 0, focalLength = 0;
 
     DngFile(const uint8_t* data, size_t size) : d(data), limit(size) {
         if (limit < 8) throw std::runtime_error("DNG: too short");
@@ -200,13 +211,78 @@ private:
             case 0xC620: f.cropSize = doubles(type, vo, count); f.hasCropSize = true; break;
             case 0xC61B: f.blackDeltaH = doubles(type, vo, count); f.hasDeltaH = true; break;
             case 0xC61C: f.blackDeltaV = doubles(type, vo, count); f.hasDeltaV = true; break;
-            case 0xC740: f.opcodeList2.assign(d + vo, d + vo + count); f.hasOpcodes = true; break;
-            default: break;
+            case 0xC740: f.opcodeList1.assign(d + vo, d + vo + count); f.hasOpcodes1 = true; break;
+            case 0xC741: f.opcodeList2.assign(d + vo, d + vo + count); f.hasOpcodes2 = true; break;
+            case 0x131: if (!hasSoftware && type == 2) { software = ascii(vo, count); hasSoftware = true; } break;
+            case 0xC761: if (!hasNoiseProfile && count >= 2) { noiseProfile = doubles(type, vo, count); hasNoiseProfile = true; } break;
+            case 0x8769: if (top && depth == 0) exif_ = toLong(num(type, vo, 0)); break;
+            default: exposureTag(tag, type, vo, count); break;
             }
         }
         ifds.push_back(f);
         if (depth < 3) for (long long s : subs) if (s > 0 && s < (long long)limit) readIfd(s, depth + 1, false);
+        if (exif_ > 0 && exif_ < (long long)limit) {
+            const long long at = exif_;
+            exif_ = 0;
+            readExif(at);
+        }
         return (long long)u32(off + 2 + 12LL * n);
+    }
+
+    /// P696: the Exif IFD's offset met in IFD 0 (read after it), 0 for none
+    long long exif_ = 0;
+
+    /// P696: the exposure tags of the Exif IFD at off (nothing else of it is read)
+    void readExif(long long off) {
+        if (off + 2 > (long long)limit) return;
+        const int n = int(u16(off));
+        if (n == 0 || off + 2 + 12LL * n > (long long)limit) return;
+        for (int i = 0; i < n; ++i) {
+            const long long e = off + 2 + 12LL * i;
+            const int tag = int(u16(e)), type = int(u16(e + 2));
+            const long long count = u32(e + 4);
+            const int size = typeSize(type);
+            if (size == 0 || count == 0 || count > (1 << 16)) continue;
+            const long long bytes = size * count;
+            const long long vo = bytes <= 4 ? e + 8 : (long long)i32(e + 8);
+            if (vo < 0 || vo + bytes > (long long)limit) continue;
+            exposureTag(tag, type, vo, count);
+        }
+    }
+
+    /// P696: ISO, exposure time, f-number and focal length (the first positive value of each)
+    void exposureTag(int tag, int type, long long vo, long long count) {
+        if (count < 1) return;
+        switch (tag) {
+        case 0x8827: if (!(iso > 0)) iso = num(type, vo, 0); break;
+        case 0x829A: if (!(exposureTime > 0)) exposureTime = num(type, vo, 0); break;
+        case 0x829D: if (!(fNumber > 0)) fNumber = num(type, vo, 0); break;
+        case 0x920A: if (!(focalLength > 0)) focalLength = num(type, vo, 0); break;
+        default: break;
+        }
+    }
+
+    /// An ASCII value up to its first NUL, trimmed as Java's String.trim (characters up to the space off both ends); a byte above
+    /// 0x7F is its Latin-1 character (Java's (char) of the byte), in UTF-8
+    std::string ascii(long long vo, long long count) const {
+        std::vector<uint8_t> bytes;
+        for (long long i = 0; i < count; ++i) {
+            const uint8_t c = u8(vo + i);
+            if (c == 0) break;
+            bytes.push_back(c);
+        }
+        size_t a = 0, b = bytes.size();
+        while (a < b && bytes[a] <= ' ') a++;
+        while (b > a && bytes[b - 1] <= ' ') b--;
+        std::string out;
+        for (size_t i = a; i < b; i++) {
+            if (bytes[i] < 0x80) out.push_back(char(bytes[i]));
+            else {
+                out.push_back(char(0xC0 | (bytes[i] >> 6)));
+                out.push_back(char(0x80 | (bytes[i] & 0x3F)));
+            }
+        }
+        return out;
     }
 };
 
@@ -655,6 +731,19 @@ public:
         bool gainMap = false;
         int bits = 16;
         int compression = 1;
+        /// P696 (the gallery developer of a DNG without its develop record): the file's Software ("" for none), NoiseProfile (per
+        /// plane S, O of the normalised signal; none for none), ISO, exposure time (s), f-number and focal length (mm; 0 when
+        /// absent), whether it gives the as-shot white (AsShotNeutral or AsShotWhiteXY) and its white level and mean black level.
+        std::string software;
+        std::optional<std::vector<double>> noiseProfile;
+        double iso = 0, exposureTime = 0, fNumber = 0, focalLength = 0;
+        bool asShotGiven = false;
+        double whiteLevel = 0, blackLevel = 0;
+        /// P696: the lens-shading map of the DNG's OpcodeList2 GainMaps (tag 0xC741, the DNG writer's Camera2 map: one map a 2x2
+        /// site) as Camera2 gives it - shadingW x shadingH points of 4 gains (R, the two greens, B); none when the DNG has no such
+        /// four maps or has OpcodeList1 GainMaps too. P706: decodeForDevelop leaves these maps to the pipeline; decode applies them.
+        std::optional<std::vector<float>> shadingMap;
+        int shadingW = 0, shadingH = 0;
         std::array<int, 2> size(int bin) const {
             if (kind == KIND_RGB) return {std::max(1, cropWidth / bin), std::max(1, cropHeight / bin)};
             const int step = 2 * cell * bin;
@@ -688,13 +777,34 @@ public:
     }
 
     /// P665 DngRaw.decodeLinear: decode into floats (Image.linear; data empty), the DNG's whole precision, nothing clamped above
-    /// white. gainMaps false leaves the OpcodeList2 lens shading out (the develop's pipeline applies the shot's own map).
+    /// white. gainMaps false leaves every GainMap out (OpcodeList1's and OpcodeList2's).
     static Image decodeLinear(const uint8_t* data, size_t size, int bin, bool gainMaps = true) {
         DngFile p(data, size);
         DngRaw r(p, pick(p));
         r.setup();
         r.linearOut_ = true;
-        if (!gainMaps) r.gainMaps_.clear();
+        if (!gainMaps) {
+            r.gainMaps_.clear();
+            r.info_.gainMap = false;
+        }
+        return r.run(std::max(1, bin));
+    }
+
+    /// P706 DngRaw.decodeForDevelop: decodeLinear for the gallery's developer. The post pipeline applies the shot's lens shading
+    /// (the develop record's map, fromRecord; else Info.shadingMap, made from these maps), so the OpcodeList2 GainMaps are left out
+    /// here - applied twice the corners came out twice as bright. A DNG developed from its tags whose maps are not a Camera2 map
+    /// (no Info.shadingMap) gets them here, the pipeline has none. OpcodeList1's maps are applied as by every decode unless list1
+    /// is false (iOS: the record path keeps its maps of 0xC740 as before P706, left out when the shot's Parameters carry the map).
+    static Image decodeForDevelop(const uint8_t* data, size_t size, int bin, bool fromRecord, bool list1 = true) {
+        DngFile p(data, size);
+        DngRaw r(p, pick(p));
+        r.setup();
+        const bool keep2 = !(fromRecord || r.info_.shadingMap);
+        r.gainMaps_.clear();
+        if (list1) r.gainMaps_.insert(r.gainMaps_.end(), r.list1Maps_.begin(), r.list1Maps_.end());
+        if (keep2) r.gainMaps_.insert(r.gainMaps_.end(), r.list2Maps_.begin(), r.list2Maps_.end());
+        r.info_.gainMap = !r.gainMaps_.empty();
+        r.linearOut_ = true;
         return r.run(std::max(1, bin));
     }
 
@@ -752,7 +862,10 @@ private:
     const std::vector<double>* deltaH_ = nullptr;
     const std::vector<double>* deltaV_ = nullptr;
     double white_ = 0;
+    /// The GainMaps the decode applies: OpcodeList1's and - unless decodeForDevelop leaves them to the pipeline - OpcodeList2's
     std::vector<GainMap> gainMaps_;
+    /// P706: the two lists' maps apart
+    std::vector<GainMap> list1Maps_, list2Maps_;
     int outW_ = 0, outH_ = 0, bin_ = 1, spp_ = 1, step_ = 2;
     std::vector<uint16_t> out_;
     float inv_ = 0;
@@ -837,8 +950,54 @@ private:
         deltaH_ = f.hasDeltaH ? &f.blackDeltaH : nullptr;
         deltaV_ = f.hasDeltaV ? &f.blackDeltaV : nullptr;
         white_ = f.white > 0 ? f.white : (lin_ ? 65535 : (1 << info_.bits) - 1);
-        if (f.hasOpcodes) parseGainMaps(f.opcodeList2);
+        // P706: OpcodeList1 (0xC740) and OpcodeList2 (0xC741) as the DNG specification numbers them (0xC740 was read as
+        // OpcodeList2 before, so the lens shading of our DNGs never reached this decode)
+        list1Maps_ = f.hasOpcodes1 ? parseGainMaps(f.opcodeList1) : std::vector<GainMap>();
+        list2Maps_ = f.hasOpcodes2 ? parseGainMaps(f.opcodeList2) : std::vector<GainMap>();
+        gainMaps_ = list1Maps_;
+        gainMaps_.insert(gainMaps_.end(), list2Maps_.begin(), list2Maps_.end());
         info_.gainMap = !gainMaps_.empty();
+        info_.software = p_.hasSoftware ? p_.software : "";
+        if (p_.hasNoiseProfile) info_.noiseProfile = p_.noiseProfile;
+        info_.iso = p_.iso;
+        info_.exposureTime = p_.exposureTime;
+        info_.fNumber = p_.fNumber;
+        info_.focalLength = p_.focalLength;
+        info_.asShotGiven = p_.asShotNeutral.size() >= 3 || p_.asShotWhiteXY.size() >= 2;
+        info_.whiteLevel = white_;
+        if (info_.kind == KIND_BAYER && info_.cell == 1 && list1Maps_.empty()) shadingOf(list2Maps_);
+        double sum = 0;
+        for (double v : black_) sum += v;
+        info_.blackLevel = !black_.empty() ? sum / double(black_.size()) : 0;
+    }
+
+    /// P696: maps as a Camera2 lens-shading map into Info.shadingMap: four single-plane maps of one grid, each on one site of the
+    /// 2x2 pattern (pitch 2), their colours R, G, G, B by the CFA; anything else leaves none.
+    void shadingOf(const std::vector<GainMap>& maps) {
+        if (maps.size() != 4) return;
+        const GainMap& first = maps[0];
+        const int pw = first.pointsH, ph = first.pointsV;
+        if (pw < 1 || ph < 1 || (long long)pw * ph > (1LL << 16)) return;
+        std::vector<float> out(size_t(pw) * ph * 4, 0.f);
+        int sites = 0, greens = 0;
+        for (const GainMap& g : maps) {
+            if (g.pointsH != pw || g.pointsV != ph || g.rowPitch != 2 || g.colPitch != 2 || g.mapPlanes != 1 || g.gains.empty()) return;
+            const int site = ((g.top & 1) << 1) | (g.left & 1);
+            if ((sites & (1 << site)) != 0) return;
+            sites |= 1 << site;
+            const int colour = cfaAt(aaLeft_ + g.left, aaTop_ + g.top);
+            const int channel = colour == 0 ? 0 : colour == 2 ? 3 : 1 + greens++;
+            if (channel > 2 && colour == 1) return;
+            for (int i = 0; i < pw * ph; i++) {
+                const float v = g.gains[size_t(i)];
+                if (!(v > 0.f) || !std::isfinite(v)) return;
+                out[size_t(i) * 4 + size_t(channel)] = v;
+            }
+        }
+        if (sites != 15 || greens != 2) return;
+        info_.shadingMap = std::move(out);
+        info_.shadingW = pw;
+        info_.shadingH = ph;
     }
 
     static long long jroundL(double x) {
@@ -874,7 +1033,8 @@ private:
         return -1;
     }
 
-    void parseGainMaps(const std::vector<uint8_t>& list) {
+    /// OpcodeList1 / 2: big-endian {count; {id, version, flags, bytes, parameters}...}; GainMap (9) kept, the rest skipped
+    static std::vector<GainMap> parseGainMaps(const std::vector<uint8_t>& list) {
         size_t o = 0;
         auto need = [&](size_t n) { if (o + n > list.size()) throw std::runtime_error("opcodes"); };
         auto gi = [&]() { need(4); const uint32_t v = uint32_t(list[o]) << 24 | uint32_t(list[o + 1]) << 16 | uint32_t(list[o + 2]) << 8 | list[o + 3]; o += 4; return int32_t(v); };
@@ -908,8 +1068,9 @@ private:
                 o = start + size_t(bytes);
             }
         } catch (const std::exception&) {
+            // a damaged list: the maps read so far (no shading correction past the damage)
         }
-        gainMaps_.insert(gainMaps_.end(), maps.begin(), maps.end());
+        return maps;
     }
 
     Image run(int bin) {

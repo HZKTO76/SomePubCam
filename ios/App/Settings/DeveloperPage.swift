@@ -116,11 +116,43 @@ enum ScamDevFile {
 /// The «Для разработчика» page (DeveloperPreferences): one row per scam_dev.txt line of DevKeys, grouped. Rows are not stored as
 /// preferences: a switch writes "key 1" / "key 0", a number "key value" (empty: the line goes and the code's default applies)
 /// straight into scam_dev.txt; under its name a row shows its state («задано: 1», «по умолчанию: 0»), its meaning is its long press.
-/// The iPhone's pipeline reads the merge and processing lines; the capture lines are Android's camera (the file keeps them for a
-/// config carried between the phones).
+/// The iPhone's pipeline reads the merge and processing lines; the lines only Android's camera, worker or GPU route reads are not
+/// shown here (`shownOnIPhone`), and the file keeps them for a config carried between the phones.
 struct DeveloperPage: View {
     static let screen = "developer_settings_screen"
     static func rowID(_ key: String) -> String { "dev_" + key }
+
+    /// DevKeys groups (their English names) only Android's capture reads: the camera session, its viewfinder, the vendor modes
+    private static let androidGroups: Set<String> = [
+        "Capture and session", "Viewfinder", "Xiaomi 17 Ultra (tele)", "Xiaomi 15 Ultra (DCG)", "vivo", "Pixel 10 Pro / Pro XL",
+    ]
+    /// The lines of those groups the iPhone does read (HybridPlan: ETTR; WhyToneCore: the YUV AE's daylight rule)
+    private static let readOnIPhone: Set<String> = ["ettr", "yuv_ae_day"]
+    /// Lines of the other groups that only the Android worker, its process, its GL / JPEG / GPU route or its diagnostics read
+    private static let androidOnly: Set<String> = [
+        // the merge worker and its process
+        "motion_base_sharp", "prewarm_give_up", "worker_watchdog", "ok_read", "worker_prespawn", "worker_keep_ready", "worker_nice",
+        "zero_copy_read", "ahb_transport", "worker_gpu_normal_priority", "isp_preview_off_always",
+        // the Android processing's speed switches (the same output)
+        "half_rgb_gpu", "scamrgb_tail", "sharpen_stripes", "post_priority", "gpu_low_priority", "post_gpu_pace", "post_band_ms",
+        "hybrid_why_edge_luma_cache", "ms_oklab_cache", "why_gather_taps", "post_shared_context", "gainmap_run_context", "jpeg_threads",
+        "rgba_upload", "hybrid_isp_ccm", "jpeg_aq", "jpeg_fast_tables", "gl_warm_up", "gl_warm_up_merge", "gl_warm_up_recipes",
+        "gl_warm_up_shared", "black_scan_bulk", "pedestal_memory", "post_pbo_readback", "post_pbo_ring", "post_half_mapped",
+        "jpeg_stream", "jpeg_stream_marks", "jpeg_stream_tiles", "jpeg_stream_combine", "post_noise_quantile_gpu", "thermal_async",
+        "release_async", "dng_async", "raw_crop_in_place", "prep_warm", "exif_beside_encode",
+        // diagnostics
+        "film_reference_dump", "post_sync", "post_gpu_timer", "diag_sync", "diag_gpu_async", "stab_trace", "stab_trace_ois",
+    ]
+
+    /// Whether the page shows the line on the iPhone (the search and the page's reset go by the same rule)
+    static func shownOnIPhone(_ k: SettingsCatalog.DevKey) -> Bool {
+        if readOnIPhone.contains(k.k) { return true }
+        if androidGroups.contains(k.g.en) || androidOnly.contains(k.k) || k.k.hasPrefix("post_ab") { return false }
+        return true
+    }
+
+    /// The lines the page shows
+    static var shownKeys: [SettingsCatalog.DevKey] { SettingsCatalog.shared.devKeys.filter(shownOnIPhone) }
 
     let node: SettingsNode
     @Environment(\.settingsHighlight) private var highlight
@@ -134,7 +166,7 @@ struct DeveloperPage: View {
 
     private var groups: [DevGroup] {
         var out: [DevGroup] = []
-        for k in SettingsCatalog.shared.devKeys {
+        for k in Self.shownKeys {
             if let i = out.firstIndex(where: { $0.id == k.group }) { out[i].keys.append(k) } else { out.append(DevGroup(id: k.group, keys: [k])) }
         }
         return out
@@ -173,8 +205,10 @@ struct DeveloperPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .alert(L("dev.reset_title"), isPresented: $asking) {
             Button(L("set.layout.reset"), role: .destructive) {
-                let set = SettingsCatalog.shared.devKeys.filter { values[$0.k] != nil }.count
-                ScamDevFile.removeAll(SettingsCatalog.shared.devKeys.map(\.k))
+                // the page's own lines: the Android-only ones it does not show stay in the file
+                let shown = Self.shownKeys
+                let set = shown.filter { values[$0.k] != nil }.count
+                ScamDevFile.removeAll(shown.map(\.k))
                 refresh()
                 SettingsTips.show(PageReset.message(set))
             }

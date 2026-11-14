@@ -26,6 +26,9 @@ actor CaptureService {
     /// «Про»: the values applied last, and the exposure (ISO x seconds) the AE had when they took over (the software priority)
     private var manual = ManualSettings.load()
     private var autoExposureProduct: Double?
+    /// «Режим фокуса» as last applied to the open lens: a settings change sets it again only when the setting changed (a tap's
+    /// one-scan focus stays otherwise)
+    private var appliedFocusMode: AVCaptureDevice.FocusMode?
 
     private let sessionQueue = DispatchSerialQueue(label: "scamera.capture-session")
     nonisolated var unownedExecutor: UnownedSerialExecutor { sessionQueue.asUnownedSerialExecutor() }
@@ -201,19 +204,9 @@ actor CaptureService {
         let focus = Self.focusMode
         if device.isFocusModeSupported(focus) { device.focusMode = focus }
         else if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+        appliedFocusMode = focus
         if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
-        // «Распознавание лиц» (pref_face_detect_mode): off keeps the focus and the exposure off the faces
-        let faces = StoredPrefs.string("pref_face_detect_mode", "auto") != "off"
-        device.automaticallyAdjustsFaceDrivenAutoFocusEnabled = faces
-        device.automaticallyAdjustsFaceDrivenAutoExposureEnabled = faces
-        if !faces {
-            device.isFaceDrivenAutoFocusEnabled = false
-            device.isFaceDrivenAutoExposureEnabled = false
-        }
-        // «Ночной буст» (pref_low_light_boost, Android CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY): the lens's own boost
-        if device.isLowLightBoostSupported {
-            device.automaticallyEnablesLowLightBoostWhenAvailable = StoredPrefs.bool("pref_low_light_boost", false)
-        }
+        Self.applyFacesAndBoost(device)
         Self.applyMotionCeiling(device)
         device.unlockForConfiguration()
         applyFlash(device)
@@ -245,6 +238,8 @@ actor CaptureService {
         }
         if (try? device.lockForConfiguration()) != nil {
             device.videoZoomFactor = min(max(CGFloat(module.deviceZoom), device.minAvailableVideoZoomFactor), device.maxAvailableVideoZoomFactor)
+            // a preset / format change resets activeMaxExposureDuration: «Спорт»'s shutter ceiling again
+            Self.applyMotionCeiling(device)
             device.unlockForConfiguration()
         }
         photoCapture.updateConfiguration(for: device, fullResolution: fullResolution)
@@ -302,17 +297,78 @@ actor CaptureService {
         StoredPrefs.string("pref_af_mode_key", "4") == "1" ? .autoFocus : .continuousAutoFocus
     }
 
-    /// «Спорт» (MotionMode, P110): the camera's auto exposure keeps the shutter at or under pref_scam_hybrid_mm_shutter (1/250 s;
-    /// "0" no ceiling), the ISO raised instead; outside the mode the lens's own ceiling. Called with the device locked.
+    /// «Распознавание лиц» (pref_face_detect_mode: off keeps the focus and the exposure off the faces) and «Ночной буст»
+    /// (pref_low_light_boost, Android CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY: the lens's own boost). Called with
+    /// the device locked.
+    private static func applyFacesAndBoost(_ device: AVCaptureDevice) {
+        let faces = StoredPrefs.string("pref_face_detect_mode", "auto") != "off"
+        device.automaticallyAdjustsFaceDrivenAutoFocusEnabled = faces
+        device.automaticallyAdjustsFaceDrivenAutoExposureEnabled = faces
+        if !faces {
+            device.isFaceDrivenAutoFocusEnabled = false
+            device.isFaceDrivenAutoExposureEnabled = false
+        }
+        if device.isLowLightBoostSupported {
+            device.automaticallyEnablesLowLightBoostWhenAvailable = StoredPrefs.bool("pref_low_light_boost", false)
+        }
+    }
+
+    /// «Спорт»'s shutter ceiling in ns: 1/pref_scam_hybrid_mm_shutter s (MotionShutter.settingNs; hybridValue: scam_dev
+    /// "hybrid_mm_shutter" first; 0 none). P496 «Движение: учитывать мерцание» (pref_scam_hybrid_mm_flicker, default on) under a set
+    /// «Мерцание ламп» (100 / 120 Hz; «Авто» is the Android camera's measured mains, which the iPhone does not report): the
+    /// ceiling in whole half periods of the mains, at least one (MotionShutter.quantizeDown: an action shutter too) - one lamp pulse
+    /// per frame. 0 outside the mode.
+    static func motionCeilingNs() -> Int64 {
+        guard HybridPlan.motionMode else { return 0 }
+        let denominator = HybridPlan.value("mm_shutter", 250)
+        guard denominator > 0, denominator.isFinite else { return 0 }
+        var ns = HybridPlan.round(1e9 / Double(denominator))
+        let hz = HybridPlan.antibandingHz
+        if HybridPlan.on("mm_flicker", true), hz > 0 {
+            let half = HybridPlan.round(1e9 / Double(hz))
+            if half > 0 { ns = max(half, ns / half * half) }
+        }
+        return ns
+    }
+
+    /// «Спорт» (MotionMode, P110): the camera's auto exposure keeps the shutter at or under the mode's ceiling (motionCeilingNs), the
+    /// ISO raised instead; outside the mode the lens's own ceiling. Called with the device locked.
     private static func applyMotionCeiling(_ device: AVCaptureDevice) {
         guard device.exposureMode != .custom else { return }   // a manual shutter («Про») is its own
-        let denominator = StoredPrefs.bool("pref_motion_mode", false) ? Double(StoredPrefs.string("pref_scam_hybrid_mm_shutter", "250")) ?? 250 : 0
+        let ns = motionCeilingNs()
         let f = device.activeFormat
-        if denominator > 0 {
-            let seconds = min(max(1 / denominator, f.minExposureDuration.seconds), f.maxExposureDuration.seconds)
-            device.activeMaxExposureDuration = CMTime(seconds: seconds, preferredTimescale: 1_000_000)
-        } else {
-            device.activeMaxExposureDuration = .invalid
+        var ceiling = CMTime.invalid
+        if ns > 0 {
+            let seconds = min(max(Double(ns) / 1e9, f.minExposureDuration.seconds), f.maxExposureDuration.seconds)
+            ceiling = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
+        }
+        // AVFoundation raises on a value it does not take in the device's present state: the shot goes on without the ceiling
+        if let reason = SCAMObjC.catchException({ device.activeMaxExposureDuration = ceiling }) {
+            SessionLog.w("Capture", "shutter ceiling not set: \(reason)")
+        }
+    }
+
+    /// The device-level settings as stored now, on the open lens (CameraModel.settingsChanged: a settings change takes effect at
+    /// once, not at the next lens switch): «Режим фокуса» (when it changed, outside a manual focus and a held lock), «Распознавание
+    /// лиц», «Ночной буст» and «Спорт»'s shutter ceiling.
+    func applyStoredPrefs() {
+        guard let device = activeInput?.device else { return }
+        do {
+            try device.lockForConfiguration()
+            let focus = Self.focusMode
+            if focus != appliedFocusMode, !manual.focusOn, !aeAfLocked {
+                if device.isFocusModeSupported(focus) { device.focusMode = focus }
+                appliedFocusMode = focus
+            }
+            Self.applyFacesAndBoost(device)
+            Self.applyMotionCeiling(device)
+            device.unlockForConfiguration()
+            SessionLog.i("Capture", "stored settings applied: focus \(Self.focusMode == .autoFocus ? "auto" : "continuous"), "
+                         + "faces \(device.automaticallyAdjustsFaceDrivenAutoFocusEnabled), low-light boost "
+                         + "\(device.isLowLightBoostSupported && device.automaticallyEnablesLowLightBoostWhenAvailable), "
+                         + "sport \(HybridPlan.motionMode), shutter ceiling \(device.activeMaxExposureDuration.seconds)")
+        } catch {
+            SessionLog.w("Capture", "stored settings: \(error.localizedDescription)")
         }
     }
 
@@ -323,7 +379,7 @@ actor CaptureService {
             try device.lockForConfiguration()
             Self.applyMotionCeiling(device)
             device.unlockForConfiguration()
-            SessionLog.i("Capture", "camera mode: sport \(StoredPrefs.bool("pref_motion_mode", false)), shutter ceiling \(device.activeMaxExposureDuration.seconds)")
+            SessionLog.i("Capture", "camera mode: sport \(HybridPlan.motionMode), shutter ceiling \(device.activeMaxExposureDuration.seconds)")
         } catch {
             SessionLog.w("Capture", "camera mode: \(error.localizedDescription)")
         }
@@ -425,6 +481,7 @@ actor CaptureService {
                 device.setFocusModeLocked(lensPosition: Float(m.focus))
             } else if manual.focusOn, device.isFocusModeSupported(Self.focusMode) {
                 device.focusMode = Self.focusMode
+                appliedFocusMode = Self.focusMode
             }
             if m.wbOn, device.isWhiteBalanceModeSupported(.locked) {
                 var gains = device.deviceWhiteBalanceGains(for: AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: Float(m.kelvin), tint: 0))

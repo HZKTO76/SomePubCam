@@ -10,14 +10,20 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 /// P665 «Проявка» (Android EditDevelop + DevelopRun): a DNG of ours developed by the camera's own post pipeline (Engine/post/
-/// DevelopRun.hpp on ScamGL) with the shot's settings (the DNG's develop record) and the ones changed in the editor - the preview
+/// DevelopRun.hpp on ScamGL) with the shot's settings (the DNG's develop record, P696: else one made from its tags,
+/// Engine/post/DevelopDefaults.hpp) and the ones changed in the editor - the preview
 /// (the DNG binned to 2x2 cells of at most 2048 px) and the copy's full-size develop (Malvar-He-Cutler, the last one kept). Each
 /// develop waits for a shot being processed (one shot or develop at a time). Not thread safe: one queue per developer.
 @interface SCAMDevelop : NSObject
-/// The developer of a DNG carrying the camera's develop record (a Bayer DNG); nil for any other file.
-- (nullable instancetype)initWithDNG:(NSData *)dng shaders:(NSString *)shaders NS_SWIFT_NAME(init(dng:shaders:));
-/// The record in a line for the log (build, headroom, maps).
+/// The developer of a DNG carrying the camera's develop record (a Bayer DNG); P696: else of a Bayer DNG the developer can take
+/// (ours by its Software, or any with its colour matrix and as-shot white) with a record made from its tags and `settings` (the
+/// camera's settings now: PostSettings.json()); nil for any other file.
+- (nullable instancetype)initWithDNG:(NSData *)dng shaders:(NSString *)shaders settings:(NSString *)settings
+    NS_SWIFT_NAME(init(dng:shaders:settings:));
+/// The record in a line for the log (build, headroom, maps; or where a record from the DNG's tags came from).
 @property (nonatomic, readonly) NSString *summary;
+/// P696: the record was made from the DNG's tags (no record of the shot in it): the settings are the camera's now.
+@property (nonatomic, readonly) BOOL fromTags;
 /// The shot's settings as the develop reads them (DevelopRun.shotValues): key -> NSNumber (a switch: boolean), NSString or an
 /// array of strings, as the camera stored them.
 @property (nonatomic, readonly) NSDictionary<NSString *, id> *shotValues;

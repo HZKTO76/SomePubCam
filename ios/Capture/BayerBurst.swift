@@ -102,7 +102,10 @@ extension PhotoCapture {
     /// lens's ranges as SENSOR_INFO_EXPOSURE_TIME_RANGE / SENSITIVITY_RANGE; nil in «Движение», with «HDR кадры» off or «Oldstyle».
     private func extrasPlan(for burst: BayerBurst, device: AVCaptureDevice) -> HybridPlan.Plan? {
         guard !HybridPlan.oneExposure, let newest = burst.frames.max(by: { $0.timestampNs < $1.timestampNs }) else { return nil }
-        let levels = Self.bufferLevels(DngInfo(dng: burst.dng))
+        var levels = Self.bufferLevels(DngInfo(dng: burst.dng))
+        // P558: the frame's clip plateau under the declared white is the white (the clip share is counted against it)
+        levels.white = RawWhite.of(levels.white, black: levels.black,
+                                   histogram: RawWhite.histogram(newest.raw, width: burst.width, height: burst.height)).white
         let measure = FrameMeasure.shares(newest.raw, width: burst.width, height: burst.height, black: levels.black, white: levels.white)
         let format = device.activeFormat
         let tLow = Int64((format.minExposureDuration.seconds * 1e9).rounded(.up)), tHigh = Int64((format.maxExposureDuration.seconds * 1e9).rounded(.down))
@@ -212,7 +215,10 @@ extension PhotoCapture {
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         let w = CVPixelBufferGetWidth(buffer) & ~1, h = CVPixelBufferGetHeight(buffer) & ~1, row = CVPixelBufferGetBytesPerRow(buffer)
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
-        let levels = Self.bufferLevels(DngInfo(dng: dng))
+        var levels = Self.bufferLevels(DngInfo(dng: dng))
+        // P558: a frame clipping under the declared white is at its white there (else a blown sky reads as headroom)
+        levels.white = RawWhite.of(levels.white, black: levels.black,
+                                   histogram: RawWhite.histogram(base, rowBytes: row, width: w, height: h)).white
         let share = HybridPlan.bentoMode > 0 ? 0.005 : 0.001
         let tail = EttrMeter.tail(base, width: w, height: h, rowBytes: row, black: levels.black, white: levels.white, share: share)
         let format = device.activeFormat

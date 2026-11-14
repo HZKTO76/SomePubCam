@@ -32,27 +32,35 @@ static NSError *developError(const std::string &what) {
     NSData *_dng;
     std::string _shaders;
     scam_post::DevelopRecord _record;
-    bool _gainMaps;
+    /// P706: the record is the shot's (its Parameters carry the lens shading the pipeline applies) - the DNG's OpcodeList2
+    /// GainMaps stay out of the decode; false: made from the DNG's tags (P696), the maps out only when they are the shading map
+    bool _fromRecord;
+    /// the DNG's OpcodeList1 GainMaps applied (the record path: as before P706, out when the shot's Parameters carry the map)
+    bool _list1Maps;
+    /// P696: a record from the tags carries the DNG's OpcodeList2 map as the shot's lens shading (else a flat one)
+    bool _tagsShading;
     std::vector<float> _previewRgb;
     int _previewW, _previewH, _dngW, _dngH;
     SCAMDevelopPicture *_full;
     std::string _fullKey;
 }
 
-- (nullable instancetype)initWithDNG:(NSData *)dng shaders:(NSString *)shaders {
+- (nullable instancetype)initWithDNG:(NSData *)dng shaders:(NSString *)shaders settings:(NSString *)settings {
     if (!(self = [super init])) return nil;
     const uint8_t *p = static_cast<const uint8_t *>(dng.bytes);
     std::optional<scam_post::DevelopRecord> r = scam_post::DevelopRecord::read(p, dng.length, scamDevelopCodec());
-    if (!r) return nil;
+    if (!r) return [self loadFromTags:dng shaders:shaders settings:settings] ? self : nil;
     try {
         const scam_edit::DngRaw::Info info = scam_edit::DngRaw::probe(p, dng.length);
         if (info.kind != scam_edit::DngRaw::KIND_BAYER || info.cell != 1) return nil;
         const auto size = info.size(1);
         _dngW = size[0];
         _dngH = size[1];
-        // the DNG's OpcodeList2 lens shading stays out when the shot's Parameters carry the map (the pipeline applies it, ScamRgb)
+        // the DNG's OpcodeList2 lens shading stays out (P706: the pipeline applies the shot's map); OpcodeList1's maps (read as
+        // OpcodeList2 before P706) stay out when the shot's Parameters carry the map, as before
         const scam_post::Parameters shot = scam_post::Parameters::fromJson(r->meta["params"]);
-        _gainMaps = !(shot.hasGainMap && shot.gainMap);
+        _fromRecord = true;
+        _list1Maps = !(shot.hasGainMap && shot.gainMap);
     } catch (const std::exception &) {
         return nil;
     }
@@ -62,7 +70,49 @@ static NSError *developError(const std::string &what) {
     return self;
 }
 
+/// P696 EditDevelop.fromTags: a DNG without the develop record - its record made from the DNG's own tags and the camera's settings
+/// now (DevelopDefaults::record) - or NO when the DNG is not one the developer can take (refusal) or cannot be read.
+- (BOOL)loadFromTags:(NSData *)dng shaders:(NSString *)shaders settings:(NSString *)settings {
+    const uint8_t *p = static_cast<const uint8_t *>(dng.bytes);
+    try {
+        const scam_edit::DngRaw::Info info = scam_edit::DngRaw::probe(p, dng.length);
+        if (const std::optional<std::string> why = scam_edit::develop::refusal(info)) {
+            NSLog(@"SCAMDevelop no develop record, and no develop from its tags (%s)", why->c_str());
+            return NO;
+        }
+        const scam_post::Settings now = scam_post::Settings::fromJson(scam_post::Json::parse(settings.UTF8String ?: "{}"));
+        const long long build = [[NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] longLongValue];
+        const scam_post::DevelopDefaults::Facts f = scam_edit::develop::facts(info);
+        _record = scam_post::DevelopDefaults::record(f, now, build);
+        _dngW = f.width;
+        _dngH = f.height;
+        // P706: the DNG's OpcodeList2 maps stay out when they are the Camera2 map the record's Parameters carry
+        _fromRecord = false;
+        _list1Maps = true;
+        _tagsShading = f.shadingMap.has_value();
+        NSLog(@"SCAMDevelop no develop record (%s): developed from its tags, headroom %.3g, the camera's settings now",
+              info.software.empty() ? "no Software" : info.software.c_str(), _record.headroom());
+    } catch (const std::exception &e) {
+        NSLog(@"SCAMDevelop no develop from its tags: %s", e.what());
+        return NO;
+    }
+    _dng = dng;
+    _shaders = shaders.UTF8String;
+    return YES;
+}
+
+- (BOOL)fromTags {
+    return scam_post::DevelopDefaults::fromTags(&_record);
+}
+
 - (NSString *)summary {
+    if (self.fromTags) {
+        NSString *software = [NSString stringWithUTF8String:_record.meta["software"].text().c_str()] ?: @"";
+        return [NSString stringWithFormat:@"no develop record (%@): developed from its tags, headroom %.3g, the camera's settings now, "
+                                          @"lens shading %@, DNG %dx%d",
+                                          software.length ? software : @"no Software", _record.headroom(),
+                                          _tagsShading ? @"its OpcodeList2 map" : @"flat", _dngW, _dngH];
+    }
     return [NSString stringWithFormat:@"develop record: build %lld, headroom %.3g, maps: clip %d, frames %d, highlight mask %d, DNG %dx%d",
                                       (long long)scam_post::DevelopRecord::numberOf(_record.meta["build"], 0.f), _record.headroom(), !_record.clipFlags.empty(),
                                       !_record.frames.empty(), !_record.hlMask.empty(), _dngW, _dngH];
@@ -152,7 +202,7 @@ static NSError *developError(const std::string &what) {
         if (_previewRgb.empty()) {
             const uint8_t *p = static_cast<const uint8_t *>(_dng.bytes);
             const int bin = scam_edit::develop::binFor(_dngW, _dngH);
-            const scam_edit::DngRaw::Image img = scam_edit::DngRaw::decodeLinear(p, _dng.length, bin, _gainMaps);
+            const scam_edit::DngRaw::Image img = scam_edit::DngRaw::decodeForDevelop(p, _dng.length, bin, _fromRecord, _list1Maps);
             if (img.info.kind != scam_edit::DngRaw::KIND_BAYER || img.info.cell != 1 || img.linear.empty())
                 throw std::runtime_error("develop: not a Bayer DNG");
             _previewW = img.width / 2;
@@ -179,7 +229,7 @@ static NSError *developError(const std::string &what) {
         bool half = false;
         {
             const uint8_t *p = static_cast<const uint8_t *>(_dng.bytes);
-            const scam_edit::DngRaw::Image img = scam_edit::DngRaw::decodeLinear(p, _dng.length, 1, _gainMaps);
+            const scam_edit::DngRaw::Image img = scam_edit::DngRaw::decodeForDevelop(p, _dng.length, 1, _fromRecord, _list1Maps);
             if (img.info.kind != scam_edit::DngRaw::KIND_BAYER || img.info.cell != 1 || img.linear.empty())
                 throw std::runtime_error("develop: not a Bayer DNG");
             w = img.width;

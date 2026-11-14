@@ -35,7 +35,8 @@ enum SettingsSearch {
         var developerPath: String?
         func collect(_ group: SettingsNode, page: String, path: String, otherPath: String) {
             for p in group.children ?? [] {
-                if let key = p.key, availability.hidden(key) || SettingsExtras.codeHidden.contains(key) { continue }
+                // a row hidden here, or a page / group none of whose rows shows (SettingsScreen.shows: it is not drawn either)
+                if !SettingsScreen.shows(p, availability) { continue }
                 let title = catalog.text(p.title) ?? "", otherTitle = catalog.otherText(p.title) ?? ""
                 if let key = p.key, !title.isEmpty {
                     let help = [catalog.helpText(key), catalog.helpText(key, otherLanguage: true)].compactMap { $0 }.joined(separator: " ")
@@ -54,7 +55,7 @@ enum SettingsSearch {
         collect(root, page: root.key ?? "prefscreen", path: "", otherPath: "")
         // the developer page's rows (DeveloperPreferences.populate builds them before the index on Android)
         if let developerPath {
-            for k in catalog.devKeys {
+            for k in DeveloperPage.shownKeys {
                 out.append(Entry(key: DeveloperPage.rowID(k.k), page: DeveloperPage.screen, title: k.k, path: developerPath + " › " + k.group,
                                  summary: k.text, icon: nil, other: k.otherText))
             }

@@ -159,20 +159,30 @@ enum ShadeCatalog {
         return nodes?[key]
     }
 
-    /// Every pinnable row of the settings tree (the catalogue), in the tree's order with its page's title
+    /// The keys the shade may show: those with an entry that SettingsAvailability does not hide on this phone (a row the iPhone
+    /// never serves, a row of another choice); the stored pins keep the others
+    static func offered(_ keys: [String]) -> [String] {
+        let availability = SettingsAvailability(SettingsStore.shared.values)
+        return keys.filter { entry($0) != nil && !availability.hidden($0) }
+    }
+
+    /// Every pinnable row of the settings tree (the catalogue), in the tree's order with its page's title; rows, pages and groups
+    /// SettingsAvailability hides are left out
     static func all() -> [(page: String, entries: [ShadeEntry])] {
         var titles: [String] = []
         var byTitle: [String: [ShadeEntry]] = [:]
         var seen = Set<String>()
         let catalog = SettingsCatalog.shared
+        let availability = SettingsAvailability(SettingsStore.shared.values)
         func walk(_ n: SettingsNode, page: String) {
             for c in n.children ?? [] {
-                if let k = c.key, ["switch", "list", "slider"].contains(c.type), seen.insert(k).inserted, let e = entry(k) {
+                if let k = c.key, ["switch", "list", "slider"].contains(c.type), !availability.hidden(k), seen.insert(k).inserted,
+                   let e = entry(k) {
                     if byTitle[page] == nil { titles.append(page) }
                     byTitle[page, default: []].append(e)
                 }
             }
-            for c in n.children ?? [] where c.type == "screen" || c.type == "category" {
+            for c in n.children ?? [] where (c.type == "screen" || c.type == "category") && !(c.key.map { availability.hidden($0) } ?? false) {
                 walk(c, page: c.type == "screen" ? (catalog.text(c.title) ?? page) : page)
             }
         }
@@ -322,11 +332,31 @@ enum ShadeCatalog {
         written(e, camera: camera)
     }
 
-    /// A value written from the shade: its toast («Сетка: 3×3»), the camera's own reads (the mode's ceiling, the faces)
+    /// A value written from the shade: its toast («Сетка: 3×3»), the camera's own reads (the mode's ceiling; the device-level
+    /// settings: focus, faces, low light, Sport / Oldstyle)
     static func written(_ e: ShadeEntry, camera: CameraModel) {
         MessageCenter.shared.info(String(format: L("a.shade_toast_value"), e.title, valueText(e, camera: camera, long: true)))
         ShadeModel.shared.touch()
-        if e.key == "pref_motion_mode" { Task { await camera.modeChanged() } }
+        let mode = e.key == "pref_motion_mode"
+        Task {
+            if mode { await camera.modeChanged() }
+            await camera.settingsChanged()
+        }
+    }
+}
+
+/// ShadeStyle.sheetAlpha / glassAlpha (P495 / P583): «Прозрачность шторки» (pref_shade_transparency, 0..80 %) makes the sheet
+/// 1 - t / 100 opaque; the glass panel is 10 points more see-through (at least 10 % opaque), an opaque sheet stays opaque
+@MainActor
+enum ShadeGlass {
+    static func sheetAlpha(_ values: [String: Any]) -> Double {
+        let t = PrefValue.number(values[ShadeTransparencyCard.key], Double(ShadeTransparencyCard.defaultValue)).rounded()
+        return 1 - Swift.max(0, Swift.min(80, t)) / 100
+    }
+
+    static func glassAlpha(_ values: [String: Any]) -> Double {
+        let a = sheetAlpha(values)
+        return a >= 1 ? 1 : Swift.max(0.1, a - 0.1)
     }
 }
 
@@ -370,7 +400,9 @@ struct QuickShade: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity)
         .frame(height: model.level == .full ? maxHeight : nil, alignment: .top)
-        .background(UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28).fill(CameraStyle.control.opacity(0.96)))
+        // «Прозрачность шторки»: the glass's alpha (at 0 % the sheet's 0.96 as before)
+        .background(UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28)
+            .fill(CameraStyle.control.opacity(Swift.min(0.96, ShadeGlass.glassAlpha(SettingsStore.shared.values)))))
         .overlay(UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28).stroke(CameraStyle.hairline, lineWidth: 0.5))
         .offset(y: max(0, dragY))
         .padding(.horizontal, 8)
@@ -449,7 +481,7 @@ struct QuickShade: View {
     // MARK: tiles
 
     private var tiles: some View {
-        let keys = model.pinned
+        let keys = ShadeCatalog.offered(model.pinned)
         let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 4)
         return Group {
             if model.editing || model.level == .full {
@@ -604,9 +636,11 @@ struct QuickShade: View {
     private var fullRows: some View {
         let pinned = model.pinned
         let grouped = Set(ShadeModel.groups.flatMap { $0.1 })
-        let extra = pinned.filter { !grouped.contains($0) }
+        let extra = ShadeCatalog.offered(pinned.filter { !grouped.contains($0) })
+        // the groups' rows the iPhone offers (a group left empty is not shown)
+        let groups = ShadeModel.groups.map { ($0.0, ShadeCatalog.offered($0.1)) }.filter { !$0.1.isEmpty }
         return VStack(alignment: .leading, spacing: 12) {
-            ForEach(ShadeModel.groups, id: \.0) { g in
+            ForEach(groups, id: \.0) { g in
                 group(L(g.0), keys: g.1)
             }
             if !extra.isEmpty { group(L("a.shade_group_extra"), keys: extra) }
@@ -655,6 +689,7 @@ struct QuickShade: View {
                 Toggle("", isOn: Binding(get: { SettingsStore.shared.bool(e.key, e.def == "true") },
                                          set: { SettingsStore.shared.set(e.key, $0); ShadeCatalog.written(e, camera: camera) }))
                     .labelsHidden().tint(CameraStyle.accent)
+                    .disabled(reason != nil)
             } else {
                 Text(ShadeCatalog.valueText(e, camera: camera)).font(.app(13, 600)).foregroundStyle(CameraStyle.accent)
                     .lineLimit(1).padding(.horizontal, 10).frame(height: 28)
@@ -820,7 +855,10 @@ struct ConfigMenuSheet: View {
         if let m = library.message { MessageCenter.shared.info(m) }
         ShadeModel.shared.touch()
         LutTrayModel.shared.touch()
-        Task { await camera.modeChanged() }
+        Task {
+            await camera.modeChanged()
+            await camera.settingsChanged()
+        }
         dismiss()
     }
 }

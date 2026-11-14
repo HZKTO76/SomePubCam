@@ -29,6 +29,13 @@
 
 namespace scam_post {
 
+/// The app's «Сохранять этапы обработки» (ScamDiagnostics.gpu's place, Bridge/ScamShot.mm): when set, runShot hands every post
+/// node's output to it (PostPipeline.afterNode); empty by default - no hook, no cost.
+inline std::function<void(const std::string&, const Texture&)>& shotStageDump() {
+    static std::function<void(const std::string&, const Texture&)> f;
+    return f;
+}
+
 struct ShotOutput {
     PostOutput photo;
     /// Ultra HDR on (pref_ultrahdr_key): the gain map of the photo (GainMapComputer.Result: RGBA8 rows as the photo's, R = G = B;
@@ -196,12 +203,16 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     const ShotFacts facts = readShotFacts(nchPath + ".json");
     // the frames as captured (after the «16:9» cut of the capture)
     int frameW = 0, frameH = 0, block = 1, captured = 0;
+    float burstWhite = 0.f;
+    std::array<float, 4> burstBlack{};
     {
         NchFile nch(nchPath);
         frameW = nch.width();
         frameH = nch.height();
         block = int(nch.h[14]);
         captured = nch.frames();
+        std::memcpy(&burstWhite, &nch.h[6], 4);
+        std::memcpy(burstBlack.data(), &nch.h[7], 16);
     }
     // P576 (SabreCrop.cut, before the merge and its frame rules): the zoom's window of the whole frames
     const float zoom = facts.zoom > 1.f && std::isfinite(facts.zoom) ? facts.zoom : 1.f;
@@ -278,7 +289,13 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     ShotColour::reCalcColor(colour, dng.colour, [](const std::string&) {});
     // P366: the base frame's EV100 (the merge's base; without the sidecar the DNG's frame)
     const float sceneEv = picked ? picked->sceneEv : HybridTuning::sceneEv100(dng.exposure, std::max(1, dng.iso), dng.aperture);
-    const std::string tuning = HybridTuning::text(s) + HybridTuning::burstOverride(sceneEv, *colour.whitePoint, plan.strictTwoX);
+    std::string tuning = HybridTuning::text(s) + HybridTuning::burstOverride(sceneEv, *colour.whitePoint, plan.strictTwoX);
+#if defined(__APPLE__)
+    // iOS: the viewfinder draws on a Metal queue of its own, not behind the merge in a shared ring (P662's reason): the «Качество»
+    // merge hands its dispatches over per pass (gpuPace 0: the same commands, barriers and order, the output bit for bit) instead
+    // of a waited submission per dispatch; scam_dev hybrid_gpu_pace still decides when set
+    if (s.hybridValue("gpu_pace", -1.f) < 0.f) tuning += "gpuPace 0\n";
+#endif
     const bool rgbHalf = plan.rgbHalf;
     const bool highlightMask = s.scamDevSwitch("why_hl_dezipper", true);
     { std::ofstream(jobDir + "/hybrid_tuning.txt") << tuning; }
@@ -302,6 +319,7 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     GLProg prog(shaders);
     PostPipeline p;
     p.glProg = &prog;
+    if (shotStageDump()) p.afterNode = shotStageDump();
     // P46 «Цветовое пространство» (ScamProcessor, OutputColour.Space.parse): Display P3 renders the photo in P3 primaries; the app
     // writes the file with the Display P3 profile (PhotoEncoding). sRGB (the default, anything else stored) as before
     {
@@ -316,6 +334,12 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
                                  + std::to_string(plan.outWidth) + "x" + std::to_string(plan.outHeight));
     p.mParameters = shotParameters(dng, merged.width, merged.height, log);
     Parameters& par = p.mParameters;
+    // the shot's levels are the burst's (Android: one Parameters for the burst and the post): the frames' units with «Чёрный из
+    // данных» and P558's clip plateau - the merged DNG's mosaic is coded against them (hybridWriteMergedDng), so are its tags
+    if (burstWhite > 0.f && std::isfinite(burstWhite)) {
+        par.whiteLevel = int(std::lround(burstWhite));
+        par.blackLevel = std::vector<float>(burstBlack.begin(), burstBlack.end());
+    }
     // P118 «16:9»: the frames are the capture's centred 16:9 rows (BayerBurst), the DNG's map covers the whole frame: its rows of
     // the crop only (Parameters.fillFromFrame; the full frame's rows as the capture recorded them, else from the DNG's size
     // as Android takes them from the active array)

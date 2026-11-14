@@ -124,6 +124,11 @@ struct SettingsAvailability {
         // what the iPhone / iPad cannot do at all is not shown (Android greys a row only for a state that can change)
         if iPhoneReason(key) != nil { return true }
         if key.hasPrefix("pref_scam_hybrid_mosaic_") && !mosaicStreams { return true }
+        // the Quad / Tetra white balance and the native mosaic kernel's highlight frames: no mosaic stream here
+        if !mosaicStreams && (key == "pref_mosaic_wb_corrections" || (bentoBlend && key == "pref_scam_hybrid_bento_sigma")) { return true }
+        // «Склейка YUV» is a vendor stream route the iPhone has none of
+        if !yuvMerge && (key.hasPrefix("pref_scam_hybrid_yuv_") || key == "scam_hybrid_yuv_category") { return true }
+        if Self.iPhoneNever.contains(key) { return true }
         if !xiaomiSmoothZoom && key == "pref_xiaomi_smooth_zoom" { return true }
         if !fullResHwRemosaic && key == "pref_fullres_hw_remosaic" { return true }
         if !fullRes50 && (key == "pref_scam_hybrid_fullres50_frames" || key == "pref_scam_hybrid_fullres50_zsl") { return true }
@@ -141,6 +146,14 @@ struct SettingsAvailability {
         default: return false
         }
     }
+
+    /// Rows nothing on the iPhone reads: the Android colour source (the iOS pipeline takes the DNG's matrices), the CRE alignment
+    /// source of the Android worker, the Oldstyle viewfinder tone (the iPhone's viewfinder is the system preview)
+    private static let iPhoneNever: Set<String> = [
+        "pref_color_method_key", "pref_scam_hybrid_cre_source",
+        "oldstyle_viewfinder_category", "pref_scam_hybrid_oldstyle_vf_tone", "pref_scam_hybrid_oldstyle_vf_ev",
+        "pref_scam_hybrid_oldstyle_vf_match", "pref_scam_hybrid_oldstyle_vf_smooth",
+    ]
 
     private var toneV2: Bool { text("pref_scam_hybrid_tone_version", "v1").trimmingCharacters(in: .whitespaces) == "v2" }
 
@@ -505,7 +518,6 @@ struct SettingsAvailability {
             return L("set.na.spoof")
         case "fringe_net_screen": return L("set.na.fringe_net")
         case "expert_module_sensor", "lens_isp_category", "expert_sensor_screen": return L("set.na.vendor_keys")
-        case "scam_recent_messages": return L("set.na.messages")
         // rows that would show as active but have nothing to act on here
         case "pref_webp_quality", "pref_webp_lossless", "pref_avif_quality", "pref_avif_lossless", "pref_avif_depth", "pref_avif_chroma",
              "pref_avif_speed":
@@ -522,7 +534,8 @@ struct SettingsAvailability {
         }
     }
 
-    /// A line under a row that still acts (not greyed): the fringe net's choice, which the iPhone cannot run.
+    /// A line under a row that still acts (not greyed): what the row's value does differently on the iPhone (the fringe net's
+    /// choice it cannot run, the focus, face and flicker choices AVFoundation lacks).
     func note(_ key: String) -> String? {
         if key == "pref_scam_hybrid_fringe_method" && text(key, "classic").trimmingCharacters(in: .whitespaces) == "neural" {
             return L("set.note.fringe_neural")
@@ -534,6 +547,19 @@ struct SettingsAvailability {
         if key == "pref_photo_format" && ["webp", "avif"].contains(text(key, "jpeg").trimmingCharacters(in: .whitespaces).lowercased()) {
             return L("set.na.webp_avif")
         }
+        // the iPhone's focus and exposure controls (AVCaptureDevice) have fewer choices than Camera2's
+        if key == "pref_face_detect_mode" && !["off", "auto"].contains(text(key, "auto").trimmingCharacters(in: .whitespaces)) {
+            return L("set.note.faces")
+        }
+        if key == "pref_af_mode_key" && text(key, "4").trimmingCharacters(in: .whitespaces) == "3" { return L("set.note.af_video") }
+        if key == "pref_antibanding_hz_key" {
+            switch text(key, "-1").trimmingCharacters(in: .whitespaces) {
+            case "-1": return L("set.note.flicker_auto")
+            case "100", "120": return L("set.note.flicker_hz")
+            default: break
+            }
+        }
+        if key == "pref_low_light_boost" { return L("set.note.low_light") }
         return nil
     }
 }

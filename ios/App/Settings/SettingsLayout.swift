@@ -217,7 +217,7 @@ struct SettingsLayoutPage: View {
     /// SettingsLayoutTree.hidden: rows hidden on this phone, rows without a title (the notes stay after the row they follow)
     private func hidden(_ id: String) -> Bool {
         guard let n = snap?.items[id] else { return true }
-        if let key = n.key, SettingsAvailability(store.values).hidden(key) || SettingsExtras.codeHidden.contains(key) { return true }
+        if !SettingsScreen.shows(n, SettingsAvailability(store.values)) { return true }
         return (catalog.text(n.title) ?? "").isEmpty
     }
 

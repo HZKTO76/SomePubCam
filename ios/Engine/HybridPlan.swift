@@ -35,7 +35,30 @@ enum HybridPlan {
     // MARK: the settings (PreferenceKeys.hybridValue / hybridSwitch: scam_dev "hybrid_<key>" first, then pref_scam_hybrid_<key>)
 
     private static var prefs: [String: Any] { UserDefaults.standard.dictionary(forKey: PostSettings.prefsKey) ?? [:] }
-    private static var dev: [String: Double] { UserDefaults.standard.dictionary(forKey: PostSettings.devKey) as? [String: Double] ?? [:] }
+    /// The developer values as PostSettings.json hands them to the pipeline: the app's own (scam.dev), then Documents/scam_dev.txt
+    /// over them (ScamDevFile: Android's file, its lines win) - the capture's plan reads the lines the processing reads
+    static var dev: [String: Double] {
+        var d = UserDefaults.standard.dictionary(forKey: PostSettings.devKey) as? [String: Double] ?? [:]
+        for (key, value) in devFile.values() { d[key] = value }
+        return d
+    }
+
+    /// scam_dev.txt read at most once a second (a plan reads a dozen keys; PreferenceKeys.refreshScamDev re-reads it on a period)
+    private static let devFile = DevFileCache()
+    private final class DevFileCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var time = Date.distantPast
+        private var cached: [String: Double] = [:]
+        func values() -> [String: Double] {
+            lock.lock()
+            defer { lock.unlock() }
+            if Date().timeIntervalSince(time) > 1 {
+                cached = ScamDevFile.values()
+                time = Date()
+            }
+            return cached
+        }
+    }
 
     static var motionMode: Bool { StoredPrefs.bool("pref_motion_mode", false) }
     /// PreferenceKeys.hdrFrames (scam_dev "hdr_frames" overrides «HDR кадры»)
@@ -43,9 +66,23 @@ enum HybridPlan {
     /// HybridPlan.oneExposure: «Движение», «HDR кадры» off, «Oldstyle»
     static var oneExposure: Bool { motionMode || !hdrFrames || StoredPrefs.bool("pref_oldstyle_mode", false) }
 
+    /// MotionMode.DEFAULTS: the hybrid keys «Спорт» replaces with its own pref_scam_hybrid_mm_<key> and their defaults
+    static let motionDefaults: [String: Float] = [
+        "zsl_frames": 8, "shasta": 0, "bento": 0, "boost_value": 10, "motion_threshold": 0.5, "motion_boost": 1, "widen_below": 0,
+        "why_dn_motion_revert": 0.5,
+    ]
+
+    /// PreferenceKeys.hybridValue: scam_dev "hybrid_<key>", then in «Спорт» the mode's own value of a key it replaces
+    /// (pref_scam_hybrid_mm_<key>, the mode's default), then pref_scam_hybrid_<key>
     static func value(_ key: String, _ fallback: Float) -> Float {
         if oneExposure && (key == "bento" || key == "shasta") { return 0 }
         if let d = dev["hybrid_" + key] { return Float(d) }
+        if motionMode, let d = motionDefaults[key] { return stored("mm_" + key, d) }
+        return stored(key, fallback)
+    }
+
+    /// The stored pref_scam_hybrid_<key> as a number (absent or unreadable: the fallback)
+    private static func stored(_ key: String, _ fallback: Float) -> Float {
         switch prefs["pref_scam_hybrid_" + key] {
         case let s as String: return Float(s.trimmingCharacters(in: .whitespaces)) ?? fallback
         case let n as NSNumber: return n.floatValue
@@ -56,11 +93,36 @@ enum HybridPlan {
     static func on(_ key: String, _ fallback: Bool) -> Bool {
         if oneExposure && (key == "bento" || key == "shasta") { return false }
         if let d = dev["hybrid_" + key] { return d > 0 }
-        switch prefs["pref_scam_hybrid_" + key] {
+        let k = motionMode && motionDefaults[key] != nil ? "mm_" + key : key
+        let byMode = k != key ? (motionDefaults[key] ?? 0) > 0 : fallback
+        switch prefs["pref_scam_hybrid_" + k] {
         case let n as NSNumber: return n.boolValue
         case let s as String: return s == "true" || s == "1"
-        default: return fallback
+        default: return byMode
         }
+    }
+
+    /// PreferenceKeys.getHybridZslFrames: the N frames of an SHDR shot. «Oldstyle» (not with «Спорт») takes its «Кадров в серии»
+    /// (pref_scam_hybrid_oldstyle_burst_frames 0..40; 0: the photo mode's count) within 4 .. 65; else hybridValue("zsl_frames"):
+    /// scam_dev "hybrid_zsl_frames" first, then «Спорт»'s pref_scam_hybrid_mm_zsl_frames (8), then pref_scam_hybrid_zsl_frames (20),
+    /// the stored ones within their rows' 4 .. 65 (SettingsNumericRules). A scam_dev line is not clamped on Android; the iPhone's
+    /// burst keeps it within 1 .. 65.
+    static var zslFrames: Int {
+        let d = dev
+        if StoredPrefs.bool("pref_oldstyle_mode", false) && !motionMode {
+            let n = d["hybrid_oldstyle_burst_frames"].map { round(Float($0)) } ?? min(40, max(0, round(stored("oldstyle_burst_frames", 0))))
+            if n > 0 { return max(4, min(65, n)) }
+        }
+        if let v = d["hybrid_zsl_frames"] { return max(1, min(65, round(Float(v)))) }
+        return max(4, min(65, round(value("zsl_frames", 20))))
+    }
+
+    /// MotionMode.framesForQueue (P113): the frames a «Спорт» shot takes while `pending` earlier shots wait for their merge - all
+    /// it wants with an empty queue, at most 4 behind 2-3 shots, 2 behind more
+    static func framesForQueue(_ wanted: Int, pending: Int) -> Int {
+        if pending >= 4 { return max(1, min(wanted, 2)) }
+        if pending >= 2 { return max(1, min(wanted, 4)) }
+        return wanted
     }
 
     /// Math.round(float) / Math.round(double)

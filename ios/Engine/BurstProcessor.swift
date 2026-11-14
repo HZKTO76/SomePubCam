@@ -169,6 +169,20 @@ enum BurstProcessor {
             info.black = info.black.map { $0 * k }
             info.white *= k
         }
+        // P558 (Parameters.clipWhiteToPlateau): the reference frame's clip plateau under the declared white is the white - else
+        // the blown areas never reach it (no clip flags, the fast merge's highlight path and its ultrashort frames off)
+        if let first = frames.first {
+            let h = RawWhite.histogram(first.raw, width: burst.width, height: burst.height)
+            let (white, plateau) = RawWhite.of(info.white, black: info.black, histogram: h)
+            if white != info.white {
+                log.append("RAW white level from data: the frame clips at \(plateau) under the white \(Int(info.white)) (P558)")
+                info.white = white
+            } else {
+                var top = 0, seen = 0
+                for v in stride(from: h.values.count - 1, to: 0, by: -1) { seen += h.values[v]; if seen >= 4 { top = v; break } }
+                log.append("RAW white level: \(Int(info.white)) kept (top sample \(top), plateau \(plateau))")
+            }
+        }
         // «Чёрный из данных» (pref_raw_black_from_data, Parameters.refineBlackLevel / applyBlackFloor): the darkest 64 x 64 block
         // mean of the reference frame below the declared black (by more than ~1 DN of a 10-bit range) is the black
         if PostSettings.bool("pref_raw_black_from_data", true), let floor = Self.blackFloor(burst, black: info.black),
@@ -243,6 +257,8 @@ enum BurstProcessor {
             log.append("burst streamed to the flash during the capture")
         } else {
             burst.stream?.discard()
+            // a new file, not the old one rewritten in place: a series kept by «Сохранять RAW-серию» is a link to it (RawBurstKeep)
+            try? FileManager.default.removeItem(at: nch)
             try NchWriter.write(to: nch, width: burst.width, height: burst.height, cfa: burst.cfa, white: info.white, black: info.black,
                                 frames: frames)
         }
@@ -257,6 +273,12 @@ enum BurstProcessor {
                                                                   "width": burst.width, "height": burst.height, "time": Date().timeIntervalSince1970]) {
             try? lab.write(to: lastBurstURL.appendingPathExtension("lab"), options: .atomic)
         }
+        // «Сохранять RAW-серию» (ScamNeuralClient's keep-burst): the series and its sidecars kept beside last.nch (before the merge,
+        // as the worker keeps it: a merge that fails leaves it too)
+        if RawBurstKeep.on { RawBurstKeep.keep(nch, time: started, log: { log.append($0) }) }
+        // «Сохранять этапы обработки» (ScamDiagnostics): the post nodes' outputs and the shot's log in a folder of the shot
+        let diagnostics = rawOnly && dngFacts != nil ? nil : ShotDiagnostics.folder(started)
+        defer { if let diagnostics { ShotDiagnostics.finish(diagnostics, log: log, facts: lastFactsURL) } }
         guard let shaders = Bundle.main.url(forResource: "shaders", withExtension: nil) else {
             throw EngineError.decode("the pipeline's shaders are missing from the app")
         }
@@ -270,12 +292,14 @@ enum BurstProcessor {
         let photo: SCAMPhoto
         do {
             // the stored lens shading map of this lens and frame size (used where the DNG has none)
-            let extra: [String: Any] = LensShading.wire(lscKey).map { ["ios_lsc_map": ["s", $0]] } ?? [:]
+            var extra: [String: Any] = LensShading.wire(lscKey).map { ["ios_lsc_map": ["s", $0]] } ?? [:]
+            if let diagnostics { extra.merge(ShotDiagnostics.extra(diagnostics)) { _, new in new } }
             photo = try SCAMShot.processBurst(atPath: nch.path, dng: burst.dng, settings: PostSettings.json(extra: extra),
                                               faces: faces.boxes.map { NSNumber(value: $0) }, facesDetected: faces.detected, front: burst.front,
                                               dngFacts: dngFacts, rawOnly: rawOnly && dngFacts != nil, shaders: shaders.path)
         } catch let error as NSError {
             log += (error.userInfo["log"] as? [String]) ?? []
+            if diagnostics != nil { log.append("failed: \(error.localizedDescription)") }
             throw error
         }
         log += photo.log

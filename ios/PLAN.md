@@ -921,3 +921,40 @@ camera_screen: the top row (64 pt) with its grabber, the 3:4 viewfinder from the
   0.85 of white, at most 2 EV and 1/30 s; the N frames as manual brackets at its ISO (light, not gain, P377).
 - SCAM Lab: the last series kept with its DNG / metadata / lab json; «Склеить заново с текущими настройками» (BurstProcessor.relab)
   saves the photo to the library.
+
+## Speed (2026-11-14, iPad M1 log: capture 2.4 s, NCH 0.77 s, merge 2.0-5.1 s, post 1.6 s, library 2.9 s, warm-up 11 s)
+Every change keeps the photo bit for bit (host Mesa against the Android references; the Metal replay in CI).
+- ScamGL: `glMapBufferRange` with UNSYNCHRONIZED|WRITE no longer commits and waits for the queue (the fast merge's upload ring
+  waited for every queued pass: «uploads 1065 ms»).
+- ScamGL: the SPIR-V -> MSL translations cached in Caches/scamgl (`setCacheDir`, keyed by the build): the warm-up's 157
+  programs no longer translate on every launch; the first shot no longer waits behind the warm-up.
+- NCH streamed during the capture (`NchStream`): the frames are on disk when the burst ends (was 0.77 s after it).
+- Post pipeline: whole-frame draws on iOS (`SCAM_POST_WHOLE_BANDS`, `GLDrawParams::TileSize`): the 256-row bands were Android's
+  GPU watchdog / viewfinder share; a band is only a viewport. base0, night, v2, uhdr, os1: 0 values differ.
+- «Качество» merge: `gpuPace 0` on iOS (ShotRun.hpp) - P662 paced every dispatch as a waited submission for Android's shared GPU
+  ring (669 submissions, 2.1 s waited); the viewfinder has its own Metal queue here. Same commands and barriers (output bit for
+  bit); scam_dev `hybrid_gpu_pace` still decides when set.
+- The thumbnail decoded off the main actor; the log shows the library's own save time.
+
+## RAW white from the frame (P558) and the burst's levels in the post (2026-11-14)
+- iPad log: the 14-bit buffer clips near 15930 while the DNG white x4 is 16380: the fast merge's clip fraction 0 -> highlight path
+  off, both ultrashort frames unused («0 of 2 short frames»), no clip flags, blown skies under 1. RawWhite.swift ports
+  Parameters.clipPlateau / clipWhiteToPlateau (BlockScan's samples): the reference frame's plateau under the white is the white -
+  BurstProcessor (the NCH and the merge), BayerBurst.extrasPlan (the plan's clip share) and the ETTR meter (a blown sky is no
+  headroom). Log: «RAW white level from data: the frame clips at …» / «RAW white level: … kept (top sample …)». scam_dev
+  raw_white_plateau 0 = as before. Synthetic check: a sky clipped at 15930 -> white 15930; an unclipped ramp -> 16380 kept.
+- ShotRun.hpp: the post's Parameters take the burst's white / black (NCH header, the frames' units after «Чёрный из данных» and
+  P558) as Android's one Parameters: the merged DNG's tags match its mosaic (hybridWriteMergedDng codes against the NCH levels).
+  The photo does not read them (base0: 0 values differ).
+
+## Audit fixes (2026-11-14)
+- Settings: rows iOS never acts on hidden (colour method, CRE source, Oldstyle viewfinder, YUV merge rows, mosaic-only rows);
+  empty pages / groups and the search skip them; developer page: Android-only lines hidden (kept: every key iOS or the shared
+  merge reads); «Недавние сообщения» opens the history; shade: hidden rows not offered, greyed toggles disabled, transparency
+  (ShadeStyle sheet / glass alpha); notes for face AF, AF mode 3, flicker Hz, night viewfinder.
+- Capture: frame count as getHybridZslFrames (Oldstyle, scam_dev, Sport); HybridPlan.dev reads scam_dev.txt; settings applied at
+  once (CameraModel.settingsChanged: focus, faces, low light, Sport ceiling, Sport / Oldstyle P638); flicker-safe Sport ceiling;
+  «Сохранять RAW-серию» (scam_rawburst-*.nch beside last.nch); «Сохранять этапы обработки» (Documents/SCAMERA/diagnostics: PNG per
+  post node, log, frames); the camera's own photo route honours format, quality, watermark and 16:9; 16:9 viewfinder mask.
+- P718 «Стиль» Vivid / Normal / Neutral (pref_photo_style, tone V2); P696 / P706 «Проявка» of plain DNGs from their tags
+  (DevelopDefaults), OpcodeList1 / 2 tags fixed in DngRaw.hpp.

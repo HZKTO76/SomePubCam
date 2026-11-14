@@ -2,21 +2,111 @@
 // (Engine/post/DevelopRun.hpp) - its level times the record's headroom, demosaiced:
 // - the preview: the DNG binned so that a 2x2 cell of it is one pixel of at most PREVIEW_SIDE (a cell's R, mean G, B; superpixel);
 // - the copy: the whole DNG demosaiced (Malvar-He-Cutler, mhc), as IEEE halves above HALF_ABOVE pixels.
+// P696: a DNG without the record is developed from its own tags when the developer can take it (refusal, facts: the record made by
+// Engine/post/DevelopDefaults.hpp).
 #pragma once
 
 #include "DngRaw.hpp"
+#include "../Engine/post/DevelopDefaults.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
 namespace scam_edit {
 namespace develop {
+
+/// P696: a DNG's Software of SCAMERA (DngMetadata.software: "SCAMERA <version> (<code>) <commit>")
+inline bool ours(const DngRaw::Info& info) {
+    std::string s = info.software;
+    size_t a = 0, b = s.size();
+    while (a < b && uint8_t(s[a]) <= ' ') a++;
+    while (b > a && uint8_t(s[b - 1]) <= ' ') b--;
+    s = s.substr(a, b - a);
+    if (s.size() < 7) return false;
+    for (size_t i = 0; i < 7; i++) if (std::toupper(uint8_t(s[i])) != "SCAMERA"[i]) return false;
+    return true;
+}
+
+/// The clockwise turn of the EXIF / TIFF orientation (1, 6, 3, 8; anything unknown upright), -1 for a mirrored one
+inline int rotation(int orientation) {
+    switch (orientation) {
+        case 6: return 90;
+        case 3: return 180;
+        case 8: return 270;
+        case 2: case 4: case 5: case 7: return -1;
+        default: return 0;
+    }
+}
+
+/// P696: why the developer cannot take a DNG without a record, none when it can: a Bayer mosaic of single sites (the demosaic
+/// here; a Quad / LinearRaw DNG is not one), an orientation without a mirror (the pipeline's turn), and - another app's DNG - its
+/// colour: a ColorMatrix and the as-shot white.
+inline std::optional<std::string> refusal(const DngRaw::Info& info) {
+    if (info.kind != DngRaw::KIND_BAYER) return std::string("not a Bayer mosaic");
+    if (info.cell != 1) return std::string("a Quad mosaic");
+    if (rotation(info.orientation) < 0) return "a mirrored orientation " + std::to_string(info.orientation);
+    if (!ours(info) && (!info.colour.hasMatrices() || !info.asShotGiven))
+        return std::string("another app's DNG without its colour matrix or as-shot white");
+    return std::nullopt;
+}
+
+/// Java's (int) Math.round(double): floor(v + 0.5) as a long (NaN 0), then its low 32 bits
+inline int javaRoundInt(double v) {
+    if (std::isnan(v)) return 0;
+    const double r = std::floor(v + 0.5);
+    const long long l = r >= 9.2233720368547758e18 ? std::numeric_limits<long long>::max()
+                        : r <= -9.2233720368547758e18 ? std::numeric_limits<long long>::min() : (long long)r;
+    return int(uint32_t(uint64_t(l)));
+}
+
+/// P696 EditDevelop.facts: what the DNG says for its record (DevelopDefaults::Facts)
+inline scam_post::DevelopDefaults::Facts facts(const DngRaw::Info& info) {
+    scam_post::DevelopDefaults::Facts f;
+    const auto size = info.size(1);
+    f.width = size[0];
+    f.height = size[1];
+    const DngColor& colour = info.colour;
+    const std::vector<double>& n = colour.asShotNeutral;
+    f.neutral = {float(n[0]), float(n[1]), float(n[2])};
+    if (colour.hasMatrices()) {
+        const std::vector<double> m = colour.cameraToXyzD50(n);
+        bool finite = m.size() >= 9;
+        std::vector<float> out(9);
+        for (size_t i = 0; finite && i < 9; i++) {
+            out[i] = float(m[i]);
+            finite = std::isfinite(out[i]);
+        }
+        if (finite) f.cameraToXyzD50 = out;
+        const std::vector<double> xy = colour.estimateXy(n);
+        if (!xy.empty()) f.sceneCct = float(DngColor::cctDuv(xy)[0]);
+    }
+    f.noiseProfile = info.noiseProfile;
+    f.iso = javaRoundInt(info.iso);
+    f.exposureTime = info.exposureTime;
+    f.fNumber = float(info.fNumber);
+    f.focalMm = float(info.focalLength);
+    f.rotationDeg = std::max(0, rotation(info.orientation));
+    // P165: a SCAMERA merged DNG holds the RGB over its headroom, BaselineExposure = log2 of it; another app's exposure tag is its
+    // own look, not a headroom
+    f.headroom = ours(info) && info.baselineExposure > 0 && info.baselineExposure < 8 ? float(std::pow(2.0, info.baselineExposure)) : 1.f;
+    f.whiteLevel = javaRoundInt(info.whiteLevel);
+    f.blackLevel = float(info.blackLevel);
+    f.software = info.software;
+    f.shadingMap = info.shadingMap;
+    f.shadingW = info.shadingW;
+    f.shadingH = info.shadingH;
+    return f;
+}
 
 /// the preview develop's longer side at most (px)
 constexpr int PREVIEW_SIDE = 2048;

@@ -194,6 +194,17 @@ struct LogClearRow<Label: View>: View {
     }
 }
 
+/// «Последние сообщения» (scam_recent_messages): the camera's message history, the sheet the gear's menu opens
+struct MessagesRow<Label: View>: View {
+    let label: Label
+    @State private var shown = false
+
+    var body: some View {
+        Button { shown = true } label: { label }
+            .sheet(isPresented: $shown) { MessageHistorySheet() }
+    }
+}
+
 /// «Поделиться текущим логом»: today's log file through the share sheet
 struct LogShareRow<Label: View>: View {
     let label: Label
@@ -209,11 +220,14 @@ enum SettingsExtras {
     /// A line over a page that means something else on the iPhone
     static func screenNote(_ key: String?) -> String? {
         switch key {
-        case "lens_screen": return L("set.lens.note")
-        case "shade_transparency_screen": return L("set.na.shade")
+        // one set of settings for every module unless «Свои настройки для каждого модуля» keeps one per module
+        case "lens_screen": return ModuleProfiles.on ? nil : L("set.lens.note")
         default: return nil
         }
     }
+
+    /// The categories whose content `categoryContent` builds in code (shown whatever their tree rows)
+    static let codeContent: Set<String> = ["root_modules", "lens_levels_category"]
 
     /// What a category built in code on Android shows here
     @ViewBuilder static func categoryContent(_ key: String?) -> some View {
@@ -235,6 +249,7 @@ enum SettingsExtras {
         switch key {
         case "backup_settings_screen": return ConfigState.label()
         case "output_settings_screen": return PhotoEncoding.codec.uppercased()
+        case "photo_style_screen": return PhotoStyle.name(PhotoStyle.current(SettingsStore.shared))
         default: return nil
         }
     }

@@ -703,10 +703,14 @@ final class EditorModel {
     private var openedGeometry: (oriented: CGSize, full: CGSize, raw: Bool)?
     private var developedGeometry: (oriented: CGSize, full: CGSize, raw: Bool)?
 
-    /// EditDevelop.open: the DNG's develop record, if it has one
+    /// EditDevelop.open: the DNG's develop record, if it has one; P696: else a record from its tags with the camera's settings now
+    /// (a Bayer DNG the developer can take: ours by its Software, or any with its colour matrix and as-shot white)
     private func openDevelop(_ data: Data, shaders: String) async {
+        let settings = PostSettings.json()
         let d: SCAMDevelop? = await withCheckedContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async { cont.resume(returning: SCAMDevelop(dng: data, shaders: shaders)) }
+            DispatchQueue.global(qos: .userInitiated).async {
+                cont.resume(returning: SCAMDevelop(dng: data, shaders: shaders, settings: settings))
+            }
         }
         guard let d else { return }
         SessionLog.i("Editor", d.summary + " (" + name + ")")
@@ -728,6 +732,10 @@ final class EditorModel {
     /// EditDevelopPanel.statusText
     var developStatusText: String {
         if let developStatus { return developStatus }
+        // P696: no record of the shot in this DNG: its own tags and the camera's settings now
+        if develop?.developer.fromTags == true {
+            return state.develop ? L("editor.develop.tags_done") : L("editor.develop.tags_hint")
+        }
         return state.develop ? L("editor.develop.done") : L("editor.develop.switch_hint")
     }
 

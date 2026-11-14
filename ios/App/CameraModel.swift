@@ -36,11 +36,10 @@ final class CameraModel {
     /// SIMPLE_UI §1: focus and exposure held by a long press («Закреплено»)
     private(set) var locked = false
     private var lastSwitch = Date.distantPast
-    /// «Кадров для склейки» (pref_scam_hybrid_zsl_frames, Android default 20, 4–65)
-    var burstFrames: Int {
-        let stored = Int(SettingsStore.shared.string("pref_scam_hybrid_zsl_frames", "20")) ?? 20
-        return min(max(stored, 4), 65)
-    }
+    /// The N frames of an SHDR shot (PreferenceKeys.getHybridZslFrames, HybridPlan.zslFrames): scam_dev.txt's hybrid_zsl_frames,
+    /// «Спорт»'s own count (pref_scam_hybrid_mm_zsl_frames, 8), «Oldstyle»'s «Кадров в серии» when set, else «Кадров для склейки»
+    /// (pref_scam_hybrid_zsl_frames, 20, 4–65)
+    var burstFrames: Int { HybridPlan.zslFrames }
 
     private let captureService = CaptureService()
     private let mediaLibrary = MediaLibrary()
@@ -58,6 +57,7 @@ final class CameraModel {
     }
 
     func start() async {
+        settleModes()   // a restored config may hold both camera modes (P638)
         SessionLog.i("App", "start, RAW \(raw.rawValue), full resolution \(fullResolution)")
         guard await captureService.isAuthorized else {
             status = .unauthorized
@@ -84,6 +84,11 @@ final class CameraModel {
             let previous = activeModuleID
             apply(try await captureService.select(moduleID: module.id))
             ModuleProfiles.switched(from: previous, to: module.id)   // «Свои настройки для каждого модуля»
+            // the lens opened with the previous module's values: its own (the profile just taken) on the device now
+            if ModuleProfiles.on {
+                settleModes()
+                await captureService.applyStoredPrefs()
+            }
             await captureService.applyManual(ManualSettings.load())
             defaults.set(module.id, forKey: "module_active")
         } catch {
@@ -95,6 +100,47 @@ final class CameraModel {
     func reloadModules() async {
         guard status == .running else { return }
         apply(await captureService.reloadModules())
+        await settingsChanged()
+    }
+
+    /// A setting was written (the quick shade after a write, the settings screen closed, a config loaded): the device-level ones on
+    /// the open lens now, not at the next lens switch (CaptureService.applyStoredPrefs: «Режим фокуса», «Распознавание лиц», «Ночной
+    /// буст», «Спорт»'s shutter ceiling), after «Спорт» and «Oldstyle» were settled to one mode (MotionMode.settleWithOldstyle).
+    func settingsChanged() async {
+        settleModes()
+        guard status == .running || status == .interrupted else { return }
+        await captureService.applyStoredPrefs()
+    }
+
+    /// pref_motion_mode / pref_oldstyle_mode as settleModes saw them last (nil: not yet)
+    @ObservationIgnored private var seenModes: (sport: Bool, oldstyle: Bool)?
+
+    /// P638 MotionMode.settleWithOldstyle: «Спорт» and «Oldstyle» are one camera mode at a time (OldstyleMode.select). Both flags on
+    /// after a change (the shade's tile, the settings' switch, a loaded config): the one just turned on wins - «Oldstyle» when it came
+    /// on beside a «Спорт» already on, otherwise «Спорт» (Android's rule: «Спорт» switched on while «Oldstyle» is the mode, or both
+    /// found on with nothing seen before, e.g. a restored backup, makes the mode «Спорт»). The mode's toast as the mode switch
+    /// shows it. Returns whether it changed the mode.
+    @discardableResult
+    private func settleModes() -> Bool {
+        let store = SettingsStore.shared
+        let sport = store.bool("pref_motion_mode", false), oldstyle = store.bool("pref_oldstyle_mode", false)
+        let before = seenModes
+        guard sport && oldstyle else {
+            seenModes = (sport, oldstyle)
+            return false
+        }
+        let keepOldstyle = before.map { $0.sport && !$0.oldstyle } ?? false
+        if keepOldstyle {
+            store.set("pref_motion_mode", false)
+        } else {
+            store.set("pref_oldstyle_mode", false)
+            OldstyleModel.shared.open = false
+        }
+        seenModes = (!keepOldstyle, keepOldstyle)
+        let mode: CameraChrome.Mode = keepOldstyle ? .oldstyle : .sport
+        SessionLog.i("App", "camera modes settled (P638): «Спорт» and «Oldstyle» were both on, the mode is \(mode.title)")
+        say(mode.title)
+        return true
     }
 
     /// The settings' RAW row (off / Bayer / ProRAW): off is pref_save_raw_key 0; a kind keeps a RAW-only choice, else RAW + photo
@@ -218,6 +264,7 @@ final class CameraModel {
 
     /// The camera mode changed (OldstyleMode.select): «Спорт»'s shutter ceiling on the lens
     func modeChanged() async {
+        settleModes()
         await captureService.applyMode()
     }
 
@@ -344,9 +391,12 @@ final class CameraModel {
                 photo.processed = nil
                 if let data = try? Data(contentsOf: dng) { thumbnail = MediaLibrary.thumbnail(of: data) }
             } else {
+                var rendered = false
                 if whyTone, let dng = photo.rawFile {
-                    photo = await Self.render(photo, dng: dng, facts: facts)
+                    (photo, rendered) = await Self.render(photo, dng: dng, facts: facts)
                 }
+                // the camera's own photo (no «Why» render): «Формат фото», 16:9 and the watermark as the settings write a photo
+                if !rendered { photo = await Self.finishCameraPhoto(photo, time: started) }
                 if let data = photo.processed { thumbnail = MediaLibrary.thumbnail(of: data) }
             }
             try await mediaLibrary.save(photo)
@@ -382,12 +432,22 @@ final class CameraModel {
                                                                                flash: flash ? .on : .off, exif: facts))
                 photo.report.forEach { SessionLog.i("Shot", $0) }
                 activity = .saving
-                if rawSaving == 2, photo.rawFile != nil { photo.processed = nil } // «Только RAW»: the camera's DNG alone
+                if rawSaving == 2, photo.rawFile != nil {
+                    photo.processed = nil // «Только RAW»: the camera's DNG alone
+                } else {
+                    photo = await Self.finishCameraPhoto(photo, time: started)
+                }
                 if let data = photo.processed ?? photo.rawFile.flatMap({ try? Data(contentsOf: $0) }) { thumbnail = MediaLibrary.thumbnail(of: data) }
                 try await mediaLibrary.save(photo)
                 return
             } else {
-                burst = try await captureService.captureBayerBurst(count: burstFrames)
+                // P113 MotionMode.framesForQueue: «Спорт» behind a queue of merges takes fewer frames, as the stock snapshot mode
+                let wanted = burstFrames
+                let count = HybridPlan.motionMode ? HybridPlan.framesForQueue(wanted, pending: shots.count) : wanted
+                if count != wanted {
+                    SessionLog.i("SHDR", "motion: \(shots.count) shots wait for their merge, \(count) frames for this one (of \(wanted))")
+                }
+                burst = try await captureService.captureBayerBurst(count: count)
             }
             enqueue(burst, started: started, facts: facts)
         } catch {
@@ -502,9 +562,17 @@ final class CameraModel {
         }
     }
 
-    /// GPU processing off the main actor; on failure the camera's own HEIC is kept.
-    nonisolated private static func render(_ photo: CapturedPhoto, dng: URL, facts: ShotExif) async -> CapturedPhoto {
+    /// The camera's own photo through CameraPhotoFinish off the main actor (its log lines to the session log)
+    nonisolated private static func finishCameraPhoto(_ photo: CapturedPhoto, time: Date) async -> CapturedPhoto {
+        let finished = await Task.detached(priority: .userInitiated) { CameraPhotoFinish.finish(photo, shotTime: time) }.value
+        finished.report.dropFirst(photo.report.count).forEach { SessionLog.i("Shot", $0) }
+        return finished
+    }
+
+    /// GPU processing off the main actor; on failure the camera's own HEIC is kept (rendered false).
+    nonisolated private static func render(_ photo: CapturedPhoto, dng: URL, facts: ShotExif) async -> (CapturedPhoto, Bool) {
         await Task.detached(priority: .userInitiated) {
+            var rendered = false
             var result = photo
             let source = photo.processed.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }
                 ?? CGImageSourceCreateWithURL(dng as CFURL, nil)
@@ -514,10 +582,11 @@ final class CameraModel {
                 processed.log.forEach { SessionLog.i("Engine", $0) }
                 result.processed = processed.heic
                 result.processedUTI = UTType.heic.identifier
+                rendered = true
             } catch {
                 SessionLog.e("Engine", "GPU processing failed, the camera's HEIC is kept: \(error.localizedDescription)")
             }
-            return result
+            return (result, rendered)
         }.value
     }
 
