@@ -4,6 +4,8 @@
 // them out as the worker writes its output file, which ScamNeuralClient reads.
 #pragma once
 
+#include <unistd.h> // getpid of scam-pool.h (bionic and glibc bring it in through other headers, Darwin does not)
+
 #include "scam-capture.h"
 #include "scam-hybrid.h"
 #include "scam-stream-out.h"

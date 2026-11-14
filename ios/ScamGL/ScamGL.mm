@@ -1552,6 +1552,21 @@ void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, cons
 void glUniform3i(GLint l, GLint a, GLint b, GLint c) { const GLint v[] = {a, b, c}; writeUniform(currentProgram(), l, 3, 1, v, 1); }
 void glUniform2ui(GLint l, GLuint a, GLuint b) { const GLuint v[] = {a, b}; writeUniform(currentProgram(), l, 2, 1, v, 2); }
 void glUniform1ui(GLint l, GLuint a) { writeUniform(currentProgram(), l, 1, 1, &a, 2); }
+// glProgramUniform*: the named program's uniforms (FastMergeGpu::resetForMerge zeroes every uniform of its programs)
+void glProgramUniform1fv(GLuint p, GLint l, GLsizei n, const GLfloat* v) { writeUniform(p, l, 1, n, v, 0); }
+void glProgramUniform2fv(GLuint p, GLint l, GLsizei n, const GLfloat* v) { writeUniform(p, l, 2, n, v, 0); }
+void glProgramUniform3fv(GLuint p, GLint l, GLsizei n, const GLfloat* v) { writeUniform(p, l, 3, n, v, 0); }
+void glProgramUniform4fv(GLuint p, GLint l, GLsizei n, const GLfloat* v) { writeUniform(p, l, 4, n, v, 0); }
+void glProgramUniform1iv(GLuint p, GLint l, GLsizei n, const GLint* v) { writeUniform(p, l, 1, n, v, 1); }
+void glProgramUniform2iv(GLuint p, GLint l, GLsizei n, const GLint* v) { writeUniform(p, l, 2, n, v, 1); }
+void glProgramUniform3iv(GLuint p, GLint l, GLsizei n, const GLint* v) { writeUniform(p, l, 3, n, v, 1); }
+void glProgramUniform4iv(GLuint p, GLint l, GLsizei n, const GLint* v) { writeUniform(p, l, 4, n, v, 1); }
+void glProgramUniform1uiv(GLuint p, GLint l, GLsizei n, const GLuint* v) { writeUniform(p, l, 1, n, v, 2); }
+void glProgramUniform2uiv(GLuint p, GLint l, GLsizei n, const GLuint* v) { writeUniform(p, l, 2, n, v, 2); }
+void glProgramUniform3uiv(GLuint p, GLint l, GLsizei n, const GLuint* v) { writeUniform(p, l, 3, n, v, 2); }
+void glProgramUniform4uiv(GLuint p, GLint l, GLsizei n, const GLuint* v) { writeUniform(p, l, 4, n, v, 2); }
+void glProgramUniformMatrix2fv(GLuint p, GLint l, GLsizei n, GLboolean transpose, const GLfloat* v) { writeMatrix(p, l, n, transpose, v, 2); }
+void glProgramUniformMatrix3fv(GLuint p, GLint l, GLsizei n, GLboolean transpose, const GLfloat* v) { writeMatrix(p, l, n, transpose, v, 3); }
 
 // ---- dispatch, sync, queries ----
 
