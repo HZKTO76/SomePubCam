@@ -887,3 +887,8 @@ camera_screen: the top row (64 pt) with its grabber, the 3:4 viewfinder from the
 - ScamGL glReadPixels: a missing alpha of an 8-bit normalised target as bytes reads 255 (was 1).
 - iPad levels: the frames' scale is the 14-bit buffer against the DNG white (x4 for 4095), not the noise slope of an N pair
   (a shaken series measured 18-20 -> x16: black 8448 above the signal, a black / green photo).
+
+## App icon (2026-11-14)
+- Owner chose the iOS-style variant of the Android launcher icon (scamera_icon_fg / _background): the glyph x1.22, a lit
+  background, a soft shadow, glass highlights. Source ios/tools/app_icon.svg (viewBox = Android's visible 72 dp), the 1024 px
+  PNG without alpha in Icons.xcassets/AppIcon.appiconset (single size, ASSETCATALOG_COMPILER_APPICON_NAME AppIcon).

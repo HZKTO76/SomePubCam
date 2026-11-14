@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 72 72" width="1024" height="1024">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#343A44"/><stop offset="0.55" stop-color="#1B1E24"/><stop offset="1" stop-color="#0D0F12"/></linearGradient>
+<radialGradient id="glow" cx="54" cy="30" r="46" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>
+<linearGradient id="body" x1="0" y1="41.4" x2="0" y2="70.8" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFFFFF"/><stop offset="0.5" stop-color="#E9EBF0"/><stop offset="1" stop-color="#BEC3CD"/></linearGradient>
+<linearGradient id="coral" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFC0B6"/><stop offset="1" stop-color="#FF8F80"/></linearGradient>
+<radialGradient id="glass" cx="52.0646" cy="54.5846" r="9.99936" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2C3E5E"/><stop offset="0.7" stop-color="#111621"/><stop offset="1" stop-color="#07090C"/></radialGradient>
+<filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="1.6" stdDeviation="1.8" flood-color="#000" flood-opacity="0.55"/></filter>
+</defs>
+<rect x="18" y="18" width="72" height="72" fill="url(#bg)"/><rect x="18" y="18" width="72" height="72" fill="url(#glow)"/>
+<g transform="translate(54 54) scale(1.22) translate(-54 -53.8)">
+<g filter="url(#shadow)"><path d="M41.4,36.78H47.28A2.52,2.52 0 0 1 49.8,39.3V41.82A2.52,2.52 0 0 1 47.28,44.34H41.4A2.52,2.52 0 0 1 38.88,41.82V39.3A2.52,2.52 0 0 1 41.4,36.78Z" fill="url(#coral)"/><path d="M41.4,41.4H66.6A8.4,8.4 0 0 1 75,49.8V62.4A8.4,8.4 0 0 1 66.6,70.8H41.4A8.4,8.4 0 0 1 33,62.4V49.8A8.4,8.4 0 0 1 41.4,41.4Z" fill="url(#body)"/></g>
+<path d="M41.4,41.9H66.6A7.9,7.9 0 0 1 74.5,49.8" fill="none" stroke="#fff" stroke-opacity="0.9" stroke-width="0.35"/>
+<circle cx="54" cy="56.52" r="11.34" fill="#2A2E35"/><circle cx="54" cy="56.52" r="9.408" fill="url(#coral)"/>
+<circle cx="54" cy="56.52" r="8.064" fill="url(#glass)"/>
+<path d="M48.6,52.4A7,7 0 0 1 55.6,49.6" fill="none" stroke="#fff" stroke-opacity="0.45" stroke-width="0.9" stroke-linecap="round"/>
+<circle cx="51.144" cy="53.664" r="1.6" fill="#fff" fill-opacity="0.7"/>
+<circle cx="57.6" cy="60.2" r="0.9" fill="#7FA6FF" fill-opacity="0.35"/>
+<circle cx="68.28" cy="47.7" r="2.016" fill="url(#coral)"/></g></svg>

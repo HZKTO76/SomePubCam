@@ -3,6 +3,7 @@
 ## 0.3.1 — fixes
 - «Быстрый» merge on iPhone and iPad now matches Android (night shots were noisy).
 - iPad: no more black / green photos from a shaken series.
+- App icon: the SCAMERA camera in the iOS style.
 
 ## 0.3 — Android updates of 2026-11-14
 - iPad: a native iPad app - full-screen camera, wider gallery grids, settings and editor sized for the tablet.
