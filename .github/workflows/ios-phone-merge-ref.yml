@@ -1,0 +1,100 @@
+name: iOS merge vs a phone's own merge
+
+# research/phone-merge-ref-mali: the fast merge of one burst on a phone (Mali-G925, the app at 2554639f) and on Mesa (the same
+# code); here the same code (app/src/main/cpp at 2554639f) on Metal through ScamGL, with the GPU's texture filter and with the
+# filter in the shader (SCAMGL_FILTER=float), each compared with the phone and with Mesa at the phone's sample points.
+on:
+  push:
+    branches: [ 'claude/ios-camera-app-port-idgljn' ]
+    paths: [ 'research/phone-merge-ref-mali/**', '.github/workflows/ios-phone-merge-ref.yml', 'ios/ScamGL/**', 'ios/tools/phone_ref_compare.py' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-phone-merge-ref-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  metal:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      REF: research/phone-merge-ref-mali
+      CODE: 2554639f28172329c0ebdfb213e04e359758f184
+    steps:
+      - uses: actions/checkout@v4
+      - name: The merge code the phone ran
+        run: |
+          git fetch -q --depth 1 origin "$CODE"
+          mkdir -p "$RUNNER_TEMP/old"
+          git archive "$CODE" app/src/main/cpp | tar -x -C "$RUNNER_TEMP/old"
+          # the Apple guards the iOS port added later (no merge arithmetic): scam-crash.h whole, scam-stream-out.h's fallocate shim
+          O="$RUNNER_TEMP/old/app/src/main/cpp"
+          cp app/src/main/cpp/scam-crash.h "$O/"
+          python3 - "$O/scam-stream-out.h" <<'PY'
+          import sys
+          p = sys.argv[1]
+          s = open(p).read()
+          shim = ('#if defined(__APPLE__)\n#ifndef MAP_POPULATE\n#define MAP_POPULATE 0\n#endif\n'
+                  'static inline int fallocate(int fd, int, off_t, off_t length) { return ftruncate(fd, length); }\n#endif\n')
+          if 'fallocate(int fd' not in s:
+              s = s.replace('#include <unistd.h>\n', '#include <unistd.h>\n' + shim, 1)
+          open(p, 'w').write(s)
+          PY
+      - name: The burst (the owner's Drive)
+        run: |
+          python3 ios/tools/drive_fetch.py 1ozT5lGLNxNpjIdO9b64GA6S3anT8ey4Y "$RUNNER_TEMP/burst.zip"
+          unzip -q -o "$RUNNER_TEMP/burst.zip" 2026-11-10_17-17-11/burst.nch -d "$RUNNER_TEMP"
+          rm "$RUNNER_TEMP/burst.zip"
+          echo "$(cut -d' ' -f1 "$REF/burst.nch.sha256")  $RUNNER_TEMP/2026-11-10_17-17-11/burst.nch" | shasum -a 256 -c
+      - uses: actions/cache/restore@v4
+        id: deps
+        with:
+          path: ${{ runner.temp }}/deps/macos
+          key: shader-deps-macos-${{ hashFiles('ios/tools/build_shader_deps.sh') }}
+      - name: Shader translators (glslang, SPIRV-Cross)
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: ios/tools/build_shader_deps.sh macos "$RUNNER_TEMP/deps"
+      - name: Build the replay on Metal (ScamGL) with the phone's merge code
+        run: |
+          D="$RUNNER_TEMP/deps/macos"
+          clang++ -std=c++17 -O2 -fobjc-arc -Iios/ScamGL/include -Iios/ScamGL -I"$RUNNER_TEMP/old/app/src/main/cpp" -I"$D/include" -I"$D/include/spirv_cross" \
+            ios/tools/hybrid_replay.cpp ios/ScamGL/ScamGL.mm ios/ScamGL/ScamGLCompiler.cpp -L"$D/lib" \
+            -lglslang -lMachineIndependent -lGenericCodeGen -lOSDependent -lSPIRV -lglslang-default-resource-limits \
+            -lspirv-cross-msl -lspirv-cross-glsl -lspirv-cross-core -framework Metal -framework Foundation \
+            -o "$RUNNER_TEMP/hybrid_replay" > "$RUNNER_TEMP/build.log" 2>&1 || true
+          grep -E "error|Undefined|ld: " "$RUNNER_TEMP/build.log" | head -40 || true
+          test -x "$RUNNER_TEMP/hybrid_replay"
+      - name: Merge
+        run: |
+          J="$RUNNER_TEMP/job"
+          mkdir -p "$J"
+          cp "$REF/hybrid_tuning.txt" "$J/"
+          touch "$J/cre-off" "$J/clip-flags" "$J/hl-mask"
+          B="$RUNNER_TEMP/2026-11-10_17-17-11/burst.nch"
+          "$RUNNER_TEMP/hybrid_replay" "$J" "$B" "$RUNNER_TEMP/metal.f32" > "$RUNNER_TEMP/metal.log" 2>&1 || { tail -20 "$RUNNER_TEMP/metal.log"; exit 1; }
+          SCAMGL_FILTER=float "$RUNNER_TEMP/hybrid_replay" "$J" "$B" "$RUNNER_TEMP/metal_float.f32" > "$RUNNER_TEMP/metal_float.log" 2>&1 \
+            || { tail -20 "$RUNNER_TEMP/metal_float.log"; true; }
+          for f in metal metal_float; do
+            echo "=== $f"
+            grep -E "Sabre per-frame|HOMOGRAPHY|EFFECTIVE MAP|CLIP FLAGS|HIGHLIGHT MASK|SCAM RGB|FAST MERGE ms|REPLAY DONE" "$RUNNER_TEMP/$f.log" | cut -c1-400
+          done
+      - name: Compare with the phone and with Mesa
+        run: |
+          python3 -m pip install -q --break-system-packages numpy==2.3.5 || python3 -m pip install -q numpy==2.3.5
+          args="mesa $REF/host-llvmpipe-sampled.pfm.xz phone $REF/phone-mali-sampled.pfm.xz metal $RUNNER_TEMP/metal.f32"
+          [ -f "$RUNNER_TEMP/metal_float.f32" ] && args="$args metal_float $RUNNER_TEMP/metal_float.f32"
+          python3 ios/tools/phone_ref_compare.py $args | tee "$RUNNER_TEMP/compare.txt"
+          echo "--- the phone's own summary (native report) vs Mesa: $REF/README.md"
+          grep -E "EFFECTIVE MAP|CLIP FLAGS|HIGHLIGHT MASK|SCAM RGB: mean" "$REF/phone-native-report.txt" | cut -c1-300
+          { echo '### Merge vs the phone (Mali-G925) and Mesa'; echo '```'; cat "$RUNNER_TEMP/compare.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phone-merge-ref
+          path: |
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/compare.txt
+          retention-days: 3
