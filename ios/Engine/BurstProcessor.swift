@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import ImageIO
 
@@ -156,6 +157,9 @@ enum BurstProcessor {
         }
         log += photo.log
         log.append("lab: merge \(Int(photo.mergeMilliseconds)) ms, post \(Int(photo.postMilliseconds)) ms, photo \(photo.width)x\(photo.height)")
+        // the A/B check on the phone: the same kept series through two builds gives the same photo when this hash is the same
+        // (the pipeline's RGBA before the encode; the encode itself is the system's)
+        log.append("lab: photo RGBA sha256 " + SHA256.hash(data: photo.rgba).map { String(format: "%02x", $0) }.joined())
         let format = ShotProcessor.photoFormat
         var encodeLog: [String] = []
         let data = try ShotProcessor.encode(rgba: photo.rgba, width: photo.width, height: photo.height, metadata: metadata, format: format,

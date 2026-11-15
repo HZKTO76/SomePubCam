@@ -417,6 +417,7 @@ final class CameraModel {
     @ObservationIgnored private var noRawNoted = false
 
     private func captureShdr(started: Date, facts: ShotExif, flash: Bool) async {
+        let meters = ShotMeters() // the memory and the thermal state at the press (SHOT SUMMARY)
         capturingShdr = true
         do {
             let burst: BayerBurst
@@ -453,7 +454,7 @@ final class CameraModel {
                 }
                 burst = try await Perf.interval("burst capture") { try await captureService.captureBayerBurst(count: count) }
             }
-            enqueue(burst, started: started, facts: facts, holdMs: Int(Date().timeIntervalSince(started) * 1000))
+            enqueue(burst, started: started, facts: facts, holdMs: Int(Date().timeIntervalSince(started) * 1000), meters: meters)
         } catch {
             SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
             show(error.localizedDescription)
@@ -471,7 +472,7 @@ final class CameraModel {
     }
 
     /// The burst into the processing queue (CaptureController: «queued for processing pending=N»); processed after the shots before it.
-    private func enqueue(_ burst: BayerBurst, started: Date, facts: ShotExif, holdMs: Int = -1) {
+    private func enqueue(_ burst: BayerBurst, started: Date, facts: ShotExif, holdMs: Int = -1, meters: ShotMeters = ShotMeters()) {
         let frameBytes = burst.frames.first.map { $0.raw.count } ?? 0
         if frameBytes > 0 { lastFrameBytes = frameBytes }
         let bytes = burst.frames.reduce(0) { $0 + $1.raw.count } + burst.dng.count + (burst.processed?.count ?? 0)
@@ -487,7 +488,7 @@ final class CameraModel {
         let handoff = BurstHandoff(burst)
         processingTail = Task { [weak self] in
             await previous?.value
-            await self?.process(shot.id, handoff: handoff, started: started, facts: facts, rawSaving: saving, holdMs: holdMs)
+            await self?.process(shot.id, handoff: handoff, started: started, facts: facts, rawSaving: saving, holdMs: holdMs, meters: meters)
         }
     }
 
@@ -499,7 +500,8 @@ final class CameraModel {
     /// the queue goes on. The app may go to the background meanwhile (ProcessingKeepAlive: as long as iOS gives it time).
     /// rawSaving: pref_save_raw_key at the press (1: the merged DNG beside the photo; 2 «Только RAW»: the merged DNG alone, as
     /// ScamProcessor returns after it - no post pipeline, no photo, no preview, no develop record).
-    private func process(_ id: UUID, handoff: BurstHandoff, started: Date, facts: ShotExif, rawSaving: Int, holdMs: Int = -1) async {
+    private func process(_ id: UUID, handoff: BurstHandoff, started: Date, facts: ShotExif, rawSaving: Int, holdMs: Int = -1,
+                         meters: ShotMeters = ShotMeters()) async {
         let wantDng = rawSaving >= 1, rawOnly = rawSaving == 2
         // this function keeps the burst without its planes; the planes go on in `handoff` to BurstProcessor (their last owner)
         var burst = handoff.burst ?? BayerBurst()
@@ -515,6 +517,8 @@ final class CameraModel {
             }
         }
         setStage(id, .processing)
+        meters.startProcessing()
+        defer { meters.endProcessing() }
         do {
             // ShotExif / ParseExif.syncWithParameters + describeFilm: the frames merged, the camera, the film's recipe, the route
             var described = facts
@@ -545,6 +549,7 @@ final class CameraModel {
                     return (nil, UTType.heic.identifier, burst.report, error.localizedDescription, nil)
                 }
             }.value
+            meters.endProcessing()
             setStage(id, .saving)
             result.log.forEach { SessionLog.i("SHDR", $0) }
             var rawFile: URL?
@@ -602,7 +607,8 @@ final class CameraModel {
                     SessionLog.i("SHDR", "saved in \(totalMs) ms (the library \(libraryMs) ms), \((self?.shots.count ?? 1) - 1) more queued, "
                                  + "\(memoryFootprint())")
                     // the stages as Android's SHOT SUMMARY names them (the tables of the Android phones compare these)
-                    SessionLog.i("SHDR", ShotSummary.line(log: shotLog, holdMs: holdMs, libraryMs: libraryMs, totalMs: totalMs))
+                    SessionLog.i("SHDR", ShotSummary.line(log: shotLog, holdMs: holdMs, libraryMs: libraryMs, totalMs: totalMs,
+                                                          meters: meters.processingLine))
                 } catch {
                     SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
                     self?.show(error.localizedDescription)

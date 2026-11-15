@@ -318,8 +318,12 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         draw(pixels)
     }
 
+    /// Frames this renderer drew (SHOT SUMMARY's Metal viewfinder rate while a shot is processed: ShotMeters)
+    private(set) var drawCount = 0
+
     private func draw(_ pixels: CVPixelBuffer) {
         guard drawn.active, let device, let commands, let mainPipeline, let textureCache else { return }
+        drawCount &+= 1
         lock.lock()
         let layer = metalLayer
         let size = drawableSize
