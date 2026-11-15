@@ -27,6 +27,12 @@ import java.util.Locale;
  * is the HAL's remosaic - the row fails); a failed row is noted for this firmware, the module goes back to a digital 2x crop of
  * the normal mode with a notice ({@link #failed}). The CROPPED_RAW ISZ of the HAL (izoom hwRemosaic) is off on the whole OPPO
  * family (CroppedRaw.supported). scam_dev "oplus_isz 0" turns the modules off.
+ * <p>P721 (owner, 2026-11-15: «Если там есть ISZ без ремозаика, то активируй его на нём ... как отдельные модули»): the realme
+ * 12 Pro+ (RMX3840) main camera "0" the same way - its CameraHWConfiguration.config [OemCamSensorSettingMap] names row 8
+ * «HighPicture Single iZoom Crop» / «SAT iZoom main» (4096x3072 @ 30 of the IMX890's 8192x6144: 2x), the session key
+ * com.oplus.engineercamera.agingtest.mode.select is listed (SCAM TEST 2026-11-14), the table is the recorded one
+ * (OppoNativeFullRes.RMX3840_MAIN). Its HAL has enableSensorRemosaic 1: whether row 8 is the sensor's own Quad or a remosaic
+ * of it, only the frames tell (MosaicStream: a plain Bayer fails the row, the module crops the normal mode digitally).
  */
 public final class OplusIsz {
     private OplusIsz() { }
@@ -34,10 +40,43 @@ public final class OplusIsz {
     static final String TAG = "OplusIsz";
     /** The izoom QBC row of the PYB110 main and tele. */
     static final int ROW = 11;
+    /** P721: the iZoom crop row of the RMX3840 main. */
+    static final int REALME_ROW = 8;
 
-    /** The route may run here: a PYB110 (scam_dev "oplus_isz 0": not). */
+    /** The route may run here: a PYB110 or an RMX3840 (scam_dev "oplus_isz 0": not). */
     public static boolean device() {
-        return OppoNativeFullRes.family() && OppoNativeFullRes.pyb110() && PreferenceKeys.scamDevSwitch("oplus_isz", true);
+        return OppoNativeFullRes.family() && (OppoNativeFullRes.pyb110() || OppoNativeFullRes.rmx3840())
+                && PreferenceKeys.scamDevSwitch("oplus_isz", true);
+    }
+
+    /** The cameras of this phone with an ISZ row. */
+    static String[] cameras() {
+        return OppoNativeFullRes.pyb110() ? new String[]{"2", "4"} : OppoNativeFullRes.rmx3840() ? new String[]{"0"} : new String[0];
+    }
+
+    /** The ISZ row index of a camera of this phone, -1 for none. */
+    static int rowIndex(@Nullable String cameraId) {
+        for (String camera : cameras())
+            if (camera.equals(cameraId)) return OppoNativeFullRes.pyb110() ? ROW : REALME_ROW;
+        return -1;
+    }
+
+    /**
+     * P721: {row, width, height, fps} of the RMX3840 main's ISZ row ({@code rmx3840}): row 8 of camera 0 when it is a 4:3 half of the
+     * table's largest row (a 2x crop); null otherwise.
+     */
+    @Nullable
+    static int[] realmeRow(boolean rmx3840, @Nullable String cameraId, @Nullable int[] table) {
+        if (!rmx3840 || !"0".equals(cameraId) || table == null || table.length < 2) return null;
+        final int[] e = SensorModeBand.modeEntry(table, REALME_ROW);
+        if (e == null) return null;
+        int fw = 0, fh = 0;
+        for (int i = 0; i < table[0]; i++) {
+            final int[] r = SensorModeBand.modeEntry(table, i);
+            if (r != null && (long) r[0] * r[1] > (long) fw * fh) { fw = r[0]; fh = r[1]; }
+        }
+        if (Math.abs(e[0] * 2 - fw) > fw / 50 || Math.abs(e[1] * 2 - fh) > fh / 50 || Math.abs(e[1] * 4 - e[0] * 3) > e[0] / 50) return null;
+        return new int[]{REALME_ROW, e[0], e[1], e[2]};
     }
 
     /**
@@ -55,10 +94,17 @@ public final class OplusIsz {
         return new int[]{ROW, e[0], e[1], e[2]};
     }
 
-    /** The ISZ row of a camera of this phone (its table, or the recorded one); null without one. */
+    /** The ISZ row of a camera of this phone (the recorded table); null without one. */
     @Nullable
     static int[] row(@Nullable String cameraId) {
-        return row(OppoNativeFullRes.pyb110(), cameraId, OppoNativeFullRes.recorded(cameraId));
+        return OppoNativeFullRes.pyb110() ? row(true, cameraId, OppoNativeFullRes.recorded(cameraId))
+                : row(cameraId, OppoNativeFullRes.fallbackTable(cameraId));
+    }
+
+    /** The ISZ row of a camera of this phone in {@code table}; null without one. */
+    @Nullable
+    static int[] row(@Nullable String cameraId, @Nullable int[] table) {
+        return OppoNativeFullRes.pyb110() ? row(true, cameraId, table) : realmeRow(OppoNativeFullRes.rmx3840(), cameraId, table);
     }
 
     /**
@@ -66,7 +112,7 @@ public final class OplusIsz {
      * any other pick as it was. Not after the row failed on this firmware.
      */
     static SensorModePick.Pick mark(@Nullable String cameraId, @Nullable String slot, SensorModePick.Pick p) {
-        if (p == null || p.route != null || !device() || p.mode != ROW) return p;
+        if (p == null || p.route != null || !device() || p.mode != rowIndex(cameraId)) return p;
         final int[] r = row(cameraId);
         if (r == null || r[1] != p.width || r[2] != p.height || failed(prefs(), cameraId, stamp())) return p;
         return new SensorModePick.Pick(p.mode, p.width, p.height, false, 2, SensorModePick.ISZ);
@@ -84,8 +130,8 @@ public final class OplusIsz {
     }
 
     /**
-     * Once per camera: the back module of camera 2 and of camera 4 (visible, not a copy) gets a copy at twice its zoom with the ISZ
-     * row picked and its sensor crop on; a deleted one is not made again. True when this phone takes the route (IszModule then
+     * Once per camera: the back module of camera 2 and of camera 4 (the RMX3840: camera 0; visible, not a copy) gets a copy at twice
+     * its zoom with the ISZ row picked and its sensor crop on; a deleted one is not made again. True when this phone takes the route (IszModule then
      * makes no CROPPED_RAW «2×»).
      */
     public static boolean ensure(@Nullable Context context) {
@@ -93,7 +139,7 @@ public final class OplusIsz {
         try {
             final SharedPreferences p = prefs();
             if (p == null) return true;
-            for (String camera : new String[]{"2", "4"}) {
+            for (String camera : cameras()) {
                 final int[] r = row(camera);
                 if (r == null || p.getBoolean(OFFERED + camera, false)) continue;
                 String source = null;
@@ -114,7 +160,8 @@ public final class OplusIsz {
                         .putString(SensorModePick.prefKey(target), String.valueOf(r[0]))
                         .apply();
                 Log.i("SCAM_CAPTURE", "OPPO family ISZ module " + target + " («" + label(zoom) + "») on camera " + camera + ": sensor mode row "
-                        + r[0] + " " + r[1] + "x" + r[2] + " (izoom QBC, the sensor's Quad, no remosaic), zoom " + zoom + ", sensor crop, ISP stream off");
+                        + r[0] + " " + r[1] + "x" + r[2] + " (" + (OppoNativeFullRes.pyb110() ? "izoom QBC, the sensor's Quad" : "iZoom crop, its frames prove the Quad")
+                        + ", no remosaic), zoom " + zoom + ", sensor crop, ISP stream off");
             }
             alignNoiseProfiles(p);
             return true;
@@ -142,8 +189,8 @@ public final class OplusIsz {
         try {
             for (String slot : ModuleRegistry.slots()) {
                 final String source = ModuleRegistry.duplicateOf(slot), camera = ModuleRegistry.camera(slot);
-                if (source == null || !slot.startsWith("back") || !("2".equals(camera) || "4".equals(camera))
-                        || SensorModePick.picked(slot) != ROW || p.getBoolean(NOISE_ALIGNED + slot, false)) continue;
+                if (source == null || !slot.startsWith("back") || rowIndex(camera) < 0
+                        || SensorModePick.picked(slot) != rowIndex(camera) || p.getBoolean(NOISE_ALIGNED + slot, false)) continue;
                 p.edit().putBoolean(NOISE_ALIGNED + slot, true).apply();
                 final Object own = PreferenceKeys.profiles().snapshot(slot).get(NOISE_KEY), src = PreferenceKeys.profiles().snapshot(source).get(NOISE_KEY);
                 if (!noiseDiffers(own, src)) continue;
@@ -219,10 +266,11 @@ public final class OplusIsz {
 
     /**
      * CaptureController: a session of {@code camera} starts - its OPPO-family pick (ISZ / DCG / DAG), its native FULLRES profile, or
-     * neither (the normal session: its own mode is logged once). The PYB110 only (scam_dev "oplus_mode_watch 0": none).
+     * neither (the normal session: its own mode is logged once). The PYB110 and the RMX3840 only (scam_dev "oplus_mode_watch 0": none).
      */
     public static void watchSession(@Nullable String camera, @Nullable SensorModePick.Pick pick, @Nullable VivoSdkFullRes.Profile nativeProfile) {
-        if (camera == null || !OppoNativeFullRes.family() || !OppoNativeFullRes.pyb110() || !PreferenceKeys.scamDevSwitch("oplus_mode_watch", true)) {
+        if (camera == null || !OppoNativeFullRes.family() || !(OppoNativeFullRes.pyb110() || OppoNativeFullRes.rmx3840())
+                || !PreferenceKeys.scamDevSwitch("oplus_mode_watch", true)) {
             watch = null;
             return;
         }

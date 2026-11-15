@@ -2,6 +2,13 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-15 — 50 MP, gallery, HDR and tone
+
+- X300 Ultra, 50 MP «Fast»: up to ~10 frames go into the merge instead of 4 — the memory reserve is sized for the fast merge.
+- The gallery no longer crashes when opening the details of large DNGs (50 MP and up).
+- Changed how «AE darkening limit» works: 1 by default (as in the stable v6 config); Why tone V2 is on by default, a saved V1 moves to V2 once.
+- realme: extra modules open the same way as on the OPPO Find X7 Ultra; the 12 Pro+ (RMX3840) gets a separate «2×» module with ISZ without remosaic (a sensor crop; if the sensor gives a remosaic, the module moves to a digital crop by itself).
+
 ## 2026-11-14 (evening, 2) — Icon and LOFIC
 
 - A new app icon: a camera with depth and a highlight on a graphite background; the splash and themed icon to match.

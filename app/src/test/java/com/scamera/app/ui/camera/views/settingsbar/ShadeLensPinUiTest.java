@@ -97,6 +97,8 @@ public class ShadeLensPinUiTest {
                     .putBoolean("module_visible_back" + i, true).commit();
         prefs.edit().putString("module_active", "back2").putBoolean("pref_save_per_lens_settings", true).commit();
         PreferenceKeys.profiles().changed("pref_save_per_lens_settings");
+        // P721: V2 by default greys the V1 rows (the colour gamut, an example row here): these tests are about the lens pins
+        prefs.edit().putString("pref_scam_hybrid_tone_version", "v1").commit();
         catalog = new ShadeCatalog(context, prefs);
     }
 

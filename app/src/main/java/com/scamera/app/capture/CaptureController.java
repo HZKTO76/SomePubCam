@@ -9702,8 +9702,9 @@ public class CaptureController {
         // P586: a 200 MP row its frames proved a Quad (the OnePlus 16) merges as one; the vivo 200 MP profiles are block 4 as before
         final int block = nativeVivoFullRes() ? Math.max(1, VivoSdkFullRes.profile(mVivoSdkCameraId).mergeBlock()) : hugeSeries ? 4 : 1; // P609
         final int guarded = VivoSdkFullRes.frameCount(requested, frameBytes, availableBytes);
+        final boolean fastMerge = PreferenceKeys.fastProcessing(); // P721: «Быстрый» sizes its series by its own memory (row bands)
         final int frames = seriesMode ? VivoSdkFullRes.seriesCount(requested, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid,
-                hugeSeries, availableBytes, hugeSeries ? 4L * frameBytes : halFree) : guarded;
+                hugeSeries, availableBytes, hugeSeries ? 4L * frameBytes : halFree, fastMerge) : guarded;
         if (hugeSeries) {
             if (frames < 3) {
                 failPendingShutter(new IllegalStateException(Lang.t("Недостаточно памяти для серии 200 Мп", "Not enough memory for a 200 MP series")));
@@ -9730,7 +9731,7 @@ public class CaptureController {
             // taken after the press shrink; before P232 the top-up was fixed first and the budget removed the oldest ring frames
             // (owner's X7U 20:20:35: «5 ring frames + 7 N after the shutter» -> «N 1 from the ring + 13 after the shutter»)
             final int[] split = VivoSdkFullResCapture.zslSplit(ring, extras, requested, all -> seriesMode
-                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, withRing)
+                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, withRing, 0, fastMerge)
                     : VivoSdkFullRes.frameCount(all, frameBytes, withRing));
             final int keep = split[0];
             zslTopUp = split[1];
@@ -9745,7 +9746,7 @@ public class CaptureController {
             // P202 (owner, 2026-10-17: «В PSL у нас тоже должны быть брекет кадры»): a native 50 MP series after the shutter is N
             // and the 12 MP Hybrid plan's bracketed / ultrashort frames, as a ZSL shot's frames after the shutter
             pslPlanBuilt = hugeSeries || !nativeVivoFullRes() ? null : pslPlan(requested, all -> seriesMode
-                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, availableBytes, halFree)
+                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, availableBytes, halFree, fastMerge)
                     : VivoSdkFullRes.frameCount(all, frameBytes, availableBytes), manualPslNs, block);
             count = pslPlanBuilt != null ? pslPlanBuilt.requests.size() : frames;
             shotN = 0;

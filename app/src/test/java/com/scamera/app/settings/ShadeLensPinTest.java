@@ -70,6 +70,8 @@ public class ShadeLensPinTest {
         // the lens page turns the modules' own settings on before it opens (ModuleActions.openLens)
         perLens(true);
         select("back2");
+        // P721: V2 by default greys the V1 rows (the colour gamut, the example row here; a per-lens row, so after the lens is active): these tests are about the lens pins
+        prefs.edit().putString("pref_scam_hybrid_tone_version", "v1").commit();
         catalog = new ShadeCatalog(context, prefs);
     }
 
@@ -185,6 +187,7 @@ public class ShadeLensPinTest {
         ShadeCatalog.Entry fps = catalog.entry(catalog.lensPin("back2", ModuleSensorSettings.prefix("back2") + "rawfps"));
         assertNull(catalog.unavailable(fps));
         perLens(true);
+        prefs.edit().putString("pref_scam_hybrid_tone_version", "v1").commit(); // (the lens's profile came back: V1 again, P721)
         assertNull(catalog.unavailable(e));
     }
 

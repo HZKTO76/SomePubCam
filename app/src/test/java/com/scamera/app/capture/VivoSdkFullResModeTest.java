@@ -286,6 +286,25 @@ public class VivoSdkFullResModeTest {
      * buffers come back for the merge as for a 200 MP shot. Counted as free they let 12 binned frames fit (the RAW guard's 12 too);
      * not counted, 2 - the 200 MP shot itself got 3 of 4 there.
      */
+    /**
+     * P721: the X300 Ultra's 50 MP (8160x6128 Quad, 95 MB a frame; log 2026-11-15): 7 N + 2 ultrashort + 1 long asked with 4 ring
+     * frames held and 2228 MB free kept 1 ring frame and 0 N after the shutter by the SCAM merge's 40 B per pixel; the fast route's
+     * row bands hold all 10, the RAW guard (half of the memory) still binding first where it is lower.
+     */
+    @Test public void theFastRouteSizesA50MpSeriesByItsRowBands() {
+        final long mib = 1L << 20;
+        final long px = 8160L * 6128, raw = px * 2;
+        final long withRing = 2228 * mib + 4 * raw;
+        assertEquals("the SCAM merge's sizing (as before)", 4, VivoSdkFullRes.seriesCount(10, px, 8160, raw, 2, 1, false, withRing, 0, false));
+        assertEquals("«Быстрый»: every frame", 10, VivoSdkFullRes.seriesCount(10, px, 8160, raw, 2, 1, false, withRing, 0, true));
+        assertEquals("the PSL series at 2739 MB", 7, VivoSdkFullRes.seriesCount(7, px, 8160, raw, 2, 1, false, 2739 * mib, 0, true));
+        assertTrue("the RAW guard still binds", VivoSdkFullRes.seriesCount(65, px, 8160, raw, 2, 1, false, 2739 * mib, 0, true)
+                <= VivoSdkFullRes.frameCount(65, raw, 2739 * mib));
+        assertEquals("200 MP keeps its own sizing", VivoSdkFullRes.seriesCount(4, 16320L * 12288, 16320, 16320L * 12288 * 2, 4, 1, true, 2390 * mib),
+                VivoSdkFullRes.seriesCount(4, 16320L * 12288, 16320, 16320L * 12288 * 2, 4, 1, true, 2390 * mib, 4L * 16320 * 12288 * 2, true));
+        assertEquals("nothing beyond the bands' reserve", 0, VivoSdkFullRes.fastSeriesFit(px, raw, 1, 1000 * mib, 0));
+    }
+
     @Test public void aBinned50MpSeriesCountsTheHalsTetraBuffersAsFree() {
         final long mib = 1L << 20;
         final long px50 = 8160L * 6144, raw50 = px50 * 2, raw200 = 16320L * 12288 * 2;

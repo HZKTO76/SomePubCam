@@ -42,6 +42,31 @@ public class OplusIszTest {
         assertNull("no table", OplusIsz.row(true, "2", null));
     }
 
+    /** P721: the realme RMX3840 main's iZoom crop row 8 (4096x3072, half of 8192x6144), its recorded table, a module of its own. */
+    @Test public void theRealmeMainIszIsRow8() {
+        assertArrayEquals(new int[]{8, 4096, 3072, 30}, OplusIsz.realmeRow(true, "0", OppoNativeFullRes.RMX3840_MAIN));
+        assertNull("another phone", OplusIsz.realmeRow(false, "0", OppoNativeFullRes.RMX3840_MAIN));
+        assertNull("the front", OplusIsz.realmeRow(true, "1", OppoNativeFullRes.RMX3840_MAIN));
+        assertNull("no table", OplusIsz.realmeRow(true, "0", null));
+        assertNull("a 16:9 row 8", OplusIsz.realmeRow(true, "0", new int[]{9, 3, 8192, 6144, 15, 4096, 3072, 30, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4096, 2304, 30}));
+        ShadowBuild.setManufacturer("realme");
+        ShadowBuild.setModel("RMX3840");
+        assertTrue(OplusIsz.device());
+        assertArrayEquals(new String[]{"0"}, OplusIsz.cameras());
+        assertArrayEquals(new int[]{8, 4096, 3072, 30}, OplusIsz.row("0"));
+        assertNull(OplusIsz.row("1"));
+        final SensorModePick.Pick isz = OplusIsz.mark("0", "back0", new SensorModePick.Pick(8, 4096, 3072));
+        assertEquals(SensorModePick.ISZ, isz.route);
+        assertEquals(2, isz.block);
+        assertTrue(isz.rawOnly());
+        final SensorModePick.Pick other = new SensorModePick.Pick(11, 4096, 2304);
+        assertSame("another row: unchanged", other, OplusIsz.mark("0", "back0", other));
+        ShadowBuild.setModel("RMX5200");
+        assertFalse("another realme: no ISZ", OplusIsz.device());
+        assertEquals(0, OplusIsz.cameras().length);
+    }
+
     @Test public void theModuleLabelsAreTwiceTheirZoom() {
         assertEquals("2×", OplusIsz.label(2f));
         assertEquals("6.4×", OplusIsz.label(6.4f));

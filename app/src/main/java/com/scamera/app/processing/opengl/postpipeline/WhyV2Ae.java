@@ -28,7 +28,7 @@ public final class WhyV2Ae {
      */
     public static final class Params {
         // Smart HDR AE (adj_cat_smart_hdr_ae)
-        public float aeTarget = 0.14999999f, maxBoost = 5.0f, minLimit = 0.5f, facePriority = 0.7f;
+        public float aeTarget = 0.14999999f, maxBoost = 5.0f, minLimit = 1.0f, facePriority = 0.7f; // P721: minLimit 1 (the owner's config v6)
         public float nightDim = 0.049999997f, hlOverflow = 2.0f, hlBlend = 0.5f;
         public float brightThresh = 0.90000004f, darkThresh = 12.5f, darkPixelThresh = 22f, hlBoost = 1.1f, contrastBoost = 0.3f;
         /** pref_exp_ev: the exposure compensation the AE reads as 2^ev (0 in the reference config). */
@@ -102,6 +102,10 @@ public final class WhyV2Ae {
      * Neutral: the shadow lift x 0.85, the highlight compression kept (less of it clips), the macro contrast x 0.3 and the
      * flat-scene boost x 1/3 of theirs, the vibrance -0.12 with its sky / green / light-tone terms x 0.55 (owner: the colour
      * 11-18 % calmer than Normal's; measured 12-17 % on the four scenes).
+     * P721 (owner: «обнови их в соответствии с новым дефолтом»): re-rendered on the new defaults (V2, the darkening limit 1): the
+     * four scenes' AE is 1.3-2.5 there, the limit does not act, the terms hold (Vivid shadows +3.0-5.9 L*, Neutral 12-17 % calmer);
+     * the same scenes 3x brighter (where the limit holds the AE at 1 instead of 0.5-0.58): Vivid clips as Normal (18.0 / 18.4 %,
+     * 9.2 / 8.3 %; at 0.5 it was 13.5 / 3.8 %), Neutral 0.6-0.9 % - the factors stay.
      */
     static final Style[] STYLES = {
             new Style(1f, 1f, 1f, 1f, 0f, 0f, 1f),

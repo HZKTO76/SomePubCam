@@ -294,6 +294,9 @@ def main():
     worst = worst_f = 0.0
     finite = True
     for e in ends:
+        # P721: the AE at the reference's darkening limit 0.5 (the default is 1 now): this bright frame is then darkened, as the
+        # bound was measured; at 1 its exposure stays 1 and the steeper display end reaches 5e-3 (the rows' ends are the point)
+        e = dict(e, minLimit=0.5)
         _, base = H.statistics(frame, bento=True, params=e)
         for op in (3, 0):
             for c in colours[:4]:

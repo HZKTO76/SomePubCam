@@ -147,10 +147,10 @@ public class ExifDialogViewModel extends AndroidViewModel {
 
     private Facts read(ContentResolver resolver, MediaFile file) {
         ExifInterface exif;
-        try (InputStream in = resolver.openInputStream(file.contentUri())) {
-            if (in == null) return null;
-            exif = new ExifInterface(in); // reads the metadata at once
-        } catch (IOException e) {
+        try {
+            exif = com.scamera.app.gallery.helper.ExifRead.open(resolver, file.contentUri()); // P721: seeks, no 80 MB skip buffer
+            if (exif == null) return null;
+        } catch (IOException | RuntimeException e) {
             Log.d(TAG, "no EXIF in " + file.displayName() + ": " + e);
             return null;
         }

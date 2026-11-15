@@ -158,9 +158,9 @@ public final class SettingsAvailability {
         }
     }
 
-    /** P614: «Why тон» V2 is chosen (pref_scam_hybrid_tone_version; V1 by default). */
+    /** P614: «Why тон» V2 is chosen (pref_scam_hybrid_tone_version; P721: V2 by default). */
     private boolean toneV2() {
-        return text("pref_scam_hybrid_tone_version", "v1").trim().equals("v2");
+        return text("pref_scam_hybrid_tone_version", "v2").trim().equals("v2");
     }
 
     /**

@@ -65,7 +65,7 @@ public class WhyV2ToneTest {
     @After public void tearDown() { if (camera != null) camera.close(); }
 
     @Test public void switchDefaultsToV1() {
-        assertFalse("V1 by default (an old install has no value)", PreferenceKeys.whyToneV2());
+        assertTrue("P721: V2 by default (no stored value)", PreferenceKeys.whyToneV2());
         manager.set("default_scope", "pref_scam_hybrid_tone_version", "v2");
         assertTrue(PreferenceKeys.whyToneV2());
         manager.set("default_scope", "pref_scam_hybrid_tone_version", "v1");
@@ -76,6 +76,7 @@ public class WhyV2ToneTest {
 
     @Test public void pipelineChoice() {
         // no press look: the settings now; a film of the old route keeps V1, the reference film engine takes V2
+        manager.set("default_scope", "pref_scam_hybrid_tone_version", "v1");
         assertFalse(PostPipeline.whyToneV2(null, null, false, 0L));
         manager.set("default_scope", "pref_scam_hybrid_tone_version", "v2");
         assertTrue(PostPipeline.whyToneV2(null, null, false, 0L));
@@ -124,6 +125,7 @@ public class WhyV2ToneTest {
     @Test public void nodeOrder() throws Exception {
         ScamHybridBurst.lastHlMask = null;
         // V1: the tone nodes as before P614 (WhyStats, WhyFusion, WhyLumaSharpen, WhyCombine), the tail after them
+        manager.set("default_scope", "pref_scam_hybrid_tone_version", "v1"); // P721: V2 is the default
         final java.util.List<String> v1 = nodes(false);
         final java.util.List<String> expectedV1 = new java.util.ArrayList<>(java.util.Arrays.asList("ScamRgb", "ScamHdrDenoise"));
         if (DenoiseStages.on()) expectedV1.add("WhyMsDenoise");
@@ -149,7 +151,7 @@ public class WhyV2ToneTest {
         final int lenses = xml.indexOf("android:key=\"root_lenses\"");
         assertTrue("beside the processing mode and the fringe method, before the groups", fringe > 0 && tone > fringe && lenses > tone);
         assertTrue(xml.contains("SegmentedListPreference android:key=\"pref_scam_hybrid_tone_version\""));
-        assertTrue(xml.contains("android:entryValues=\"@array/scam_hybrid_tone_version_values\" android:defaultValue=\"v1\""));
+        assertTrue(xml.contains("android:entryValues=\"@array/scam_hybrid_tone_version_values\" android:defaultValue=\"v2\""));
         assertEquals("Why tone", context.getString(R.string.prefs_scam_hybrid_tone_version_title));
         assertArrayEquals(new String[]{"V1", "V2"}, context.getResources().getStringArray(R.array.scam_hybrid_tone_version_entries));
         assertArrayEquals(new String[]{"v1", "v2"}, context.getResources().getStringArray(R.array.scam_hybrid_tone_version_values));
@@ -200,7 +202,11 @@ public class WhyV2ToneTest {
     }
 
     @Test public void flatGreyScene() {
+        assertEquals("P721: the owner's config v6", 1f, new WhyV2Ae.Params().minLimit, 0f);
+        assertEquals("P721: a flat grey scene is not darkened below x1", 1f,
+                WhyV2Ae.finish(hist(new float[][]{{0.2f, 0.2f, 0.2f}}, new int[]{1000}, 1f), new WhyV2Ae.Params(), 1f, 0f, 0f).ae, 0f);
         final WhyV2Ae.Params p = new WhyV2Ae.Params();
+        p.minLimit = 0.5f; // the reference's own default: the parity of the math below
         final WhyV2Ae.Hist h = hist(new float[][]{{0.2f, 0.2f, 0.2f}}, new int[]{1000}, 1f);
         final WhyV2Ae.Result r = WhyV2Ae.finish(h, p, 1f, 0f, 0f);
         final float v = 819 / 4096f;   // bin int(0.2 x 4095.99)

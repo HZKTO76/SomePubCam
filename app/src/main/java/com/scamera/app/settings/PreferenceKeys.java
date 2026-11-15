@@ -1048,10 +1048,10 @@ public class PreferenceKeys {
             + "rejMeanFloor 0\nrejKneeLo 0\nrejKneeHi 0\nlaStride 16\nlaIters 0\nfastMerge 1\n";
 
     /**
-     * P614 (owner, 2026-11-11): «Why тон» (pref_scam_hybrid_tone_version) on the main settings page - "v1" (default, our tone as it
-     * was) or "v2" (the reference tone ported one to one: WhyV2Stats / WhyV2Fusion / WhyV2Tone).
+     * P614 (owner, 2026-11-11): «Why тон» (pref_scam_hybrid_tone_version) on the main settings page - "v1" (our tone as it was) or
+     * "v2" (the reference tone ported one to one: WhyV2Stats / WhyV2Fusion / WhyV2Tone; the default since P721).
      */
-    public static boolean whyToneV2() { return "v2".equals(hybridString("tone_version", "v1")); }
+    public static boolean whyToneV2() { return "v2".equals(hybridString("tone_version", "v2")); } // P721: V2 by default
     /** P718: «Чёрно-белый» (pref_scam_hybrid_colour_mono) is V1's: with it on a shot and the live tone take V1, as a film does. */
     public static boolean monoFilter() {
         return java.util.Arrays.asList(com.scamera.app.processing.color.ColourLook.MONO).indexOf(hybridString("colour_mono", "off")) > 0;

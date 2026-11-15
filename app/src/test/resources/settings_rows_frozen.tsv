@@ -113,7 +113,7 @@ pref_scam_hybrid_why_curve_on	SwitchPreferenceCompat	true	-	-	-	-	-	-	-	-	-	-
 pref_scam_hybrid_why_curve_points	com.scamera.app.ui.settings.custompreferences.ToneCurvePreference	-	-	-	-	-	-	-	pref_scam_hybrid_why_curve_on	-	-	-
 pref_scam_hybrid_why_metering	ListPreference	0	-	-	-	-	@array/scam_hybrid_why_metering_entries	@array/scam_hybrid_why_metering_values	-	-	-	-
 pref_scam_hybrid_why_ae_target	com.scamera.app.ui.settings.custompreferences.UniversalSeekBarPreference	0.15	0.02	0.5	100	true	-	-	-	-	-	-
-pref_scam_hybrid_why_ae_min_limit	com.scamera.app.ui.settings.custompreferences.UniversalSeekBarPreference	0.5	0.1	1	100	true	-	-	-	-	-	-
+pref_scam_hybrid_why_ae_min_limit	com.scamera.app.ui.settings.custompreferences.UniversalSeekBarPreference	1	0.1	1	100	true	-	-	-	-	-	-
 pref_scam_hybrid_why_ae_max_boost	com.scamera.app.ui.settings.custompreferences.UniversalSeekBarPreference	5	1	16	10	true	-	-	-	-	-	-
 pref_scam_hybrid_why_hl_overflow	com.scamera.app.ui.settings.custompreferences.UniversalSeekBarPreference	2	0.5	10	10	true	-	-	-	-	-	-
 pref_scam_hybrid_why_night_dim	com.scamera.app.ui.settings.custompreferences.UniversalSeekBarPreference	1	0.5	1.5	100	true	-	-	-	-	-	-

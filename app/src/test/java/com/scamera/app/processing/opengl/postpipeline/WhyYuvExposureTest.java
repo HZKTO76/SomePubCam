@@ -51,7 +51,7 @@ public class WhyYuvExposureTest {
     }
 
     @Test public void theNightRuleNoLongerDarkensAYuvShot() {
-        final float level = 0.25f;  // ae within the limits either way (0.5 .. 5)
+        final float level = 0.1f;  // ae within the limits either way (1 .. 5; P721: the darkening limit is 1 by default)
         final WhyAe.Settings raw = WhyTone.settings(), yuv = WhyTone.settings();
         WhyTone.yuvExposure(yuv, 1f);
         final float aRaw = ae(raw, level), aYuv = ae(yuv, level);

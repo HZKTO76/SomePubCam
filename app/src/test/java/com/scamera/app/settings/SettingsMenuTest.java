@@ -627,6 +627,7 @@ public class SettingsMenuTest {
     }
 
     @Test public void nestedWhyTonePageOpensWithoutParentDependency() {
+        prefs.edit().putString("pref_scam_hybrid_tone_version","v1").commit(); // the metering row below is V1's (P721: V2 is the default)
         try(var controller=org.robolectric.Robolectric.buildActivity(
                 com.scamera.app.ui.settings.SettingsActivity.class)) {
             controller.setup();var activity=controller.get();var fm=activity.getSupportFragmentManager();
@@ -894,7 +895,7 @@ public class SettingsMenuTest {
 
     /** P134: a grading zone's hue acts only with its strength; the AgX saturation only with the «Custom» AgX look. */
     @Test public void colourRowsSayWhenTheyAct(){
-        java.util.Map<String,Object> v=new java.util.HashMap<>();
+        java.util.Map<String,Object> v=new java.util.HashMap<>();v.put("pref_scam_hybrid_tone_version","v1"); // V1's rows (P721: V2 is the default)
         assertNotNull(new SettingsAvailability(v).reason("pref_scam_hybrid_colour_grade_highlights_hue"));
         v.put("pref_scam_hybrid_colour_grade_highlights_str","30");
         assertNull(new SettingsAvailability(v).reason("pref_scam_hybrid_colour_grade_highlights_hue"));
@@ -970,8 +971,8 @@ public class SettingsMenuTest {
         assertEquals("pref_scam_hybrid_why_uchi_on",root.findPreference("pref_scam_hybrid_why_uchi_m").getDependency());
         assertTrue(root.findPreference("pref_scam_hybrid_why_curve_points") instanceof com.scamera.app.ui.settings.custompreferences.ToneCurvePreference);
         assertEquals("pref_scam_hybrid_why_curve_on",root.findPreference("pref_scam_hybrid_why_curve_points").getDependency());
-        // AgX's rows tell which operator works instead
-        java.util.Map<String,Object> values=new java.util.HashMap<>();
+        // AgX's rows tell which operator works instead (V1's look row; P721: V2 is the default)
+        java.util.Map<String,Object> values=new java.util.HashMap<>();values.put("pref_scam_hybrid_tone_version","v1");
         assertNull(new SettingsAvailability(values).reason("pref_scam_hybrid_why_agx_look"));
         values.put("pref_scam_hybrid_why_uchi_on",true);
         String why=new SettingsAvailability(values).reason("pref_scam_hybrid_why_agx_look");
