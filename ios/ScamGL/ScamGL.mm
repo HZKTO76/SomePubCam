@@ -1487,12 +1487,21 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         if (!p.code->recipe.empty()) gRecorded.push_back("P\n" + p.code->recipe + "\x02" + key);
     }
     endCompute(*c);
+    // a draw over every texel of its target (the viewport and any scissor cover it, no blending; no shader discards, and the MSL
+    // fragment always returns its output) overwrites it whole: their old texels are not loaded into tile memory first
+    const NSInteger fw = NSInteger(targets[0].width), fh = NSInteger(targets[0].height);
+    bool covers = !c->blend && c->viewport[0] <= 0 && c->viewport[1] <= 0 && c->viewport[0] + c->viewport[2] >= fw
+                  && c->viewport[1] + c->viewport[3] >= fh
+                  && (!c->scissorTest || (c->scissor[0] <= 0 && c->scissor[1] <= 0 && c->scissor[0] + c->scissor[2] >= fw
+                                          && c->scissor[1] + c->scissor[3] >= fh));
+    // one target only: with several the fragment may not declare an output for each (an attachment it leaves must keep its texels)
+    covers = covers && targets.size() == 1;
     MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
     for (size_t i = 0; i < targets.size(); ++i) {
         if (!targets[i]) continue;
         pass.colorAttachments[i].texture = targets[i];
         used(*c, targets[i]);
-        pass.colorAttachments[i].loadAction = MTLLoadActionLoad;
+        pass.colorAttachments[i].loadAction = covers ? MTLLoadActionDontCare : MTLLoadActionLoad;
         pass.colorAttachments[i].storeAction = MTLStoreActionStore;
     }
     id<MTLRenderCommandEncoder> e = [commandBuffer(*c) renderCommandEncoderWithDescriptor:pass];
