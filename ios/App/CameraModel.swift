@@ -468,9 +468,12 @@ final class CameraModel {
         // the RAW saving of the press (ScamProcessor.configure at the shot)
         let saving = rawSaving
         let previous = processingTail
+        // the burst handed over (BurstHandoff): the processing is its only owner, so its planes go when BurstProcessor is done
+        // with them (before the merge), not when the shot is saved
+        let handoff = BurstHandoff(burst)
         processingTail = Task { [weak self] in
             await previous?.value
-            await self?.process(shot.id, burst: burst, started: started, facts: facts, rawSaving: saving)
+            await self?.process(shot.id, handoff: handoff, started: started, facts: facts, rawSaving: saving)
         }
     }
 
@@ -482,8 +485,11 @@ final class CameraModel {
     /// the queue goes on. The app may go to the background meanwhile (ProcessingKeepAlive: as long as iOS gives it time).
     /// rawSaving: pref_save_raw_key at the press (1: the merged DNG beside the photo; 2 «Только RAW»: the merged DNG alone, as
     /// ScamProcessor returns after it - no post pipeline, no photo, no preview, no develop record).
-    private func process(_ id: UUID, burst: BayerBurst, started: Date, facts: ShotExif, rawSaving: Int) async {
+    private func process(_ id: UUID, handoff: BurstHandoff, started: Date, facts: ShotExif, rawSaving: Int) async {
         let wantDng = rawSaving >= 1, rawOnly = rawSaving == 2
+        // this function keeps the burst without its planes; the planes go on in `handoff` to BurstProcessor (their last owner)
+        var burst = handoff.burst ?? BayerBurst()
+        for i in burst.frames.indices { burst.frames[i].raw = Data() }
         let keepAlive = BackgroundTime()
         keepAlive.id = UIApplication.shared.beginBackgroundTask(withName: "SCAMERA shot") { MainActor.assumeIsolated { keepAlive.end() } }
         defer {
@@ -510,8 +516,9 @@ final class CameraModel {
                 }
                 do {
                     // P165: a merged DNG when RAW is saved (ScamProcessor: rawSaving >= 1)
+                    var full = handoff.take() ?? burst
                     let r = try Perf.interval("burst processing") {
-                        try BurstProcessor.process(burst, metadata: metadata, zoom: burst.zoom,
+                        try BurstProcessor.process(&full, metadata: metadata, zoom: full.zoom,
                                                    dngFacts: wantDng ? BurstProcessor.dngFacts(metadata: metadata, shot: shot) : nil,
                                                    rawOnly: rawOnly)
                     }

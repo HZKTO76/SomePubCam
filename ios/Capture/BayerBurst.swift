@@ -4,6 +4,16 @@ import ImageIO
 /// A series of Bayer RAW frames for the SHDR merge (Android: the N frames of the burst, then the plan's ultrashort and bracketed
 /// frames, HybridPlan), in capture order with each frame's capture role and measured exposure (the merge's frame rules pick from
 /// them: Engine/post/HybridSelect.hpp).
+/// A burst handed from the capture to its processing (CameraModel.enqueue -> process -> BurstProcessor): take() leaves the box
+/// empty, so the one who took it is the planes' only owner and can release them.
+final class BurstHandoff: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: BayerBurst?
+    init(_ burst: BayerBurst) { held = burst }
+    var burst: BayerBurst? { lock.lock(); defer { lock.unlock() }; return held }
+    func take() -> BayerBurst? { lock.lock(); defer { lock.unlock() }; let b = held; held = nil; return b }
+}
+
 struct BayerBurst {
     var width = 0, height = 0, cfa = 0
     var frames: [NchFrame] = []

@@ -165,7 +165,9 @@ enum BurstProcessor {
         return Result(heic: data, uti: format.type.identifier, log: log)
     }
 
-    static func process(_ burst: BayerBurst, metadata: [String: Any], zoom: Double? = nil, dngFacts: [String: Any]? = nil,
+    /// `burst`'s frame planes are released (emptied) once the series is on the flash and the faces are found: the merge reads
+    /// the NCH file, the 23 MB planes (547 MB a 23-frame burst) no longer sit beside the merge, the post and the save.
+    static func process(_ burst: inout BayerBurst, metadata: [String: Any], zoom: Double? = nil, dngFacts: [String: Any]? = nil,
                         rawOnly: Bool = false) throws -> Result {
         guard MetalEngine.shared != nil else { throw EngineError.noDevice }
         guard burst.frames.count >= 1, burst.width >= 64, burst.height >= 64 else { throw EngineError.decode("empty burst") }
@@ -300,6 +302,9 @@ enum BurstProcessor {
             faces = PortraitFaces.detect(burst, dngOrientation: info.orientation, black: blackMean, white: info.white)
             log.append("portrait: \(faces.note) in \(ms(since: faceStarted)) ms")
         }
+        // the planes are done with (the NCH holds them): released before the merge (the roles and exposures stay)
+        for i in frames.indices { frames[i].raw = Data() }
+        for i in burst.frames.indices { burst.frames[i].raw = Data() }
         let photo: SCAMPhoto
         do {
             // the stored lens shading map of this lens and frame size (used where the DNG has none)

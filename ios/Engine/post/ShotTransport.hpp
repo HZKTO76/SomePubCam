@@ -81,6 +81,9 @@ struct NchFile {
         address = mmap(nullptr, length, PROT_READ, MAP_PRIVATE, fd, 0);
         ::close(fd);
         if (address == MAP_FAILED) throw std::runtime_error("cannot map " + path);
+        // the planes are read next (the frame scores, the transport, the merge): their pages asked for ahead (a series written
+        // during the capture may have left the page cache; front 541-577 ms against 25 ms for the same frames in the logs)
+        madvise(address, length, MADV_WILLNEED);
         std::memcpy(h.data(), address, 128);
         if (h[0] != 0x3143484eu || (h[1] != 11 && h[1] != 12)) throw std::runtime_error("not an NCH v11 / v12 burst " + path);
         if (128 + 32 * size_t(frames()) > length) throw std::runtime_error("truncated burst " + path);
