@@ -14,7 +14,8 @@ final class PerfTests: XCTestCase {
             let v = p.bindMemory(to: UInt16.self)
             for y in 0..<height {
                 for x in 0..<width {
-                    v[y * width + x] = y < height / 5 ? 15930 : UInt16(2112 + (x * 12000 / width) + (x ^ y) % 23)
+                    let ramp: Int = 2112 + (x * 12000 / width) + (x ^ y) % 23
+                    v[y * width + x] = y < height / 5 ? UInt16(15930) : UInt16(ramp)
                 }
             }
         }
