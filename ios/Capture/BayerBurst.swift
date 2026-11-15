@@ -77,64 +77,72 @@ extension PhotoCapture {
                                        height: Int(output.maxPhotoDimensions.height), log: { log.append($0) })
         var clock = BurstClock()
         let ettr = await ettrExposure(bayer: bayer, device: device, burst: &burst)
-        // the camera AE's exposure of this moment, read once: every N frame of the series at it
-        let aeNs = Int64((device.exposureDuration.seconds * 1e9).rounded())
-        let tLow = Int64((format.minExposureDuration.seconds * 1e9).rounded(.up))
-        let tHigh = Int64((format.maxExposureDuration.seconds * 1e9).rounded(.down))
-        let nNs = min(max(ettr?.ns ?? aeNs, tLow), max(tLow, tHigh))
-        let nIso = min(max(ettr.map { Float($0.iso) } ?? device.iso, format.minISO), format.maxISO)
-        let nIsoInt = Int(nIso.rounded())
-        burst.report.append(String(format: "N plan: %ld frames at %.3f ms * ISO %ld (%@), %ld a request", count, Double(nNs) / 1e6, nIsoInt,
-                                   ettr != nil ? "ETTR" : "the camera AE's present exposure", perRequest))
-        var lost = 0, requests = 0
+        var lost = 0
         var lastN: AVCapturePhoto?
-        let maxRequests = (count + perRequest - 1) / perRequest + 2
-        while burst.frames.count < count && requests < maxRequests {
-            requests += 1
-            let n = min(perRequest, count - burst.frames.count)
-            let bracket = (0..<n).map { _ in
-                AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(
-                    exposureDuration: CMTime(value: nNs, timescale: 1_000_000_000), iso: nIso)
-            }
-            let first = burst.frames.isEmpty
-            func request(withProcessed: Bool) -> AVCapturePhotoBracketSettings {
-                let processed: [String: Any]? = withProcessed ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
-                let settings = AVCapturePhotoBracketSettings(rawPixelFormatType: bayer, processedFormat: processed, bracketedSettings: bracket)
-                settings.maxPhotoDimensions = output.maxPhotoDimensions
-                if stabilized { settings.isLensStabilizationEnabled = true }
-                // one shutter sound for the whole series (CameraSounds), not the system's per request
-                silence(settings)
-                return settings
-            }
-            // CaptureController's series timeout: 4 s + 3 x the request's exposures
-            let timeout = 4 + 3 * Double(nNs) * Double(n) / 1e9
-            let requestStarted = Date()
-            var photos: [AVCapturePhoto]
-            do {
-                photos = try await capturePhotos(request(withProcessed: first), timeout: timeout)
-            } catch CameraError.captureException(let reason) where first {
-                // a RAW + HEIC bracket refused: RAW only (the EXIF then comes from the DNG)
-                burst.report.append("burst request with HEIC refused (\(reason)), RAW only")
-                photos = try await capturePhotos(request(withProcessed: false), timeout: timeout)
-            } catch where !first {
-                // the shot fails only without a frame (P27): the N frames so far are merged
-                burst.report.append("burst request \(n) frames failed (\(error.localizedDescription)), \(burst.frames.count) N frames kept")
-                lost += n
-                break
-            }
-            let raws = photos.filter(\.isRawPhoto)
-            burst.report.append("burst request \(n) frames in \(ms(since: requestStarted)) ms" + (raws.count < n ? ", \(n - raws.count) lost" : ""))
-            lost += max(0, n - raws.count)
-            for photo in photos {
-                if photo.isRawPhoto {
-                    let (ns, iso) = Self.measured(photo)
-                    limits.observe(requestedNs: nNs, requestedIso: nIsoInt, deliveredNs: ns, deliveredIso: iso, log: { log.append($0) })
-                    lastN = photo
+        // the press on the host clock (AVCapturePhoto.timestamp's clock): a frame stamped before it was exposed before the press
+        let pressNs = Self.hostNowNs() - Int64(Date().timeIntervalSince(pressed) * 1e9)
+        if let ettr {
+            // ETTR («ETTR» on, off by default): the N frames as manual brackets at the meter's boosted exposure (after the press)
+            let nNs = min(max(ettr.ns, Int64((format.minExposureDuration.seconds * 1e9).rounded(.up))),
+                          Int64((format.maxExposureDuration.seconds * 1e9).rounded(.down)))
+            let nIso = min(max(Float(ettr.iso), format.minISO), format.maxISO)
+            burst.report.append(String(format: "N plan: %ld frames at %.3f ms * ISO %.0f (ETTR, manual brackets), %ld a request",
+                                       count, Double(nNs) / 1e6, nIso, perRequest))
+            var requests = 0
+            let maxRequests = (count + perRequest - 1) / perRequest + 2
+            while burst.frames.count < count && requests < maxRequests {
+                requests += 1
+                let n = min(perRequest, count - burst.frames.count)
+                let bracket = (0..<n).map { _ in
+                    AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(
+                        exposureDuration: CMTime(value: nNs, timescale: 1_000_000_000), iso: nIso)
                 }
-                try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide)
+                let first = burst.frames.isEmpty
+                func request(withProcessed: Bool) -> AVCapturePhotoBracketSettings {
+                    let processed: [String: Any]? = withProcessed ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
+                    let settings = AVCapturePhotoBracketSettings(rawPixelFormatType: bayer, processedFormat: processed, bracketedSettings: bracket)
+                    settings.maxPhotoDimensions = output.maxPhotoDimensions
+                    if stabilized { settings.isLensStabilizationEnabled = true }
+                    silence(settings)
+                    return settings
+                }
+                let timeout = 4 + 3 * Double(nNs) * Double(n) / 1e9
+                let requestStarted = Date()
+                var photos: [AVCapturePhoto]
+                do {
+                    photos = try await capturePhotos(request(withProcessed: first), timeout: timeout)
+                } catch CameraError.captureException(let reason) where first {
+                    burst.report.append("burst request with HEIC refused (\(reason)), RAW only")
+                    photos = try await capturePhotos(request(withProcessed: false), timeout: timeout)
+                } catch where !first {
+                    burst.report.append("burst request \(n) frames failed (\(error.localizedDescription)), \(burst.frames.count) N frames kept")
+                    lost += n
+                    break
+                }
+                let raws = photos.filter(\.isRawPhoto)
+                burst.report.append("burst request \(n) frames in \(ms(since: requestStarted)) ms" + (raws.count < n ? ", \(n - raws.count) lost" : ""))
+                lost += max(0, n - raws.count)
+                for photo in photos {
+                    if photo.isRawPhoto {
+                        let (ns, iso) = Self.measured(photo)
+                        limits.observe(requestedNs: nNs, requestedIso: Int(nIso.rounded()), deliveredNs: ns, deliveredIso: iso, log: { log.append($0) })
+                        lastN = photo
+                    }
+                    try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide)
+                }
+                if raws.isEmpty { break }
             }
-            if raws.isEmpty { break }
+        } else {
+            // the camera's auto exposure, one RAW frame a request, no bracket: the requests zero shutter lag may serve with frames
+            // exposed before the press (isZeroShutterLagEnabled; brackets and manual exposures never get it)
+            burst.report.append("N plan: \(count) single auto-exposure RAW requests, \(ZslSingles.window) in flight, zero shutter lag "
+                                + (output.isZeroShutterLagSupported ? (output.isZeroShutterLagEnabled ? "on" : "off") : "not supported")
+                                + ", responsive capture " + (output.isResponsiveCaptureEnabled ? "on" : "off"))
+            let got = try await captureSingles(count: count, bayer: bayer, device: device, burst: &burst, clock: &clock, wide: wide)
+            lost += got.lost
+            lastN = got.newest
         }
+        burst.report.append(ZslSingles.timing(burst.frames, pressNs: pressNs))
         burst.report.append("N delivered: " + Self.exposures(burst.frames))
         let delivered = burst.frames.count
         // Android's ring selection on the delivered N frames (the camera may give another exposure than asked)
@@ -178,6 +186,78 @@ extension PhotoCapture {
         burst.report.append("burst \(burst.frames.count) frames (\(normals) N, \(burst.frames.count - normals) ultrashort / bracketed) in \(ms(since: started)) ms, per request \(perRequest)"
                             + (burst.fullHeight > 0 ? ", 16:9 rows \(burst.firstRow)..<\(burst.firstRow + burst.height) of \(burst.fullHeight)" : ""))
         return burst
+    }
+
+    static func hostNowNs() -> Int64 {
+        CMClockGetTime(CMClockGetHostTimeClock()).convertScale(1_000_000_000, method: .default).value
+    }
+
+    /// The N frames as single auto-exposure RAW requests (AVCapturePhotoSettings, no bracket), up to ZslSingles.window issued at
+    /// once; the frames enter the burst in request order, a frame stamped as one already taken (the same ZSL frame twice) is
+    /// dropped. The first request carries the HEVC photo (the EXIF, the merge-failure fallback). Returns the lost requests and the
+    /// newest frame's photo (its DNG is the base's metadata).
+    private func captureSingles(count: Int, bayer: OSType, device: AVCaptureDevice, burst: inout BayerBurst, clock: inout BurstClock,
+                                wide: Bool) async throws -> (lost: Int, newest: AVCapturePhoto?) {
+        func request(withProcessed: Bool) -> AVCapturePhotoSettings {
+            let processed: [String: Any]? = withProcessed ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
+            let settings = AVCapturePhotoSettings(rawPixelFormatType: bayer, processedFormat: processed)
+            settings.maxPhotoDimensions = output.maxPhotoDimensions
+            silence(settings)
+            return settings
+        }
+        let timeout = 4 + 3 * max(0, device.exposureDuration.seconds)
+        var lost = 0, duplicates = 0
+        var newest: (photo: AVCapturePhoto, stamp: Int64)?
+        var seen = Set<Int64>()
+        func take(_ photos: [AVCapturePhoto], into burst: inout BayerBurst) throws {
+            for photo in photos {
+                if photo.isRawPhoto {
+                    let stamp = Self.stampNs(photo)
+                    if seen.contains(stamp) { duplicates += 1; continue }
+                    seen.insert(stamp)
+                    if stamp > (newest?.stamp ?? .min) { newest = (photo, stamp) }
+                }
+                try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide)
+            }
+        }
+        let started = Date()
+        var first: [AVCapturePhoto]
+        do {
+            first = try await capturePhotos(request(withProcessed: true), timeout: timeout)
+        } catch CameraError.captureException(let reason) {
+            burst.report.append("N: the RAW + HEIC request refused (\(reason)), RAW only")
+            first = try await capturePhotos(request(withProcessed: false), timeout: timeout)
+        }
+        try take(first, into: &burst)
+        if count > 1 {
+            let window = ZslSingles.window
+            try await withThrowingTaskGroup(of: (Int, ZslSingles.Photos).self) { group in
+                var next = 1, due = 1
+                var ready: [Int: [AVCapturePhoto]] = [:]
+                func issue() {
+                    let k = next
+                    next += 1
+                    let settings = request(withProcessed: false)
+                    group.addTask {
+                        let photos = (try? await self.capturePhotos(settings, timeout: timeout)) ?? []
+                        return (k, ZslSingles.Photos(photos))
+                    }
+                }
+                while next < count && next - due < window { issue() }
+                while let (k, box) = try await group.next() {
+                    ready[k] = box.photos
+                    while let photos = ready.removeValue(forKey: due) {
+                        if !photos.contains(where: \.isRawPhoto) { lost += 1 }
+                        try take(photos, into: &burst)
+                        due += 1
+                    }
+                    while next < count && next - due < window { issue() }
+                }
+            }
+        }
+        burst.report.append("N: \(count) requests in \(ms(since: started)) ms" + (lost > 0 ? ", \(lost) lost" : "")
+                            + (duplicates > 0 ? ", \(duplicates) duplicate frame(s) dropped" : ""))
+        return (lost, newest?.photo)
     }
 
     struct ExtrasTally {
@@ -486,5 +566,27 @@ enum NoiseEstimate {
         let slope = sxx > 0 ? max(sxy / sxx, 1e-7) : 1e-5
         let offset = max(my - slope * mx, 1e-9)
         return (Float(slope), Float(offset))
+    }
+}
+
+
+/// The N frames as single auto-exposure RAW requests (captureSingles): how many are issued at once, and the frames' times
+enum ZslSingles {
+    static let window = 4
+
+    final class Photos: @unchecked Sendable {
+        let photos: [AVCapturePhoto]
+        init(_ photos: [AVCapturePhoto]) { self.photos = photos }
+    }
+
+    /// Each N frame's sensor time against the press (negative: exposed before it - zero shutter lag)
+    static func timing(_ frames: [NchFrame], pressNs: Int64) -> String {
+        let n = frames.filter { $0.role == NchWriter.roleNormal }
+        guard !n.isEmpty else { return "N frames vs the press: none" }
+        let times = n.map { Double($0.timestampNs - pressNs) / 1e6 }
+        // a clock other than the host's (the session's synchronisation clock): no comparison
+        guard let lo = times.min(), let hi = times.max(), abs(lo) < 60_000 else { return "N frames vs the press: timestamps on another clock" }
+        return String(format: "N frames vs the press: %ld before, %ld after, from %+.0f to %+.0f ms (", times.filter { $0 < 0 }.count,
+                      times.filter { $0 >= 0 }.count, lo, hi) + times.map { String(format: "%+.0f", $0) }.joined(separator: " ") + ")"
     }
 }

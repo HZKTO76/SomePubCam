@@ -980,8 +980,9 @@ the bracketed frames' noise itself (P358).
 
 ## Capture against Android's default «Фото» / «Быстрый» / Why (2026-11-15)
 Checked against the owner's description and CaptureController / HybridPlan / ExposureLimits. Fixed:
-- N were auto-exposure brackets at bias 0 (the still AE, not the viewfinder's; the EV compensation not certain to apply): now manual
-  brackets at the device's present exposureDuration x ISO (ETTR's boost when on), read once at the press.
+- N were auto-exposure brackets (brackets never get zero shutter lag): now single auto-exposure RAW requests (AVCapturePhotoSettings,
+  4 in flight, the first with the HEVC), the ones isZeroShutterLagEnabled may serve with frames exposed before the press; a frame
+  stamped twice is dropped; the log says each N frame's time against the press («N frames vs the press»). ETTR keeps manual brackets.
 - No N selection: NormalSelect = drainZslNormalFrames (newest exposure +-0.05 EV, darker to -0.5 EV only up to min(N, 8), never
   brighter, gap max(500 ms, 4 x shutter)); a dropped frame sends the NCH to the after-capture writer.
 - Metadata (levels, neutral, matrices, noise) were the oldest N frame's DNG: now the newest N's (the base candidates); noise ISO scaling
@@ -995,7 +996,7 @@ Checked against the owner's description and CaptureController / HybridPlan / Exp
 - Brackets with isLensStabilizationEnabled where the output supports it (Android: OIS as the preview).
 - «Мерцание ламп» «Авто»: the region's mains (MainsRegion; JP / unknown: none) instead of no snapping.
 - Viewfinder frame range: the format's slowest .. 30 fps (activeVideoMax / MinFrameDuration), read back into the log.
-Not portable / kept: no RAW ring (AVCaptureVideoDataOutput gives no Bayer; ZSL / responsive capture are not for brackets), so N are after
-the press and their time is in «press -> last frame»; no gyro selection, no HAL motion cap; the RAW ISO range 35..200 (rawIsos, measured);
+Not portable / kept: no own RAW ring (AVCaptureVideoDataOutput gives no Bayer); whether the system's ZSL serves RAW singles, and how many
+distinct frames before the press, only the phone's «N frames vs the press» line tells; no gyro selection, no HAL motion cap; the RAW ISO range 35..200 (rawIsos, measured);
 no AE restore frame / next-press wait (manual brackets leave the device AE alone); ES / L split by maxBracketedCapturePhotoCount.
-To verify on the phone: the frame range's effect on the night viewfinder, OIS in brackets, manual N vs the old auto N (noise / clipping).
+To verify on the phone: N frames before the press (ZSL on RAW singles), the frame range's effect on the night viewfinder, OIS in brackets.

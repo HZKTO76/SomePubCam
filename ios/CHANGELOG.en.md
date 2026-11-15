@@ -3,7 +3,7 @@
 English copy of ios/CHANGELOG.md; the build post carries both, section for section (same version, same place).
 
 ## 0.3.3 — capture as on Android
-- The series' frames are taken at the viewfinder's exposure and selected as on Android; the focus holds during the series.
+- The series' normal frames are single auto-exposure requests (the system may serve them with zero shutter lag) and are selected as on Android; the focus holds during the series.
 - «Auto» lamp flicker follows the region; the camera remembers the ISO and shutter the lens really gives.
 
 ## 0.3.2 — speed
