@@ -57,6 +57,9 @@ def run(binary, bursts, out, extra):
         job = out / ('job_' + name)
         job.mkdir(exist_ok=True)
         (job / 'hybrid_tuning.txt').write_text(tuning)
+        # the side outputs the app's post reads (clip flags, the base highlight mask) are made for every replay and compared
+        (job / 'clip-flags').touch()
+        (job / 'hl-mask').touch()
         started = time.time()
         p = subprocess.run([str(binary), str(job), str(nch), str(out / (name + '.f32'))], capture_output=True, text=True,
                            errors='replace', timeout=1800)
@@ -94,7 +97,57 @@ def compare(ref_dir, cand_dir, limit, off_share=1.0):
         lines.append(f'{ref_path.stem}: {ref.shape[1]}x{ref.shape[0]} PSNR {psnr:.2f} dB max {diff.max():.5f} mean {diff.mean():.6f}'
                      f' p99.9 {np.percentile(diff, 99.9):.5f} off>1% {off:.6f} finite={finite}' + ('  <-- BELOW LIMIT' if bad else ''))
     print('\n'.join(lines) or 'no reference results')
+    sides(ref_dir, cand_dir)
     return 1 if worst or not lines else 0
+
+
+def sides(ref_dir, cand_dir):
+    """The merge's other outputs (reported, not gated): each RGB channel's histogram (the share of pixels in other bins of 256
+    over the reference's p99.9), the effective-frame map (mean / max difference in frames, the equal share), the clip bits
+    (the share of pixels where each bit differs) and the base highlight mask (mean / max difference, 0..1)."""
+    out = []
+    for ref_path in sorted(ref_dir.glob('*.f32')):
+        cand_path = cand_dir / ref_path.name
+        if not cand_path.exists():
+            continue
+        ref, cand = read_result(ref_path), read_result(cand_path)
+        if ref.shape != cand.shape:
+            continue
+        parts = []
+        scale = float(np.percentile(ref, 99.9)) or 1.0
+        moved = []
+        for c in range(ref.shape[2]):
+            hr, _ = np.histogram(np.clip(ref[..., c] / scale, 0, 1), 256, (0, 1))
+            hc, _ = np.histogram(np.clip(cand[..., c] / scale, 0, 1), 256, (0, 1))
+            moved.append(0.5 * np.abs(hr - hc).sum() / max(1, hr.sum()))
+        parts.append('histogram moved R/G/B ' + '/'.join(f'{m:.5f}' for m in moved))
+        stem = ref_path.with_suffix('')
+        cstem = cand_path.with_suffix('')
+        def pair(ext, dtype):
+            a, b = Path(str(stem) + '.f32' + ext), Path(str(cstem) + '.f32' + ext)
+            if not a.exists() or not b.exists():
+                return None, None
+            x, y = np.frombuffer(a.read_bytes(), dtype), np.frombuffer(b.read_bytes(), dtype)
+            return (x, y) if x.size == y.size else (None, None)
+        e, f = pair('.eff', np.uint8)
+        if e is not None:
+            d = np.abs(e.astype(np.int32) - f.astype(np.int32)) / 8.0
+            parts.append(f'effective frames: mean ref {e.mean() / 8:.3f} cand {f.mean() / 8:.3f}, |diff| mean {d.mean():.4f} max {d.max():.3f}, equal {np.mean(d == 0):.4f}')
+        e, f = pair('.clip', np.uint8)
+        if e is not None:
+            bits = '/'.join(f'{np.mean(((e >> b) & 1) != ((f >> b) & 1)):.6f}' for b in range(4))
+            parts.append(f'clip bits R/G/B/kernel differ {bits} (set in ref {np.mean(e != 0):.4f})')
+        e, f = pair('.hlm', np.uint16)
+        if e is not None and e.size > 8:
+            # "SCHLMSK1" + width + height (uint32), then IEEE halves
+            x = e[8:].view(np.float16).astype(np.float32)
+            y = f[8:].view(np.float16).astype(np.float32)
+            d = np.abs(x - y)
+            parts.append(f'highlight mask: set in ref {np.mean(x > 0.01):.4f}, |diff| mean {d.mean():.5f} max {d.max():.4f}')
+        out.append(f'{ref_path.stem}: ' + '; '.join(parts))
+    if out:
+        print('side outputs (not gated):')
+        print('\n'.join('  ' + line for line in out))
 
 
 def detail(ref_dir, cand_dir):

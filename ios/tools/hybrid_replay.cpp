@@ -24,6 +24,16 @@ int main(int argc, char** argv) {
         out.write(reinterpret_cast<const char*>(header), sizeof header);
         out.write(reinterpret_cast<const char*>(r.rgb.data()), std::streamsize(size_t(r.width) * r.height * 3 * sizeof(float)));
         if (!out) throw std::runtime_error("cannot write the result");
+        // the merge's side outputs beside the result for replay_bursts.py compare: <out>.eff (uint8 effective frames, 1/8 per
+        // step), <out>.clip (uint8 clip bits), <out>.hlm (the highlight mask record); absent when the merge made none
+        auto side = [&](const char* ext, const void* data, size_t bytes) {
+            if (!bytes) return;
+            std::ofstream f(std::string(argv[3]) + ext, std::ios::binary | std::ios::trunc);
+            f.write(reinterpret_cast<const char*>(data), std::streamsize(bytes));
+        };
+        side(".eff", r.effMap.data(), r.effMap.size());
+        side(".clip", r.clipFlags.data(), r.clipFlags.size());
+        side(".hlm", r.hlMask.data(), r.hlMask.size() * sizeof(uint16_t));
         if (argc == 5) {
             const std::vector<uint8_t> worker = scam_ios::workerOutput(r);
             std::ofstream w(argv[4], std::ios::binary | std::ios::trunc);

@@ -81,9 +81,11 @@ jobs:
           name: merge-reference
           path: |
             ${{ runner.temp }}/reference/*.f32
+            ${{ runner.temp }}/reference/*.f32.*
             ${{ runner.temp }}/reference/*.log
             ${{ runner.temp }}/reference/post/*.f32
             ${{ runner.temp }}/reference/fast/*.f32
+            ${{ runner.temp }}/reference/fast/*.f32.*
             ${{ runner.temp }}/reference/fast/*.log
             ${{ runner.temp }}/reference/fast_*/*.f32
             ${{ runner.temp }}/reference/trace/*.log

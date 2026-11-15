@@ -1000,3 +1000,16 @@ Not portable / kept: no own RAW ring (AVCaptureVideoDataOutput gives no Bayer); 
 distinct frames before the press, only the phone's «N frames vs the press» line tells; no gyro selection, no HAL motion cap; the RAW ISO range 35..200 (rawIsos, measured);
 no AE restore frame / next-press wait (manual brackets leave the device AE alone); ES / L split by maxBracketedCapturePhotoCount.
 To verify on the phone: N frames before the press (ZSL on RAW singles), the frame range's effect on the night viewfinder, OIS in brackets.
+
+## Sabre («Быстрый») on iOS against the owner's description (2026-11-15)
+The iPhone runs the Android worker's own merge: ios/Engine/ScamMergeCore.hpp includes app/src/main/cpp/scam-hybrid.h and
+scam-fast-merge.h (hybridReconstruct -> hybridFastMerge) and their GLSL, through ScamGL on Metal; the only Apple guards in the shared
+C++ are scam-crash.h and scam-stream-out.h (no fallocate). Constants checked against the description in the code: normal 0.70..1.02,
+base sharp >= 0.7 x best, donors shift <= 35 / sharp >= 0.6, long < 0.35 before the GPU, sigma 0.33 / 0.41 - 0.01 SNR / 0.25,
+shrink 2.2 / stretch 0.25, clip 0.001, transition 166.67, LK tiles 16 / 32 / 64 at SNR 10.8 / 2.7. The tuning is Android's
+(hybrid_tuning.txt; the footprints P587 / P647 as Android sets them, not 1). What differs is the input (BayerBurst / BurstProcessor:
+one DNG of the newest N, the noise profile scaled by ISO, P558 white, the black floor) and the GPU arithmetic.
+CI (build-ios-ipa: merge-reference on Mesa, merge-metal on ScamGL / Metal, the 5 real bursts of replay/p335): RGB PSNR; since this
+change also each channel's histogram, the effective-frame map, the clip bits and the base highlight mask (reported, not gated).
+Per-stage GPU time inside the merge (guide / align / rejection / accumulate) is not split: the merge's own log has front / context /
+objects / submit (base, first donor, uploads) / readback, «GPU ms» the merge as one stage.
