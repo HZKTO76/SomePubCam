@@ -210,8 +210,10 @@ void waitForUse(Context& c, id resource, std::unique_lock<std::recursive_mutex>&
     if (it == gLastUse.end()) return;
     id<MTLCommandBuffer> cb = it->second;
     if (!cb) { gLastUse.erase(it); return; }
-    if (cb == c.cb) submit(c, false);
-    else if (cb.status < MTLCommandBufferStatusCommitted) { submit(c, true); return; }
+    // the work recorded so far is handed to the GPU first (as the full wait did): it runs while this waits for `resource`'s
+    // command buffer only (left open, the GPU would idle until the next flush: the fast merge's band readbacks)
+    submit(c, false);
+    if (cb.status < MTLCommandBufferStatusCommitted) { submit(c, true); return; } // another context's, not committed yet
     if (cb.status < MTLCommandBufferStatusCompleted) {
         lock.unlock();
         [cb waitUntilCompleted];
