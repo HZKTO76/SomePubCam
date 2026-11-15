@@ -45,6 +45,7 @@ AI_INPUT_LIMIT = 12000      # characters of commit messages sent to the model
 CHANGELOG_ITEMS = 6
 CHANGELOG_FILE = 'CHANGELOG.md'
 CHANGELOG_EN_FILE = 'CHANGELOG.en.md'   # the owner's English copy (2026-11-09: «Нужен и в посте»)
+TRANSLATED_HEADINGS = False             # iOS: a translated heading at its place is no new section (fresh_sections)
 CHANGELOG_SECTIONS = 5      # at most this many new CHANGELOG.md sections in one post
 MESSAGE_LIMIT = 4000        # a Telegram text message allows 4096 visible characters
 # A failed or cut GitHub request (IncompleteRead is an HTTPException, not an OSError) must not stop the post
@@ -183,9 +184,20 @@ def fresh_sections(now, before):
     if before is None:
         return now[:1]
     known = dict(changelog_sections(before))
+    # iOS (ios/CHANGELOG.md turned Russian on 2026-11-15, its English copy ios/CHANGELOG.en.md): a heading the base lacks whose
+    # version / day holds a section at the same place there is that section translated - new only with more items
+    places = {}
+    for h, its in changelog_sections(before):
+        places.setdefault(section_day(h), []).append(its)
+    seen = {}
     out = []
     for heading, items in now:
-        if heading not in known:
+        day = section_day(heading)
+        place = seen[day] = seen.get(day, -1) + 1
+        if heading not in known and TRANSLATED_HEADINGS and place < len(places.get(day, [])):
+            if len(items) > len(places[day][place]):
+                out.append((heading, items))
+        elif heading not in known:
             out.append((heading, items))
         else:
             added = [item for item in items if item not in known[heading]]
@@ -607,7 +619,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--apk', required=True, type=Path, help='the build: an APK, or with --platform ios an IPA')
     ap.add_argument('--platform', choices=('android', 'ios'), default='android',
-                    help='ios: the IPA of build-ios-ipa.yml, its branch and ios/CHANGELOG.md; not pinned')
+                    help='ios: the IPA of build-ios-ipa.yml, its branch and ios/CHANGELOG.md (+ .en.md); not pinned')
     ap.add_argument('--branch', default='', help='with --platform ios: the branch whose builds are compared')
     ap.add_argument('--to-rev', default='main', help='commit (or branch) of the build on GitHub')
     ap.add_argument('--from-rev', default='', help='changelog range start when no previous build is found '
@@ -618,13 +630,13 @@ def main():
     ap.add_argument('--dry-run', action='store_true', help='print the caption and do not post')
     ap.add_argument('--settings-json', default='', help='with --dry-run: settings to preview the caption with')
     args = ap.parse_args()
-    global WORKFLOW, BRANCH, ARTIFACT, CHANGELOG_FILE, CHANGELOG_EN_FILE
+    global WORKFLOW, BRANCH, ARTIFACT, CHANGELOG_FILE, CHANGELOG_EN_FILE, TRANSLATED_HEADINGS
     suffix = '.apk'
     args.pin = True
     if args.platform == 'ios':
         WORKFLOW, ARTIFACT = 'build-ios-ipa.yml', r'SCAMERA-iOS-([0-9.]+)'
         BRANCH = args.branch or BRANCH
-        CHANGELOG_FILE, CHANGELOG_EN_FILE = 'ios/CHANGELOG.md', ''
+        CHANGELOG_FILE, CHANGELOG_EN_FILE, TRANSLATED_HEADINGS = 'ios/CHANGELOG.md', 'ios/CHANGELOG.en.md', True
         suffix, args.pin = '.ipa', False
 
     if not args.apk.is_file() or args.apk.suffix.lower() != suffix:

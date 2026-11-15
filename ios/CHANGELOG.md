@@ -1,37 +1,37 @@
-# SCAMERA iOS
+# Изменения SCAMERA iOS
 
-## 0.3.1 — fixes
-- «Быстрый» merge on iPhone and iPad now matches Android (night shots were noisy).
-- iPad: no more black / green photos from a shaken series.
-- App icon: the SCAMERA camera in the iOS style.
-- SHDR at 1.5x / 2x zoom works; the size badge shows «Разрешение» 1.5x / 2x.
-- iPad: portrait screen, upright controls when the window turns; vignetting calibration for lenses without a lens map.
-- Long bracket frame really brighter (shutter, not ISO); ETTR works.
-- DCP colour profiles, noise model profiles, «Чёрный из данных», the fringe net («Нейросеть») and the lab (merge the last series again).
-- Ultrashort frames and highlight recovery work on iPhone / iPad (white level from the frame, as on Android).
-- Faster processing: whole-frame GPU passes, cached shader translations, frames written during capture.
-- «Стиль» Vivid / Normal / Neutral; «Проявка» of any DNG; RAW series and processing stages can be kept.
-- Settings apply at once; options the iPhone cannot use are hidden; 16:9 viewfinder frame.
+## 0.3.1 — исправления
+- «Быстрая» склейка на iPhone и iPad теперь как на Android (ночные снимки были шумными).
+- iPad: больше нет чёрных / зелёных фото после смазанной серии.
+- Иконка: камера SCAMERA в стиле iOS.
+- SHDR при зуме 1.5x / 2x работает; значок размера показывает «Разрешение» 1.5x / 2x.
+- iPad: книжная ориентация, элементы не переворачиваются при повороте окна; калибровка виньетирования для объективов без карты.
+- Длинный кадр серии действительно светлее (выдержкой, а не ISO); ETTR работает.
+- DCP-профили, профили модели шума, «Чёрный из данных», нейросеть от каймы («Нейросеть») и лаборатория (пересклейка последней серии).
+- Сверхкороткие кадры и восстановление светов работают на iPhone / iPad (уровень белого по кадру, как на Android).
+- Обработка быстрее: проходы GPU по всему кадру, кэш шейдеров, кадры пишутся во время съёмки.
+- «Стиль» Насыщенный / Обычный / Нейтральный; «Проявка» любого DNG; можно сохранять RAW-серию и этапы обработки.
+- Настройки применяются сразу; недоступное на iPhone скрыто; рамка 16:9 в видоискателе.
 
-## 0.3 — Android updates of 2026-11-14
-- iPad: a native iPad app - full-screen camera, wider gallery grids, settings and editor sized for the tablet.
-- Noise reduction keeps shadow texture; tone V1 noise, detail and colour as tone V2; V2 without glow beside dark objects.
-- Night merge handles moving objects better.
-- Gallery editor: the «Develop» tab develops SCAMERA DNGs again with every processing setting of the camera.
-- RAW saved with an SHDR shot is now the merged burst DNG, as on Android, with the photo as its preview.
-- Camera screen as on Android: LUT tray and swipe, quick settings, inline Pro panel, editable top row, face and subject tracking.
-- Settings as on Android: search, help on a long press, exact values, layout, accent, photo names, modules, developer page, LUT previews.
-- Gallery as on Android: Grid / List / Timeline, search by the text on photos, full-resolution zoom, HDR, background and picture-in-picture video, Roboto Flex.
+## 0.3 — обновления Android от 2026-11-14
+- iPad: нативное приложение — камера на весь экран, шире сетки галереи, настройки и редактор под планшет.
+- Шумодав сохраняет текстуру в тенях; у тона V1 шум, детали и цвет как у V2; V2 без ореолов у тёмных объектов.
+- Ночная склейка лучше справляется с движущимися объектами.
+- Редактор галереи: вкладка «Проявка» снова проявляет DNG SCAMERA со всеми настройками обработки камеры.
+- RAW к снимку SHDR — склеенный DNG серии, как на Android, с фото в качестве превью.
+- Экран камеры как на Android: лоток LUT и свайп, быстрые настройки, панель Pro, редактируемая верхняя строка, слежение за лицом и объектом.
+- Настройки как на Android: поиск, справка по долгому нажатию, точные значения, раскладка, акцент, имена фото, модули, страница разработчика, превью LUT.
+- Галерея как на Android: Сетка / Список / Лента, поиск по тексту на фото, зум в полном разрешении, HDR, фоновое видео и картинка в картинке, Roboto Flex.
 
-## 0.2 — the Android photo processing
-- SHDR photos are processed exactly as on Android: the same merge, denoise, sharpening and «Why» tone.
+## 0.2 — обработка фото из Android
+- Фото SHDR обрабатываются в точности как на Android: та же склейка, шумодав, резкость и тон «Why».
 
-## 0.1 — SHDR on the iPhone
-- «SHDR» button: a RAW series merged on the GPU by the same merge as on Android, then the «Why» tone.
+## 0.1 — SHDR на iPhone
+- Кнопка «SHDR»: RAW-серия склеивается на GPU той же склейкой, что на Android, затем тон «Why».
 
-## 0.1 — «Why» tone on the GPU
-- With RAW on, the photo gets the «Why» V2 tone rendered on the GPU (button «Why»).
+## 0.1 — тон «Why» на GPU
+- С включённым RAW фото получает тон «Why» V2, рассчитанный на GPU (кнопка «Why»).
 
-## 0.1 — first build
-- Camera with lens modules (including in-sensor zoom), full resolution and RAW (Bayer / ProRAW) saved next to the HEIC.
-- Session log with sharing from the camera screen.
+## 0.1 — первая сборка
+- Камера с модулями объективов (включая зум в сенсоре), полное разрешение и RAW (Bayer / ProRAW) рядом с HEIC.
+- Журнал сессии с отправкой с экрана камеры.
