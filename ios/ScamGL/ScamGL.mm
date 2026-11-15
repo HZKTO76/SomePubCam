@@ -236,6 +236,8 @@ void waitForUse(Context& c, id resource, std::unique_lock<std::recursive_mutex>&
     c.inFlight.swap(pending);
 }
 
+constexpr bool kPrivateTextures = true;
+
 // A Metal object no longer used by GL (deleted, or its store replaced): its last-use entry goes too
 inline void forgetUse(id resource) {
     if (resource) gLastUse.erase((__bridge const void*)resource);
@@ -286,6 +288,35 @@ void blit(Context& c, void (^body)(id<MTLBlitCommandEncoder>)) {
     body(b);
     [b endEncoding];
 }
+
+// `region` of level 0 / slice 0 of `t` into `dst` rows of `dstRow` bytes (`bpp` bytes a texel): getBytes of a shared texture; a
+// private one blitted into a shared buffer first (the same bytes), this context's queue waited for that blit
+void readRegion(Context& c, id<MTLTexture> t, MTLRegion region, int bpp, uint8_t* dst, size_t dstRow, std::unique_lock<std::recursive_mutex>& lock) {
+    if (t.storageMode != MTLStorageModePrivate) {
+        [t getBytes:dst bytesPerRow:dstRow fromRegion:region mipmapLevel:0];
+        return;
+    }
+    const size_t row = size_t(bpp) * region.size.width, bytes = row * region.size.height;
+    id<MTLBuffer> staging = [metalDevice() newBufferWithLength:std::max<size_t>(bytes, 16) options:MTLResourceStorageModeShared];
+    if (!staging) { fail(GL_OUT_OF_MEMORY); return; }
+    used(c, t);
+    blit(c, ^(id<MTLBlitCommandEncoder> e) {
+        [e copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:region.origin sourceSize:region.size toBuffer:staging
+           destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:bytes];
+    });
+    id<MTLCommandBuffer> cb = commandBuffer(c);
+    submit(c, false);
+    lock.unlock();
+    [cb waitUntilCompleted];
+    lock.lock();
+    if (cb.error) {
+        std::fprintf(stderr, "SCAMGL: GPU error: %s\n", cb.error.localizedDescription.UTF8String);
+        if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+    }
+    const uint8_t* src = static_cast<const uint8_t*>(staging.contents);
+    for (NSUInteger y = 0; y < region.size.height; ++y) std::memcpy(dst + y * dstRow, src + y * row, row);
+}
+
 
 // ---- formats ----
 
@@ -1136,7 +1167,10 @@ static void storage(GLenum target, GLsizei levels, GLenum internal, GLsizei widt
     // a 3D texture (the film's LUTs) is only sampled
     d.usage = target == GL_TEXTURE_3D ? MTLTextureUsageShaderRead
                                       : MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView | MTLTextureUsageRenderTarget;
-    d.storageMode = MTLStorageModeShared;
+    // private: the GPU's own memory layout (Apple GPUs compress private textures losslessly: less bandwidth for every pass);
+    // the CPU reaches a texture only through glReadPixels, which blits the region to a shared buffer (readRegion), and the
+    // uploads, which are blits already
+    d.storageMode = kPrivateTextures ? MTLStorageModePrivate : MTLStorageModeShared;
     forgetUse(t->mtl);
     t->mtl = [metalDevice() newTextureWithDescriptor:d];
     if (!t->mtl) { fail(GL_OUT_OF_MEMORY); return; }
@@ -1147,6 +1181,24 @@ static void storage(GLenum target, GLsizei levels, GLenum internal, GLsizei widt
     t->layers = target == GL_TEXTURE_2D ? 1 : depth;
     t->levels = std::max(1, int(levels));
     t->sampler = nil;
+    // a new shared texture's pages came zeroed; a private one's memory is whatever it was: cleared to 0 here (every level and
+    // slice a render target can reach) so a pass reading texels nothing wrote reads what it read before
+    if (t->mtl.storageMode == MTLStorageModePrivate && (t->mtl.usage & MTLTextureUsageRenderTarget)) {
+        endCompute(*c);
+        used(*c, t->mtl);
+        for (NSUInteger level = 0; level < t->mtl.mipmapLevelCount; ++level) {
+            for (NSUInteger slice = 0; slice < t->mtl.arrayLength; ++slice) {
+                MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                pass.colorAttachments[0].texture = t->mtl;
+                pass.colorAttachments[0].level = level;
+                pass.colorAttachments[0].slice = slice;
+                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+                pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                [[commandBuffer(*c) renderCommandEncoderWithDescriptor:pass] endEncoding];
+            }
+        }
+    }
 }
 void glTexStorage2D(GLenum target, GLsizei levels, GLenum internal, GLsizei width, GLsizei height) {
     storage(target, levels, internal, width, height, 1);
@@ -1301,14 +1353,14 @@ void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format
     const size_t row = rowBytes(width, bpp, c->packRowLength, c->packAlignment);
     const MTLRegion region = MTLRegionMake2D(NSUInteger(x), NSUInteger(y), NSUInteger(width), NSUInteger(height));
     if (bpp == formatOf(tex.internal).bytes) {
-        [tex.mtl getBytes:dst bytesPerRow:row fromRegion:region mipmapLevel:0];
+        readRegion(*c, tex.mtl, region, bpp, dst, row, g);
         return;
     }
     // GL_FLOAT of a half-float target, RGB of an RGBA store, ...: read the storage, convert the rows
     const Layout from = storageLayout(tex.mtl.pixelFormat), to = clientLayout(format, type);
     if (!from.components || !to.components) { note("glReadPixels: conversion not supported"); fail(GL_INVALID_OPERATION); return; }
     std::vector<uint8_t> raw(size_t(from.size()) * size_t(width) * size_t(height));
-    [tex.mtl getBytes:raw.data() bytesPerRow:size_t(from.size()) * size_t(width) fromRegion:region mipmapLevel:0];
+    readRegion(*c, tex.mtl, region, formatOf(tex.internal).bytes, raw.data(), size_t(from.size()) * size_t(width), g);
     const bool normalised = tex.mtl.pixelFormat == MTLPixelFormatRGBA8Unorm || tex.mtl.pixelFormat == MTLPixelFormatR8Unorm
         || tex.mtl.pixelFormat == MTLPixelFormatRG8Unorm;
     const int fromBytes = from.size() / from.components, toBytes = to.size() / to.components;
