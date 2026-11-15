@@ -320,6 +320,9 @@ final class CameraModel {
     /// The shutter answers a press (the press itself is then taken, kept behind the capture or refused with a note).
     var shutterAvailable: Bool { status == .running }
     private var processingTail: Task<Void, Never>?
+    /// The photos' library saves, in shot order, beside the processing: the next shot's merge no longer waits for this one's save
+    /// (0.1 s, ~3 s while the system's library alert is up)
+    private var saveTail: Task<Void, Never>?
     private var capturingShdr = false
     /// one frame of the last SHDR burst (bytes), for the next burst's size
     private var lastFrameBytes = 12_000_000 * 2
@@ -503,9 +506,13 @@ final class CameraModel {
         for i in burst.frames.indices { burst.frames[i].raw = Data() }
         let keepAlive = BackgroundTime()
         keepAlive.id = UIApplication.shared.beginBackgroundTask(withName: "SCAMERA shot") { MainActor.assumeIsolated { keepAlive.end() } }
+        // the shot leaves the queue (and its background time ends) when its photo is saved: here, or in its save task
+        var handedToSave = false
         defer {
-            shots.removeAll { $0.id == id }
-            keepAlive.end()
+            if !handedToSave {
+                shots.removeAll { $0.id == id }
+                keepAlive.end()
+            }
         }
         setStage(id, .processing)
         do {
@@ -570,15 +577,33 @@ final class CameraModel {
                 return
             }
             let heic = result.heic ?? burst.processed
-            // the thumbnail decoded off the main actor (a 12 MP HEIC's decode held the camera's UI)
-            if let heic { thumbnail = await Self.thumbnail(heic) }
-            let saveStarted = Date()
-            try await Perf.interval("library save") {
-                try await mediaLibrary.save(CapturedPhoto(processed: heic, processedUTI: result.heic != nil ? result.uti : UTType.heic.identifier,
-                                                          rawFile: rawFile, report: []))
+            let uti = result.heic != nil ? result.uti : UTType.heic.identifier
+            // the save in its own ordered queue: the next shot's merge starts meanwhile
+            handedToSave = true
+            let savedRaw = rawFile
+            let previousSave = saveTail
+            saveTail = Task { [weak self] in
+                await previousSave?.value
+                defer {
+                    self?.shots.removeAll { $0.id == id }
+                    keepAlive.end()
+                }
+                do {
+                    // the thumbnail decoded off the main actor (a 12 MP HEIC's decode held the camera's UI)
+                    if let heic, let self { self.thumbnail = await Self.thumbnail(heic) }
+                    guard let library = self?.mediaLibrary else { return }
+                    let saveStarted = Date()
+                    try await Perf.interval("library save") {
+                        try await library.save(CapturedPhoto(processed: heic, processedUTI: uti, rawFile: savedRaw, report: []))
+                    }
+                    SessionLog.i("SHDR", "saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms (the library "
+                                 + "\(Int(Date().timeIntervalSince(saveStarted) * 1000)) ms), \((self?.shots.count ?? 1) - 1) more queued, "
+                                 + "\(memoryFootprint())")
+                } catch {
+                    SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
+                    self?.show(error.localizedDescription)
+                }
             }
-            SessionLog.i("SHDR", "saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms (the library \(Int(Date().timeIntervalSince(saveStarted) * 1000)) ms), "
-                         + "\(shots.count - 1) more queued, \(memoryFootprint())")
         } catch {
             SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
             show(error.localizedDescription)
