@@ -150,6 +150,8 @@ void fail(GLenum error) {
 
 // ---- command stream ----
 
+constexpr bool kConcurrentDispatch = true;
+
 id<MTLCommandBuffer> commandBuffer(Context& c) {
     if (!c.cb) c.cb = [c.queue commandBuffer];
     return c.cb;
@@ -173,7 +175,10 @@ void endCompute(Context& c) {
 }
 
 id<MTLComputeCommandEncoder> computeEncoder(Context& c) {
-    if (!c.compute) c.compute = [commandBuffer(c) computeCommandEncoder];
+    // concurrent: dispatches with no glMemoryBarrier between them may overlap on the GPU (as GL lets them); glMemoryBarrier is
+    // a Metal memory barrier of the encoder (before: a serial encoder ran every dispatch after the previous one)
+    if (!c.compute) c.compute = kConcurrentDispatch ? [commandBuffer(c) computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent]
+                                                    : [commandBuffer(c) computeCommandEncoder];
     return c.compute;
 }
 
@@ -993,7 +998,13 @@ void glGetIntegeri_v(GLenum name, GLuint index, GLint* data) {
 
 void glFlush(void) { if (Context* c = ctx()) submit(*c, false); }
 void glFinish(void) { if (Context* c = ctx()) submit(*c, true); }
-void glMemoryBarrier(GLbitfield) {} // serial compute encoder + tracked resources: Metal orders the dispatches
+// GL's barrier between dispatches: the concurrent compute encoder's memory barrier over buffers and textures (draws, blits and
+// later encoders are ordered by Metal's resource tracking as before)
+void glMemoryBarrier(GLbitfield) {
+    Guard g(gLock);
+    if (Context* c = ctx(); c && c->compute && kConcurrentDispatch)
+        [c->compute memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
+}
 static void enable(GLenum cap, bool on) {
     Context* c = ctx();
     if (!c) return;
