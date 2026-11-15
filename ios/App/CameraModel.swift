@@ -453,7 +453,7 @@ final class CameraModel {
                 }
                 burst = try await Perf.interval("burst capture") { try await captureService.captureBayerBurst(count: count) }
             }
-            enqueue(burst, started: started, facts: facts)
+            enqueue(burst, started: started, facts: facts, holdMs: Int(Date().timeIntervalSince(started) * 1000))
         } catch {
             SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
             show(error.localizedDescription)
@@ -471,7 +471,7 @@ final class CameraModel {
     }
 
     /// The burst into the processing queue (CaptureController: «queued for processing pending=N»); processed after the shots before it.
-    private func enqueue(_ burst: BayerBurst, started: Date, facts: ShotExif) {
+    private func enqueue(_ burst: BayerBurst, started: Date, facts: ShotExif, holdMs: Int = -1) {
         let frameBytes = burst.frames.first.map { $0.raw.count } ?? 0
         if frameBytes > 0 { lastFrameBytes = frameBytes }
         let bytes = burst.frames.reduce(0) { $0 + $1.raw.count } + burst.dng.count + (burst.processed?.count ?? 0)
@@ -487,7 +487,7 @@ final class CameraModel {
         let handoff = BurstHandoff(burst)
         processingTail = Task { [weak self] in
             await previous?.value
-            await self?.process(shot.id, handoff: handoff, started: started, facts: facts, rawSaving: saving)
+            await self?.process(shot.id, handoff: handoff, started: started, facts: facts, rawSaving: saving, holdMs: holdMs)
         }
     }
 
@@ -499,7 +499,7 @@ final class CameraModel {
     /// the queue goes on. The app may go to the background meanwhile (ProcessingKeepAlive: as long as iOS gives it time).
     /// rawSaving: pref_save_raw_key at the press (1: the merged DNG beside the photo; 2 «Только RAW»: the merged DNG alone, as
     /// ScamProcessor returns after it - no post pipeline, no photo, no preview, no develop record).
-    private func process(_ id: UUID, handoff: BurstHandoff, started: Date, facts: ShotExif, rawSaving: Int) async {
+    private func process(_ id: UUID, handoff: BurstHandoff, started: Date, facts: ShotExif, rawSaving: Int, holdMs: Int = -1) async {
         let wantDng = rawSaving >= 1, rawOnly = rawSaving == 2
         // this function keeps the burst without its planes; the planes go on in `handoff` to BurstProcessor (their last owner)
         var burst = handoff.burst ?? BayerBurst()
@@ -579,6 +579,7 @@ final class CameraModel {
             }
             let heic = result.heic ?? burst.processed
             let uti = result.heic != nil ? result.uti : UTType.heic.identifier
+            let shotLog = result.log
             // the save in its own ordered queue: the next shot's merge starts meanwhile
             handedToSave = true
             let savedRaw = rawFile
@@ -597,9 +598,11 @@ final class CameraModel {
                     try await Perf.interval("library save") {
                         try await library.save(CapturedPhoto(processed: heic, processedUTI: uti, rawFile: savedRaw, report: []))
                     }
-                    SessionLog.i("SHDR", "saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms (the library "
-                                 + "\(Int(Date().timeIntervalSince(saveStarted) * 1000)) ms), \((self?.shots.count ?? 1) - 1) more queued, "
+                    let libraryMs = Int(Date().timeIntervalSince(saveStarted) * 1000), totalMs = Int(Date().timeIntervalSince(started) * 1000)
+                    SessionLog.i("SHDR", "saved in \(totalMs) ms (the library \(libraryMs) ms), \((self?.shots.count ?? 1) - 1) more queued, "
                                  + "\(memoryFootprint())")
+                    // the stages as Android's SHOT SUMMARY names them (the tables of the Android phones compare these)
+                    SessionLog.i("SHDR", ShotSummary.line(log: shotLog, holdMs: holdMs, libraryMs: libraryMs, totalMs: totalMs))
                 } catch {
                     SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
                     self?.show(error.localizedDescription)

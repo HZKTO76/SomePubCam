@@ -43,6 +43,9 @@ struct ShotOutput {
     std::optional<GainMapComputer::Result> gainMap;
     Parameters params;
     double mergeMs = 0, postMs = 0;
+    /// SHOT SUMMARY's stages: gap - the merge's end to the post pipeline's start (the worker output, the context, the shot's
+    /// Parameters, the merged DNG); pipeline - the post pipeline and its tail (crop, final size)
+    double gapMs = 0, pipelineMs = 0;
     /// the pipeline's photo size before the crop after it (ScamProcessor's tail), for the host check against the Android lab
     int pipelineWidth = 0, pipelineHeight = 0;
     /// P165: the merged DNG (dng::writeMergedDng's file; empty: none written - not asked, the merge gave no mosaic, or it failed)
@@ -308,6 +311,7 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     std::string report;
     auto worker = [&](const std::string& line) { report += line + "\n"; log("merge: " + line); };
     scam_ios::MergeResult merged = scam_ios::mergeBurst(jobDir, mergePath, worker);
+    const auto mergeEnd = std::chrono::steady_clock::now();
     // ScamNeuralClient: the merged RAW trailer goes to the DNG (ScamHybridBurst.lastMergedDng), the rest is the pipeline's
     std::vector<uint16_t> mergedMosaic;
     mergedMosaic.swap(merged.mergedDng);
@@ -451,6 +455,8 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     }
     // P665: the record right before the pipeline (DevelopCapture.take's moment), from copies; only beside a merged DNG
     if (!out.dng.empty()) out.develop = developRecord(par, p.merge, w, h, window ? 1.f : zoom, build, log);
+    const auto pipelineStart = std::chrono::steady_clock::now();
+    out.gapMs = std::chrono::duration<double, std::milli>(pipelineStart - mergeEnd).count();
     out.photo = runPostPipeline(p);
     out.gainMap = std::move(out.photo.gainMap);
     out.photo.gainMap.reset();
@@ -467,6 +473,7 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     }
     out.params = p.mParameters;
     out.postMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    out.pipelineMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pipelineStart).count();
     return out;
 }
 

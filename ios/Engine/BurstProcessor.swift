@@ -306,10 +306,12 @@ enum BurstProcessor {
         for i in frames.indices { frames[i].raw = Data() }
         for i in burst.frames.indices { burst.frames[i].raw = Data() }
         let photo: SCAMPhoto
+        var prepMs = 0
         do {
             // the stored lens shading map of this lens and frame size (used where the DNG has none)
             var extra: [String: Any] = LensShading.wire(lscKey).map { ["ios_lsc_map": ["s", $0]] } ?? [:]
             if let diagnostics { extra.merge(ShotDiagnostics.extra(diagnostics)) { _, new in new } }
+            prepMs = ms(since: started) // SHOT SUMMARY prep: the levels, the NCH's end, the facts, the lab files, the faces
             photo = try Perf.interval("merge + post") {
                 try SCAMShot.processBurst(atPath: nch.path, dng: burst.dng, settings: PostSettings.json(extra: extra),
                                           faces: faces.boxes.map { NSNumber(value: $0) }, facesDetected: faces.detected, front: burst.front,
@@ -350,12 +352,14 @@ enum BurstProcessor {
             watermarkRecord = PhotoWatermark.applyRecorded(&rgba, width: photo.width, height: photo.height, metadata: metadata, dng: burst.dng,
                                                            shotTime: started, log: { log.append($0) }).record
         }
+        let encodeStarted = Date()
         var encodeLog: [String] = []
         var heic = try Perf.interval("encode") {
             try ShotProcessor.encode(rgba: rgba, width: photo.width, height: photo.height, metadata: metadata, format: format,
                                      gainMap: ShotProcessor.GainMap(photo: photo), log: { encodeLog.append($0) })
         }
         log += encodeLog
+        log.append("SHOT SWIFT ms: prep=\(prepMs) encode=\(ms(since: encodeStarted))")
         // P633: the record at the very end of the file (WatermarkStore), as PhotoOutput appends it to Android's files
         if let watermarkRecord { heic = PhotoWatermark.appendRecord(watermarkRecord, to: heic, log: { log.append($0) }) }
         // P620: the photo as saved becomes the merged DNG's preview (not a mirrored front camera's), then P665's record, the file's

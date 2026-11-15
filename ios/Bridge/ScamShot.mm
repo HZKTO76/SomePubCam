@@ -1,4 +1,7 @@
 #import "ScamShot.h"
+
+#include <algorithm>
+#include <chrono>
 #import "ScamDevelopCodec.h"
 
 #include "post/DevelopRun.hpp"
@@ -38,6 +41,7 @@ extern "C" {
 void scamgl_label(const char* name);
 void scamgl_gpu_timing(int on);
 int scamgl_gpu_times(char* out, int size);
+double scamgl_take_link_ms(void);
 }
 
 /// An NSData that owns `bytes` (moved in, freed with the data): the photo's RGBA and the merged DNG reach Swift without a copy
@@ -251,7 +255,21 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
         }
         // the GPU time per stage in the log («GPU ms»: the merge, each post node, the output; the next log's device numbers)
         scamgl_gpu_timing(1);
-        scam_post::postStageHook() = [](const std::string& name) { scamgl_label(name.c_str()); };
+        scamgl_take_link_ms(); // «cold»: what this shot compiles itself, from here
+        // the post nodes' wall time (the stage hook at each node's start, "output", "" at the end): SHOT SUMMARY's post nodes
+        auto nodeTimes = std::make_shared<std::vector<std::pair<std::string, double>>>();
+        auto nodeStart = std::make_shared<std::pair<std::string, std::chrono::steady_clock::time_point>>();
+        scam_post::postStageHook() = [nodeTimes, nodeStart](const std::string& name) {
+            const auto now = std::chrono::steady_clock::now();
+            if (!nodeStart->first.empty()) {
+                const double ms = std::chrono::duration<double, std::milli>(now - nodeStart->second).count();
+                bool booked = false;
+                for (auto& e : *nodeTimes) if (e.first == nodeStart->first) { e.second += ms; booked = true; }
+                if (!booked) nodeTimes->emplace_back(nodeStart->first, ms);
+            }
+            *nodeStart = {name, now};
+            scamgl_label(name.c_str());
+        };
         struct StageReset { ~StageReset() { scam_post::postStageHook() = nullptr; scamgl_label(""); scamgl_gpu_timing(0); } } stageReset;
         scam_post::ShotOutput out = scam_post::runShot(burst.UTF8String, dngBytes, job.UTF8String, shaders.UTF8String, log, makePostContext,
                                                              16384, shotFaces, true, {}, build, dngRequest ? &*dngRequest : nullptr);
@@ -259,6 +277,20 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
             std::vector<char> times(4096);
             scamgl_gpu_times(times.data(), int(times.size()));
             if (times[0]) log(std::string("GPU ms: ") + times.data());
+            // SHOT SUMMARY's native stages (BurstProcessor reads this line): merge, gap, post (the pipeline), cold (compile ms),
+            // nodes (wall ms, the slowest first)
+            std::vector<std::pair<std::string, double>> nodes = *nodeTimes;
+            std::sort(nodes.begin(), nodes.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            char head[200];
+            std::snprintf(head, sizeof head, "SHOT STAGES ms: merge=%.0f gap=%.0f post=%.0f cold=%.0f nodes=", out.mergeMs, out.gapMs,
+                          out.pipelineMs, scamgl_take_link_ms());
+            std::string line = head;
+            for (size_t i = 0; i < nodes.size(); ++i) {
+                char n[120];
+                std::snprintf(n, sizeof n, "%s%s %.0f", i ? ", " : "", nodes[i].first.c_str(), nodes[i].second);
+                line += n;
+            }
+            log(line);
         }
         photo = [SCAMPhoto new];
         photo.rgba = ownedData(std::move(out.photo.rgba)); // the pipeline's buffer handed over (48 MB: no copy)

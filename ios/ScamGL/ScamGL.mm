@@ -20,6 +20,7 @@
 #include <cstring>
 #include <memory>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -659,9 +660,17 @@ std::shared_ptr<Linked> storeLink(const std::string& key, const std::shared_ptr<
     return placed.first->second;
 }
 
+// The compile time spent on this thread since scamgl_take_link_ms (a shot's «cold»: programs it had to build itself)
+thread_local double tLinkMs = 0;
+struct LinkTimer {
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    ~LinkTimer() { tLinkMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
+};
+
 std::shared_ptr<Linked> linkCompute(const std::string& source) {
     ensureTranslationCache();
     if (auto cached = cachedLink(source)) return cached;
+    LinkTimer timer;
     auto linked = std::make_shared<Linked>();
 #if TARGET_OS_IPHONE
     linked->compiled = scamgl::compile(source, scamgl::Stage::Compute, true);
@@ -729,6 +738,7 @@ id<MTLFunction> functionOf(const scamgl::Compiled& c, std::string& log) {
 std::shared_ptr<Linked> linkRender(const std::string& vs, const std::string& fs) {
     const std::string key = "R\n" + vs + "\x01" + fs;
     if (auto cached = cachedLink(key)) return cached;
+    LinkTimer timer;
     auto linked = std::make_shared<Linked>();
     linked->render = true;
 #if TARGET_OS_IPHONE
@@ -1855,6 +1865,9 @@ void scamgl_label(const char* name) {
     if (!c->label.empty()) submit(*c, false);
     c->label = next;
 }
+
+// The compile time this thread spent since the last call (ms), then reset
+double scamgl_take_link_ms(void) { const double ms = tLinkMs; tLinkMs = 0; return ms; }
 
 // The shot's GPU timing on (1) / off (0): while on, the command buffers of contexts without a label are booked too
 void scamgl_gpu_timing(int on) { gGpuTiming = on != 0; }
