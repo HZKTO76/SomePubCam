@@ -3,7 +3,8 @@
 // GPU), the purple fringe (P399) or the fringe net (CaNetP «Нейросеть»), the sun bloom share, the opposed landing and the clip band
 // (P671: only in the tiles near a flagged pixel, ClipBandTiles). Not
 // ported (they throw): the SCAM HDR route (no hybrid), a lab fragment's frozen levels, the Sabre 2x grid above
-// 64 MP. The half RGB goes up by the CPU repack (HalfRgbUpload's GPU pass gives the same halves: its own exactness check).
+// 64 MP. The half RGB goes up by HalfRgbUpload's GPU pass where it keeps every half (its own exactness check), else by the CPU
+// repack in bands: the same halves.
 #pragma once
 
 #include "../Pipeline.hpp"
@@ -11,6 +12,7 @@
 #include "../SabreCrop.hpp"
 #include "CaNetP.hpp"
 #include "ClipBandTiles.hpp"
+#include "HalfRgbUpload.hpp"
 
 #include <atomic>
 #include <thread>
@@ -233,19 +235,13 @@ public:
         // the statistics (Java: on a helper thread beside the upload; the same result)
         const ChannelClip stats = channelClip(p.scamRgb.data(), p.scamRgb.size(), half, bento, bentoK, bentoUs, withFlags);
         const long oppPixels = flags ? opposedPixels(*flags, bandTiles.get()) : -1;
-        // the input texture: RGBA16F of the halves (alpha 1.0), or RGBA32F of the floats
+        // the input texture: RGBA16F of the halves (alpha 1.0), or RGBA32F of the floats. The halves: P145 the 3 -> 4 repack as a
+        // compute pass (HalfRgbUpload, scam_dev half_rgb_gpu as Android), else the CPU repack in bands - the same texels either way
         Texture input;
         {
-            const size_t px = size_t(size.x) * size_t(size.y);
             if (half) {
-                std::vector<uint16_t> rgba(px * 4);
-                const uint16_t* src = reinterpret_cast<const uint16_t*>(p.scamRgb.data());
-                for (size_t i = 0; i < px; i++) {
-                    rgba[i * 4] = src[i * 3]; rgba[i * 4 + 1] = src[i * 3 + 1]; rgba[i * 4 + 2] = src[i * 3 + 2]; rgba[i * 4 + 3] = 0x3C00;
-                }
-                input = makeTexture(size, GLFormat(DataType::FLOAT_16, 4), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
-                glBindTexture(GL_TEXTURE_2D, input->mTextureID);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, size.x, size.y, GL_RGBA, GL_HALF_FLOAT, rgba.data());
+                if (!PostGlMode::legacy() && prefs.scamDevSwitch("half_rgb_gpu", true)) input = HalfRgbUpload::upload(prog, size, p.scamRgb.data());
+                if (!input) input = HalfRgbUpload::uploadHalfRgbaBands(size, p.scamRgb.data());
             } else {
                 input = makeTexture(size, GLFormat(DataType::FLOAT_32, 3), p.scamRgb.data(), GL_NEAREST, GL_CLAMP_TO_EDGE);
             }

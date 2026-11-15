@@ -97,6 +97,8 @@ inline MergeResult mergeBurst(const std::string& jobDir, const std::string& burs
 // The worker's output file: the RGB (halves with rgb-half), then its trailers in the worker's order and conditions.
 inline std::vector<uint8_t> workerOutput(const MergeResult& r) {
     std::vector<uint8_t> bytes;
+    // the whole file's size ahead (the RGB and every trailer): one allocation, no 72 MB regrowth copy
+    bytes.reserve(r.rgb.size() * (r.rgbHalf ? 2 : 4) + r.mergedDng.size() * 2 + r.effMap.size() + r.clipFlags.size() + r.hlMask.size() * 2);
     auto put = [&](const void* data, size_t n) {
         const uint8_t* p = static_cast<const uint8_t*>(data);
         bytes.insert(bytes.end(), p, p + n);

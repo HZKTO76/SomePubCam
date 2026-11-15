@@ -4,7 +4,7 @@
 //   2. the module's frame (oldstyle/linear, RGBA16I) read back in strips of STRIP rows into one planar int16 frame (P716: V1's frame
 //      drawn at its gain, preGain, and dithered where the module still lifts its rounding);
 //   3. one call of the module on the whole frame (CPU);
-//   4. the RGB8 picture into the pipeline's main texture (oldstyle/rgb8).
+//   4. the RGB8 picture into the pipeline's main texture (oldstyle/rgb8; uploaded as RGBA8 in bands, uploadRgb8).
 // OldstyleStyleNode: oldstyle/adjust with the style's uniforms after the tone.
 #pragma once
 
@@ -280,9 +280,7 @@ public:
             std::vector<int16_t>().swap(planar);
             // 4. the picture into the main texture
             const auto uploadStart = std::chrono::steady_clock::now();
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            rgb = makeTexture(size, GLFormat(DataType::SIMPLE_8, 3), out.data(), GL_NEAREST, GL_CLAMP_TO_EDGE);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            rgb = uploadRgb8(size, out.data());
             std::vector<uint8_t>().swap(out);
             WorkingTexture = pipeline.getMain();
             if (WorkingTexture == input) WorkingTexture = pipeline.getMain();
@@ -314,6 +312,35 @@ public:
         }
         cleanup();
     }
+
+    /// the module's RGB8 picture as an RGBA8 texture (alpha 255): the rows repacked in bands of ~UPLOAD_BYTES into a small buffer, each
+    /// band uploaded as GL_RGBA bytes. oldstyle/rgb8 reads .rgb of a texelFetch - the codes / 255 of an RGB8 texture of the same
+    /// bytes - and the upload is a plain copy (an RGB upload is converted per component by drivers that store RGB8 as RGBA8:
+    /// ScamGL on Metal, which has no 3-channel formats, and Mesa)
+    static Texture uploadRgb8(Point size, const uint8_t* rgb) {
+        const int w = size.x, h = size.y;
+        const int band = std::max(1, std::min(h, UPLOAD_BYTES / std::max(1, 4 * w)));
+        std::vector<uint8_t> stage(size_t(band) * size_t(w) * 4);
+        Texture tex = makeTexture(size, GLFormat(DataType::SIMPLE_8, 4), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
+        GLint previous = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+        glBindTexture(GL_TEXTURE_2D, tex->mTextureID);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        for (int y0 = 0; y0 < h; y0 += band) {
+            const int rows = std::min(band, h - y0);
+            const size_t px = size_t(rows) * size_t(w);
+            const uint8_t* src = rgb + size_t(y0) * size_t(w) * 3;
+            uint8_t* dst = stage.data();
+            for (size_t i = 0; i < px; i++) {
+                dst[i * 4] = src[i * 3]; dst[i * 4 + 1] = src[i * 3 + 1]; dst[i * 4 + 2] = src[i * 3 + 2]; dst[i * 4 + 3] = 255;
+            }
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, w, rows, GL_RGBA, GL_UNSIGNED_BYTE, stage.data());
+        }
+        glBindTexture(GL_TEXTURE_2D, GLuint(previous));
+        checkGl("Oldstyle RGB8 upload");
+        return tex;
+    }
+    static constexpr int UPLOAD_BYTES = 8 << 20;
 
 private:
     bool v2_;

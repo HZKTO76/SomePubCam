@@ -314,7 +314,7 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     if (mergePath != nchPath) std::remove(mergePath.c_str());
     ShotOutput out;
     out.mergeMs = merged.ms;
-    const std::vector<uint8_t> bytes = scam_ios::workerOutput(merged);
+    std::vector<uint8_t> bytes = scam_ios::workerOutput(merged); // (given up to readWorkerOutput: the RGB kept in place)
     const bool effectiveMap = !merged.effMap.empty(), clipFlags = !merged.clipFlags.empty();
 
     const auto t0 = std::chrono::steady_clock::now();
@@ -412,7 +412,7 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
         par.mosaicBlock = merged;
     }
     if (labParameters) labParameters(par);
-    p.scamRgb = readWorkerOutput(p.merge, bytes, report, merged.width, merged.height, w, h, merged.rgbHalf, effectiveMap, clipFlags,
+    p.scamRgb = readWorkerOutput(p.merge, std::move(bytes), report, merged.width, merged.height, w, h, merged.rgbHalf, effectiveMap, clipFlags,
                                  highlightMask);
     // P165 ScamProcessor: the merged DNG before the pipeline - the shot's Parameters on the merge's sensor grid (the window, the
     // frames' rows), 16 bit over the headroom; P27: the DNG is optional, the photo is not

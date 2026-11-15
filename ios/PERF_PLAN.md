@@ -74,5 +74,9 @@ the GPU merge) and the Swift stats (< 3 ms). Moving the shared ones means changi
 | 4 UHDR halves readback, HEIC 10-bit context, off-main thumbnails / DNG write, no-copy NSData, settings tree ahead | [не измерено] (device) | base0 via the new ShotRun: 0 values differ | yes |
 | 3 render pipeline states in the warm-up | [не измерено] (first shots after an install) | - | yes |
 | 5 saves beside the processing | [не измерено] | saves stay in shot order (the raw-only save waits for them: review) | yes |
+| 7 ScamRgb half RGB repacked on the GPU (Android P145 HalfRgbUpload; a 65536-half probe, CPU bands otherwise) | Mesa main-thread CPU 137-182 -> 76-89 ms; ScamRgb phase 348-384 -> 232-292 ms; ScamGL conversion model 132-162 -> 9-25 ms | 0 values differ on base0 / night / uhdr / os1 / v2 (forced fallback too); texels byte-identical | yes |
+| 7 Oldstyle RGB8 uploaded as RGBA8 bands | ScamGL model 216-224 -> 21 ms (Oldstyle only) | os1: 0 values differ | yes |
+| 7 worker output RGB moved, not copied; workerOutput reserved | host 57-70 -> 6-9 ms; -100 MB held through the post | whole shot base0 (ShotRun): 0 of 37748736 values differ | yes |
+| 7 WhyV2Stats / Oldstyle samples read as halves | ScamGL model 14-20 -> 4 ms (under the 30 ms bar) | 0 values differ | reverted (gain too small) |
 | ManualPanel HUD reads | not done: the collapsing panel's chips would change for its 0.2 s exit | - | - |
 | -O3 C++, private textures / pooling, prepared photo settings | not done: unmeasurable here, risky (settings / memory / preview) | - | - |

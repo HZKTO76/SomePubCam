@@ -71,8 +71,9 @@ inline void mergeInfoFromReport(MergeInfo& m, const std::string& rep, bool rgbHa
 
 /// The worker's output file split as the client does it, for a transport with these requests: the RGB bytes (returned),
 /// the effective map, the clip flags and the highlight mask (HALF of the sensor grid, 16 B header "SCHLMSK1" + w + h).
-inline std::vector<uint8_t> readWorkerOutput(MergeInfo& m, const std::vector<uint8_t>& out, const std::string& report, int outW, int outH,
-                                             int sensorW, int sensorH, bool rgbHalf, bool effectiveMap, bool clipFlags, bool highlightMask) {
+/// (the trailers into m; the RGB's size returned)
+inline size_t readWorkerTrailers(MergeInfo& m, const std::vector<uint8_t>& out, const std::string& report, int outW, int outH,
+                                 int sensorW, int sensorH, bool rgbHalf, bool effectiveMap, bool clipFlags, bool highlightMask) {
     const size_t px = size_t(outW) * size_t(outH);
     const size_t rgbBytes = px * (rgbHalf ? 6 : 12);
     const size_t effBytes = effectiveMap ? px : 0, clipBytes = clipFlags ? px : 0;
@@ -94,7 +95,22 @@ inline std::vector<uint8_t> readWorkerOutput(MergeInfo& m, const std::vector<uin
     mergeInfoFromReport(m, report, rgbHalf);
     if (clipBytes) m.lastClipFlags = std::vector<uint8_t>(out.begin() + long(rgbBytes + effBytes), out.begin() + long(rgbBytes + effBytes + clipBytes));
     if (effBytes) m.lastEffectiveFrames = std::vector<uint8_t>(out.begin() + long(rgbBytes), out.begin() + long(rgbBytes + effBytes));
+    return rgbBytes;
+}
+
+inline std::vector<uint8_t> readWorkerOutput(MergeInfo& m, const std::vector<uint8_t>& out, const std::string& report, int outW, int outH,
+                                             int sensorW, int sensorH, bool rgbHalf, bool effectiveMap, bool clipFlags, bool highlightMask) {
+    const size_t rgbBytes = readWorkerTrailers(m, out, report, outW, outH, sensorW, sensorH, rgbHalf, effectiveMap, clipFlags, highlightMask);
     return std::vector<uint8_t>(out.begin(), out.begin() + long(rgbBytes));
+}
+
+/// the same with the output given up (ShotRun): its RGB returned in place, the trailers copied out first - no copy of the RGB
+inline std::vector<uint8_t> readWorkerOutput(MergeInfo& m, std::vector<uint8_t>&& out, const std::string& report, int outW, int outH,
+                                             int sensorW, int sensorH, bool rgbHalf, bool effectiveMap, bool clipFlags, bool highlightMask) {
+    const size_t rgbBytes = readWorkerTrailers(m, out, report, outW, outH, sensorW, sensorH, rgbHalf, effectiveMap, clipFlags, highlightMask);
+    std::vector<uint8_t> rgb = std::move(out);
+    rgb.resize(rgbBytes);
+    return rgb;
 }
 
 } // namespace scam_post
