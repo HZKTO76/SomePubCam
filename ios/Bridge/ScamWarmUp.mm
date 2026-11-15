@@ -63,4 +63,9 @@ static void reportProgress(int done, int total, void* context) {
     return (NSInteger)scamgl_program_count();
 }
 
++ (void)prepareThreads {
+    (void)scam::ScamRowTeam::get();
+    (void)scam::ScamPool::get();
+}
+
 @end

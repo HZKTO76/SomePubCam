@@ -152,6 +152,16 @@ id<MTLCommandBuffer> commandBuffer(Context& c) {
     return c.cb;
 }
 
+// The last command buffer that used each buffer / texture (any use: read, write, attachment, blit). A CPU read or a synchronised
+// map waits for that one only - the commands after it (the next frame's alignment, the merge's later bands) keep running
+// (before: every command buffer of the context). Weak: a finished command buffer the context dropped reads nil (nothing to
+// wait for). Keyed by the Metal object; a reused address costs at most an extra wait.
+std::unordered_map<const void*, __weak id<MTLCommandBuffer>> gLastUse;
+
+inline void used(Context& c, id resource) {
+    if (resource) gLastUse[(__bridge const void*)resource] = commandBuffer(c);
+}
+
 void endCompute(Context& c) {
     if (c.compute) {
         [c.compute endEncoding];
@@ -189,6 +199,66 @@ void submit(Context& c, bool wait) {
         }
         c.inFlight.swap(pending);
     }
+}
+
+// Waits until the GPU is done with `resource` (gLastUse: its last command buffer completed), gLock released meanwhile: this
+// context's open command buffer is committed when it is that one; one of another context not committed yet: this context's
+// whole queue as before. Nothing recorded: no wait.
+void waitForUse(Context& c, id resource, std::unique_lock<std::recursive_mutex>& lock) {
+    auto it = gLastUse.find((__bridge const void*)resource);
+    if (it == gLastUse.end()) return;
+    id<MTLCommandBuffer> cb = it->second;
+    if (!cb) { gLastUse.erase(it); return; }
+    if (cb == c.cb) submit(c, false);
+    else if (cb.status < MTLCommandBufferStatusCommitted) { submit(c, true); return; }
+    if (cb.status < MTLCommandBufferStatusCompleted) {
+        lock.unlock();
+        [cb waitUntilCompleted];
+        lock.lock();
+    }
+    if (cb.error) {
+        std::fprintf(stderr, "SCAMGL: GPU error: %s\n", cb.error.localizedDescription.UTF8String);
+        if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+    }
+}
+
+// The staging copies of uploads made while work is in flight (glBufferSubData, glTexSubImage*): kept and refilled once the
+// command buffer that read one has completed, instead of a new shared buffer each time (LaGpu uploads 24 MB per frame, 22-45
+// times a quality shot). At most kStagingKept buffers / kStagingBytes are kept.
+struct Staging {
+    id<MTLBuffer> buffer = nil;
+    __weak id<MTLCommandBuffer> reader = nil; // nil: free (never read, or the reader is done and gone)
+    bool pending = false;                     // the reader was recorded (a weak nil then means it completed)
+};
+std::vector<Staging> gStaging;
+constexpr size_t kStagingKept = 4, kStagingBytes = size_t(128) << 20;
+
+id<MTLBuffer> stagingCopy(Context& c, const void* bytes, size_t length) {
+    id<MTLCommandBuffer> reader = commandBuffer(c);
+    auto freeNow = [](const Staging& s) {
+        id<MTLCommandBuffer> r = s.reader;
+        return !s.pending || !r || r.status >= MTLCommandBufferStatusCompleted;
+    };
+    for (Staging& s : gStaging) {
+        if (s.buffer.length >= length && s.buffer.length <= 2 * length + 65536 && freeNow(s)) {
+            std::memcpy(s.buffer.contents, bytes, length);
+            s.reader = reader;
+            s.pending = true;
+            return s.buffer;
+        }
+    }
+    id<MTLBuffer> fresh = [metalDevice() newBufferWithBytes:bytes length:NSUInteger(length) options:MTLResourceStorageModeShared];
+    if (!fresh) return nil;
+    if (length <= kStagingBytes / kStagingKept) {
+        size_t total = length;
+        for (const Staging& s : gStaging) total += s.buffer.length;
+        // room: free kept buffers go first, the oldest first
+        for (auto it = gStaging.begin(); it != gStaging.end() && (gStaging.size() >= kStagingKept || total > kStagingBytes);) {
+            if (freeNow(*it)) { total -= it->buffer.length; it = gStaging.erase(it); } else ++it;
+        }
+        if (gStaging.size() < kStagingKept && total <= kStagingBytes) gStaging.push_back(Staging{fresh, reader, true});
+    }
+    return fresh;
 }
 
 void blit(Context& c, void (^body)(id<MTLBlitCommandEncoder>)) {
@@ -498,10 +568,24 @@ void ensureTranslationCache() {
 #endif
 }
 
+// The link cache under gLock; the compile itself (glslang, SPIRV-Cross, the MSL library, the pipeline) without it: a shot's GL
+// calls on another thread no longer wait behind the warm-up's programs (two threads linking one source both compile it, the
+// first stored wins). The callers must not hold gLock (it is recursive: held, the compile would still run under it).
+std::shared_ptr<Linked> cachedLink(const std::string& key) {
+    Guard g(gLock);
+    auto it = gLinkCache.find(key);
+    return it == gLinkCache.end() ? nullptr : it->second;
+}
+std::shared_ptr<Linked> storeLink(const std::string& key, const std::shared_ptr<Linked>& linked, const std::string& recipe) {
+    Guard g(gLock);
+    auto placed = gLinkCache.emplace(key, linked);
+    if (placed.second) gRecorded.push_back(recipe);
+    return placed.first->second;
+}
+
 std::shared_ptr<Linked> linkCompute(const std::string& source) {
     ensureTranslationCache();
-    auto cached = gLinkCache.find(source);
-    if (cached != gLinkCache.end()) return cached->second;
+    if (auto cached = cachedLink(source)) return cached;
     auto linked = std::make_shared<Linked>();
 #if TARGET_OS_IPHONE
     linked->compiled = scamgl::compile(source, scamgl::Stage::Compute, true);
@@ -542,8 +626,7 @@ std::shared_ptr<Linked> linkCompute(const std::string& source) {
         linked->pipeline = nil;
         return linked;
     }
-    gLinkCache[source] = linked;
-    gRecorded.push_back("C\n" + source);
+    linked = storeLink(source, linked, "C\n" + source);
     note("linked " + linked->compiled.entry + " local " + std::to_string(l[0]) + "x" + std::to_string(l[1]) + "x" + std::to_string(l[2]));
     return linked;
 }
@@ -569,8 +652,7 @@ id<MTLFunction> functionOf(const scamgl::Compiled& c, std::string& log) {
 
 std::shared_ptr<Linked> linkRender(const std::string& vs, const std::string& fs) {
     const std::string key = "R\n" + vs + "\x01" + fs;
-    auto cached = gLinkCache.find(key);
-    if (cached != gLinkCache.end()) return cached->second;
+    if (auto cached = cachedLink(key)) return cached;
     auto linked = std::make_shared<Linked>();
     linked->render = true;
 #if TARGET_OS_IPHONE
@@ -590,8 +672,7 @@ std::shared_ptr<Linked> linkRender(const std::string& vs, const std::string& fs)
     if (!linked->vertex) return linked;
     linked->fragment = functionOf(linked->compiled, linked->log);
     if (!linked->fragment) return linked;
-    gLinkCache[key] = linked;
-    gRecorded.push_back(key);
+    linked = storeLink(key, linked, key);
     note("linked render program " + linked->compiled.entry);
     return linked;
 }
@@ -674,6 +755,7 @@ void bindResources(Context& c, Program& p, id<MTLComputeCommandEncoder> ce, id<M
                 setBuffer(dummyBuffer(), 0, r.mslIndex);
             } else {
                 setBuffer(bit->second.mtl, NSUInteger(b.offset), r.mslIndex);
+                used(c, bit->second.mtl);
                 const size_t avail = bit->second.size - size_t(b.offset);
                 if (r.mslIndex < 32) sizes[size_t(r.mslIndex)] = uint32_t(b.size > 0 ? std::min<size_t>(size_t(b.size), avail) : avail);
             }
@@ -684,6 +766,7 @@ void bindResources(Context& c, Program& p, id<MTLComputeCommandEncoder> ce, id<M
             auto t = gTextures.find(unit.texture);
             if (t == gTextures.end() || !t->second.mtl) { note("image unit " + std::to_string(r.glBinding) + " empty"); break; }
             setTexture(imageView(t->second, unit, r.arrayed), r.mslIndex);
+            used(c, t->second.mtl);
             break;
         }
         case scamgl::Resource::Sampled: {
@@ -692,6 +775,7 @@ void bindResources(Context& c, Program& p, id<MTLComputeCommandEncoder> ce, id<M
             auto t = gTextures.find(name);
             if (t == gTextures.end() || !t->second.mtl) { note("texture unit " + std::to_string(unit) + " empty"); break; }
             setTexture(t->second.mtl, r.mslIndex);
+            used(c, t->second.mtl);
             setSampler(samplerOf(t->second), r.mslSampler);
             break;
         }
@@ -710,6 +794,7 @@ void dispatch(Context& c, GLuint gx, GLuint gy, GLuint gz, Buffer* indirect, GLi
     bindResources(c, p, e, nil);
     const MTLSize local = MTLSizeMake(cc.local[0], cc.local[1], cc.local[2]);
     if (indirect) {
+        used(c, indirect->mtl);
         [e dispatchThreadgroupsWithIndirectBuffer:indirect->mtl indirectBufferOffset:NSUInteger(indirectOffset) threadsPerThreadgroup:local];
     } else {
         if (gx == 0 || gy == 0 || gz == 0) return;
@@ -922,8 +1007,10 @@ void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void
     if (size == 0) return;
     if (!c->cb && c->inFlight.empty()) { std::memcpy(static_cast<uint8_t*>(b->mtl.contents) + offset, data, size_t(size)); return; }
     // In order with the recorded commands: a staging copy blitted after them.
-    id<MTLBuffer> staging = [metalDevice() newBufferWithBytes:data length:NSUInteger(size) options:MTLResourceStorageModeShared];
+    id<MTLBuffer> staging = stagingCopy(*c, data, size_t(size));
+    if (!staging) { fail(GL_OUT_OF_MEMORY); return; }
     id<MTLBuffer> dst = b->mtl;
+    used(*c, dst);
     blit(*c, ^(id<MTLBlitCommandEncoder> e) {
         [e copyFromBuffer:staging sourceOffset:0 toBuffer:dst destinationOffset:NSUInteger(offset) size:NSUInteger(size)];
     });
@@ -939,12 +1026,14 @@ void glCopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOff
         return;
     }
     id<MTLBuffer> s = src->mtl, d = dst->mtl;
+    used(*c, s);
+    used(*c, d);
     blit(*c, ^(id<MTLBlitCommandEncoder> e) {
         [e copyFromBuffer:s sourceOffset:NSUInteger(readOffset) toBuffer:d destinationOffset:NSUInteger(writeOffset) size:NSUInteger(size)];
     });
 }
 void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) {
-    Guard g(gLock);
+    std::unique_lock<std::recursive_mutex> g(gLock);
     Context* c = ctx();
     if (!c) return nullptr;
     Buffer* b = bufferBound(*c, target);
@@ -953,8 +1042,9 @@ void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitf
     // slot's fence): the shared storage is written at once, the recorded work goes on (no submit and wait - it serialised the
     // frames' uploads with the GPU: ~1 s of a 21-frame burst on the M1)
     const bool unsynchronized = (access & GL_MAP_UNSYNCHRONIZED_BIT) && (access & GL_MAP_WRITE_BIT) && !(access & GL_MAP_READ_BIT);
-    if (!unsynchronized) submit(*c, true);
-    return static_cast<uint8_t*>(b->mtl.contents) + offset;
+    id<MTLBuffer> mtl = b->mtl;
+    if (!unsynchronized) waitForUse(*c, mtl, g); // (b may move while gLock is released: the Metal buffer is kept)
+    return static_cast<uint8_t*>(mtl.contents) + offset;
 }
 GLboolean glUnmapBuffer(GLenum) { return GL_TRUE; }
 
@@ -1063,9 +1153,11 @@ void glTexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width
         staging = [metalDevice() newBufferWithBytes:converted.data() length:converted.size() options:MTLResourceStorageModeShared];
     } else {
         const size_t bytes = row * size_t(height - 1) + size_t(width) * size_t(bpp);
-        staging = [metalDevice() newBufferWithBytes:src length:bytes options:MTLResourceStorageModeShared];
+        staging = stagingCopy(*c, src, bytes);
     }
+    if (!staging) { fail(GL_OUT_OF_MEMORY); return; }
     id<MTLTexture> dst = t->mtl;
+    used(*c, dst);
     blit(*c, ^(id<MTLBlitCommandEncoder> e) {
         [e copyFromBuffer:staging sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:row * size_t(height)
                sourceSize:MTLSizeMake(NSUInteger(width), NSUInteger(height), 1) toTexture:dst destinationSlice:0
@@ -1102,6 +1194,7 @@ void glTexSubImage3D(GLenum target, GLint level, GLint x, GLint y, GLint z, GLsi
         staging = [metalDevice() newBufferWithBytes:src length:bytes options:MTLResourceStorageModeShared];
     }
     id<MTLTexture> dst = t->mtl;
+    used(*c, dst);
     const size_t image = row * size_t(height);
     blit(*c, ^(id<MTLBlitCommandEncoder> e) {
         [e copyFromBuffer:staging sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:image
@@ -1118,6 +1211,7 @@ void glGenerateMipmap(GLenum target) {
     if (!t || !t->mtl) { fail(GL_INVALID_OPERATION); return; }
     if (t->levels <= 1) return;
     id<MTLTexture> tex = t->mtl;
+    used(*c, tex);
     blit(*c, ^(id<MTLBlitCommandEncoder> e) {
         [e generateMipmapsForTexture:tex];
     });
@@ -1160,29 +1254,35 @@ void glDrawBuffers(GLsizei n, const GLenum* bufs) {
 }
 void glInvalidateFramebuffer(GLenum, GLsizei, const GLenum*) {}
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
-    Guard g(gLock);
+    std::unique_lock<std::recursive_mutex> g(gLock);
     Context* c = ctx();
     if (!c) return;
     auto fb = gFramebuffers.find(c->readFb);
-    auto t = fb == gFramebuffers.end() ? gTextures.end() : gTextures.find(fb->second.color[0]);
-    if (t == gTextures.end() || !t->second.mtl) { fail(GL_INVALID_OPERATION); return; }
+    auto found = fb == gFramebuffers.end() ? gTextures.end() : gTextures.find(fb->second.color[0]);
+    if (found == gTextures.end() || !found->second.mtl) { fail(GL_INVALID_OPERATION); return; }
     const int bpp = componentsOf(format) * typeBytes(type);
-    submit(*c, true);
+    // the texture's last writer (and the pack buffer's last user) only; the texture kept by value: the maps may change while
+    // gLock is released for the wait
+    const Texture tex = found->second;
+    Buffer* packBuffer = bufferBound(*c, GL_PIXEL_PACK_BUFFER);
+    id<MTLBuffer> pack = packBuffer ? packBuffer->mtl : nil;
+    waitForUse(*c, tex.mtl, g);
+    if (pack) waitForUse(*c, pack, g);
     uint8_t* dst = static_cast<uint8_t*>(pixels);
-    if (Buffer* pack = bufferBound(*c, GL_PIXEL_PACK_BUFFER)) dst = static_cast<uint8_t*>(pack->mtl.contents) + reinterpret_cast<uintptr_t>(pixels);
+    if (pack) dst = static_cast<uint8_t*>(pack.contents) + reinterpret_cast<uintptr_t>(pixels);
     const size_t row = rowBytes(width, bpp, c->packRowLength, c->packAlignment);
     const MTLRegion region = MTLRegionMake2D(NSUInteger(x), NSUInteger(y), NSUInteger(width), NSUInteger(height));
-    if (bpp == formatOf(t->second.internal).bytes) {
-        [t->second.mtl getBytes:dst bytesPerRow:row fromRegion:region mipmapLevel:0];
+    if (bpp == formatOf(tex.internal).bytes) {
+        [tex.mtl getBytes:dst bytesPerRow:row fromRegion:region mipmapLevel:0];
         return;
     }
     // GL_FLOAT of a half-float target, RGB of an RGBA store, ...: read the storage, convert the rows
-    const Layout from = storageLayout(t->second.mtl.pixelFormat), to = clientLayout(format, type);
+    const Layout from = storageLayout(tex.mtl.pixelFormat), to = clientLayout(format, type);
     if (!from.components || !to.components) { note("glReadPixels: conversion not supported"); fail(GL_INVALID_OPERATION); return; }
     std::vector<uint8_t> raw(size_t(from.size()) * size_t(width) * size_t(height));
-    [t->second.mtl getBytes:raw.data() bytesPerRow:size_t(from.size()) * size_t(width) fromRegion:region mipmapLevel:0];
-    const bool normalised = t->second.mtl.pixelFormat == MTLPixelFormatRGBA8Unorm || t->second.mtl.pixelFormat == MTLPixelFormatR8Unorm
-        || t->second.mtl.pixelFormat == MTLPixelFormatRG8Unorm;
+    [tex.mtl getBytes:raw.data() bytesPerRow:size_t(from.size()) * size_t(width) fromRegion:region mipmapLevel:0];
+    const bool normalised = tex.mtl.pixelFormat == MTLPixelFormatRGBA8Unorm || tex.mtl.pixelFormat == MTLPixelFormatR8Unorm
+        || tex.mtl.pixelFormat == MTLPixelFormatRG8Unorm;
     const int fromBytes = from.size() / from.components, toBytes = to.size() / to.components;
     for (int yy = 0; yy < height; ++yy) {
         const uint8_t* sp = raw.data() + size_t(yy) * size_t(width) * size_t(from.size());
@@ -1222,6 +1322,7 @@ static void clearColour(GLenum buffer, GLint drawBuffer, const double* value) {
     endCompute(*c);
     MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = t->second.mtl;
+    used(*c, t->second.mtl);
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(value[0], value[1], value[2], value[3]);
@@ -1297,6 +1398,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     for (size_t i = 0; i < targets.size(); ++i) {
         if (!targets[i]) continue;
         pass.colorAttachments[i].texture = targets[i];
+        used(*c, targets[i]);
         pass.colorAttachments[i].loadAction = MTLLoadActionLoad;
         pass.colorAttachments[i].storeAction = MTLStoreActionStore;
     }
@@ -1363,23 +1465,32 @@ void glAttachShader(GLuint program, GLuint shader) {
 }
 void glProgramParameteri(GLuint, GLenum, GLint) {}
 void glLinkProgram(GLuint name) {
+    std::string compute, vertex, fragment;
+    {
+        Guard g(gLock);
+        auto it = gPrograms.find(name);
+        if (it == gPrograms.end()) { fail(GL_INVALID_VALUE); return; }
+        Program& p = it->second;
+        p.linked = false;
+        p.log.clear();
+        for (GLuint s : p.shaders) {
+            auto sh = gShaders.find(s);
+            if (sh == gShaders.end()) continue;
+            if (sh->second.type == GL_COMPUTE_SHADER) compute = sh->second.source;
+            else if (sh->second.type == GL_VERTEX_SHADER) vertex = sh->second.source;
+            else if (sh->second.type == GL_FRAGMENT_SHADER) fragment = sh->second.source;
+        }
+    }
+    // the compile outside gLock (linkCompute / linkRender take it for the cache only)
+    std::shared_ptr<Linked> code;
+    if (!compute.empty()) code = linkCompute(compute);
+    else if (!vertex.empty() && !fragment.empty()) code = linkRender(vertex, fragment);
     Guard g(gLock);
     auto it = gPrograms.find(name);
     if (it == gPrograms.end()) { fail(GL_INVALID_VALUE); return; }
     Program& p = it->second;
-    p.linked = false;
-    p.log.clear();
-    std::string compute, vertex, fragment;
-    for (GLuint s : p.shaders) {
-        auto sh = gShaders.find(s);
-        if (sh == gShaders.end()) continue;
-        if (sh->second.type == GL_COMPUTE_SHADER) compute = sh->second.source;
-        else if (sh->second.type == GL_VERTEX_SHADER) vertex = sh->second.source;
-        else if (sh->second.type == GL_FRAGMENT_SHADER) fragment = sh->second.source;
-    }
-    if (!compute.empty()) p.code = linkCompute(compute);
-    else if (!vertex.empty() && !fragment.empty()) p.code = linkRender(vertex, fragment);
-    else { p.log = "ScamGL: a compute or a vertex + fragment program"; return; }
+    if (!code) { p.log = "ScamGL: a compute or a vertex + fragment program"; return; }
+    p.code = code;
     if (!p.code->ready()) {
         p.log = p.code->log;
         std::fprintf(stderr, "SCAMGL: link failed: %s\n", p.log.c_str());
@@ -1660,8 +1771,7 @@ int scamgl_warm_programs(const char* path, void (*progress)(int done, int total,
     for (size_t i = 0; i < keys.size(); ++i) {
         if (progress) progress(int(i), int(keys.size()), context);
         const std::string& k = keys[i];
-        Guard g(gLock);
-        std::shared_ptr<Linked> l;
+        std::shared_ptr<Linked> l; // (the link takes gLock for its cache only)
         if (k.rfind("C\n", 0) == 0) {
             l = linkCompute(k.substr(2));
         } else if (k.rfind("R\n", 0) == 0) {

@@ -42,7 +42,11 @@ final class FirstRunCompile {
             withAnimation(.easeOut(duration: 0.2)) { showing = true }
         }
         let started = Date()
-        Task.detached(priority: first ? .userInitiated : .background) { [weak self] in
+        // the merge's CPU thread teams at the shots' QoS before the warm-up below could make them at its own
+        Task.detached(priority: .userInitiated) { SCAMWarmUp.prepareThreads() }
+        // the quiet warm-up at utility QoS (was background): it holds the shot lock while the merge's programs build, and a shot
+        // waiting for it does not raise its priority (a std::timed_mutex has no owner to boost)
+        Task.detached(priority: first ? .userInitiated : .utility) { [weak self] in
             if !first { try? await Task.sleep(nanoseconds: 3_000_000_000) }
             let perf = Perf.signposter.beginInterval("GPU warm-up", id: Perf.signposter.makeSignpostID())
             defer { Perf.signposter.endInterval("GPU warm-up", perf) }

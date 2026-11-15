@@ -14,6 +14,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSInteger)saveProgramsToPath:(NSString *)path;
 /// How many programs this run linked.
 + (NSInteger)programCount;
+/// The merge's persistent CPU thread teams (ScamRowTeam, ScamPool) made on the calling thread: their threads take its QoS. Called
+/// from a user-initiated task before the background warm-up could make them (a team made there would run every later shot's
+/// CPU passes at background QoS).
++ (void)prepareThreads;
 @end
 
 NS_ASSUME_NONNULL_END
