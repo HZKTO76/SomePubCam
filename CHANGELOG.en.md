@@ -2,6 +2,11 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-15 (day) — realme
+
+- realme: the camera crash «Image is already closed» when a session closes is fixed.
+- realme 12 Pro+: the phone gives the telephoto and the ultra wide to the system camera only — they cannot be opened without root; the «2×» module (the main camera's ISZ) stays.
+
 ## 2026-11-15 — 50 MP, gallery, HDR and tone
 
 - X300 Ultra, 50 MP «Fast»: up to ~10 frames go into the merge instead of 4 — the memory reserve is sized for the fast merge.

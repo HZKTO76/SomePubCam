@@ -6855,6 +6855,10 @@ public class CaptureController {
                     if (preview != null) preview.requestRender();
                 });
             }
+        } catch (IllegalStateException closed) {
+            // P722 (realme RMX3840, 2026-11-15 12:54:46: «Image is already closed» in vivoAeAudit, the camera thread died): the
+            // reader closed with its session while a meter of this frame ran; the frame is dropped, the next session's go on
+            Log.d(TAG, "live RAW frame closed under its meters: " + closed.getMessage());
         } finally {
             if (!retained) img.close();
             if (ringView != null) Allocator.free(ringView); // never handed over (an exception on the way)
@@ -8042,10 +8046,10 @@ public class CaptureController {
      * once a second beside the HAL's exposure (VivoAeAudit). Only a plain 16-bit RAW, never under a shot.
      */
     private void vivoAeAudit(Image img, @Nullable TotalCaptureResult result) {
-        if (img == null || result == null || img.getFormat() != ImageFormat.RAW_SENSOR || mPayloadBad || !mPreviewLayouts.isEmpty()
-                || VivoSdkFullRes.oppo() || mVivoSdkCapture != null || burst || mShotInProgress || shotInFlight()
-                || !VivoAeAudit.wanted() || !mVivoAeAudit.due()) return;
+        if (img == null || result == null || mPayloadBad || !mPreviewLayouts.isEmpty() || VivoSdkFullRes.oppo() || mVivoSdkCapture != null
+                || burst || mShotInProgress || shotInFlight() || !VivoAeAudit.wanted() || !mVivoAeAudit.due()) return;
         try {
+            if (img.getFormat() != ImageFormat.RAW_SENSOR) return; // (P722: in the try - a closed Image throws here)
             final Long exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME);
             final Integer iso = result.get(CaptureResult.SENSOR_SENSITIVITY);
             if (exposure == null || iso == null || exposure <= 0 || iso <= 0) return;
