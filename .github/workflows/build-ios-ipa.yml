@@ -314,7 +314,7 @@ jobs:
           echo "simulator $udid"
           xcodebuild test -project SCAMERA.xcodeproj -scheme SCAMERA -destination "id=$udid" \
             CODE_SIGNING_ALLOWED=NO SCAM_GIT_SHA=${{ steps.ver.outputs.sha }} SCAM_DEPS="$RUNNER_TEMP/deps" | tee /tmp/test.log \
-            | grep -E "error:|Test Case|Executed|MERGE TEST|\*\* TEST" || true
+            | grep -E "error:|Test Case|Executed|MERGE TEST|measured \\[|\*\* TEST" || true
           grep -q "\*\* TEST SUCCEEDED \*\*" /tmp/test.log || { tail -120 /tmp/test.log; exit 1; }
 
       - name: Import signing identity

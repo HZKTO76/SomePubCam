@@ -44,6 +44,8 @@ final class FirstRunCompile {
         let started = Date()
         Task.detached(priority: first ? .userInitiated : .background) { [weak self] in
             if !first { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+            let perf = Perf.signposter.beginInterval("GPU warm-up", id: Perf.signposter.makeSignpostID())
+            defer { Perf.signposter.endInterval("GPU warm-up", perf) }
             let lines = SCAMWarmUp.prewarmMerge(withSettings: settings) { done, total in
                 let p = total > 0 ? min(1, Double(done) / Double(total)) : 1
                 Task { @MainActor in self?.advance(p * 0.5) }

@@ -447,7 +447,7 @@ final class CameraModel {
                 if count != wanted {
                     SessionLog.i("SHDR", "motion: \(shots.count) shots wait for their merge, \(count) frames for this one (of \(wanted))")
                 }
-                burst = try await captureService.captureBayerBurst(count: count)
+                burst = try await Perf.interval("burst capture") { try await captureService.captureBayerBurst(count: count) }
             }
             enqueue(burst, started: started, facts: facts)
         } catch {
@@ -510,9 +510,11 @@ final class CameraModel {
                 }
                 do {
                     // P165: a merged DNG when RAW is saved (ScamProcessor: rawSaving >= 1)
-                    let r = try BurstProcessor.process(burst, metadata: metadata, zoom: burst.zoom,
-                                                       dngFacts: wantDng ? BurstProcessor.dngFacts(metadata: metadata, shot: shot) : nil,
-                                                       rawOnly: rawOnly)
+                    let r = try Perf.interval("burst processing") {
+                        try BurstProcessor.process(burst, metadata: metadata, zoom: burst.zoom,
+                                                   dngFacts: wantDng ? BurstProcessor.dngFacts(metadata: metadata, shot: shot) : nil,
+                                                   rawOnly: rawOnly)
+                    }
                     return (r.heic, r.uti, r.log, nil, r.dng)
                 } catch {
                     return (nil, UTType.heic.identifier, burst.report, error.localizedDescription, nil)
@@ -552,8 +554,10 @@ final class CameraModel {
             // the thumbnail decoded off the main actor (a 12 MP HEIC's decode held the camera's UI)
             if let heic { thumbnail = await Task.detached(priority: .userInitiated) { MediaLibrary.thumbnail(of: heic) }.value }
             let saveStarted = Date()
-            try await mediaLibrary.save(CapturedPhoto(processed: heic, processedUTI: result.heic != nil ? result.uti : UTType.heic.identifier,
-                                                      rawFile: rawFile, report: []))
+            try await Perf.interval("library save") {
+                try await mediaLibrary.save(CapturedPhoto(processed: heic, processedUTI: result.heic != nil ? result.uti : UTType.heic.identifier,
+                                                          rawFile: rawFile, report: []))
+            }
             SessionLog.i("SHDR", "saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms (the library \(Int(Date().timeIntervalSince(saveStarted) * 1000)) ms), "
                          + "\(shots.count - 1) more queued, \(memoryFootprint())")
         } catch {

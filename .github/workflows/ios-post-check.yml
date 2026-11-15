@@ -6,7 +6,7 @@ name: iOS post pipeline vs Android
 on:
   push:
     branches: [ 'claude/ios-camera-app-port-idgljn' ]
-    paths: [ 'ios/Engine/**', 'ios/ScamGL/**', 'ios/tools/android-host/**', 'ios/tools/post_node_check.cpp', 'ios/tools/shot_params_check.cpp', 'ios/tools/make_test_dng.py', 'ios/tools/shot_run_check.cpp', 'ios/tools/hybrid_replay.cpp',
+    paths: [ 'ios/Engine/**', 'ios/ScamGL/**', 'ios/tools/android-host/**', 'ios/tools/post_node_check.cpp', 'ios/tools/shot_params_check.cpp', 'ios/tools/make_test_dng.py', 'ios/tools/shot_run_check.cpp', 'ios/tools/hybrid_replay.cpp', 'ios/tools/image_metrics.cpp',
              'app/src/main/assets/shaders/**', 'app/src/main/cpp/third_party/spektrafilm/**', 'app/src/main/cpp/film-reference-*',
              'app/src/main/assets/film-reference/**', 'ios/tools/build_moltenvk.sh', '.github/workflows/ios-post-check.yml' ]
   workflow_dispatch:
@@ -81,7 +81,14 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: |
           g++ -std=c++17 -O2 -ffp-contract=off -Iios/ScamGL/include -Iapp/src/main/cpp -Iapp/src/main/cpp/third_party/tone_port/include ios/tools/post_node_check.cpp -lEGL -lGLESv2 -pthread -o "$RUNNER_TEMP/post_node_check"
-          "$RUNNER_TEMP/post_node_check" app/src/main/assets/shaders "$RUNNER_TEMP/shot" "$RUNNER_TEMP/reference" full | tee "$RUNNER_TEMP/reference/mesa.txt" | tail -3
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/port"
+          "$RUNNER_TEMP/post_node_check" app/src/main/assets/shaders "$RUNNER_TEMP/shot" "$RUNNER_TEMP/reference" full --save "$RUNNER_TEMP/port" \
+            | tee "$RUNNER_TEMP/reference/mesa.txt" | tail -3
+          # PERF_PLAN.md's gate for speed work: SSIM / PSNR / dE2000 / banding of the port's photo against the Android reference
+          g++ -O2 -std=c++17 ios/tools/image_metrics.cpp -o "$RUNNER_TEMP/image_metrics"
+          "$RUNNER_TEMP/image_metrics" --selftest > /dev/null
+          "$RUNNER_TEMP/image_metrics" "$RUNNER_TEMP/reference/photo.rgba" "$RUNNER_TEMP/port/photo.rgba" --check | tee -a "$RUNNER_TEMP/reference/mesa.txt"
           { echo '### iOS post port vs the Android pipeline (Mesa)'; echo '```'; grep "^photo" "$RUNNER_TEMP/reference/mesa.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           head -c 128 "$RUNNER_TEMP/shot/burst.nch" > "$RUNNER_TEMP/reference/burst.nch"
           cp "$RUNNER_TEMP/shot/meta.json" "$RUNNER_TEMP/reference/meta.json"

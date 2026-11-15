@@ -101,7 +101,7 @@ actor CaptureService {
             observeNotifications()
             isSetUp = true
         }
-        if !session.isRunning { session.startRunning() }
+        if !session.isRunning { Perf.interval("session start") { session.startRunning() } }
         if let device = activeInput?.device {
             DeviceProbe.describe(output: photoCapture.output).forEach { SessionLog.i("Probe", $0) }
             createRotationCoordinator(for: device)

@@ -305,9 +305,11 @@ enum BurstProcessor {
             // the stored lens shading map of this lens and frame size (used where the DNG has none)
             var extra: [String: Any] = LensShading.wire(lscKey).map { ["ios_lsc_map": ["s", $0]] } ?? [:]
             if let diagnostics { extra.merge(ShotDiagnostics.extra(diagnostics)) { _, new in new } }
-            photo = try SCAMShot.processBurst(atPath: nch.path, dng: burst.dng, settings: PostSettings.json(extra: extra),
-                                              faces: faces.boxes.map { NSNumber(value: $0) }, facesDetected: faces.detected, front: burst.front,
-                                              dngFacts: dngFacts, rawOnly: rawOnly && dngFacts != nil, shaders: shaders.path)
+            photo = try Perf.interval("merge + post") {
+                try SCAMShot.processBurst(atPath: nch.path, dng: burst.dng, settings: PostSettings.json(extra: extra),
+                                          faces: faces.boxes.map { NSNumber(value: $0) }, facesDetected: faces.detected, front: burst.front,
+                                          dngFacts: dngFacts, rawOnly: rawOnly && dngFacts != nil, shaders: shaders.path)
+            }
         } catch let error as NSError {
             log += (error.userInfo["log"] as? [String]) ?? []
             if diagnostics != nil { log.append("failed: \(error.localizedDescription)") }
@@ -344,8 +346,10 @@ enum BurstProcessor {
                                                            shotTime: started, log: { log.append($0) }).record
         }
         var encodeLog: [String] = []
-        var heic = try ShotProcessor.encode(rgba: rgba, width: photo.width, height: photo.height, metadata: metadata, format: format,
-                                            gainMap: ShotProcessor.GainMap(photo: photo), log: { encodeLog.append($0) })
+        var heic = try Perf.interval("encode") {
+            try ShotProcessor.encode(rgba: rgba, width: photo.width, height: photo.height, metadata: metadata, format: format,
+                                     gainMap: ShotProcessor.GainMap(photo: photo), log: { encodeLog.append($0) })
+        }
         log += encodeLog
         // P633: the record at the very end of the file (WatermarkStore), as PhotoOutput appends it to Android's files
         if let watermarkRecord { heic = PhotoWatermark.appendRecord(watermarkRecord, to: heic, log: { log.append($0) }) }
