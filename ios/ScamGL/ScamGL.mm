@@ -1580,8 +1580,31 @@ void glShaderSource(GLuint name, GLsizei count, const GLchar* const* strings, co
     it->second.source = s;
 }
 void glCompileShader(GLuint) {} // translated at link time
-void glGetShaderiv(GLuint, GLenum name, GLint* value) {
+void glGetShaderiv(GLuint shader, GLenum name, GLint* value) {
+    if (name == GL_SHADER_SOURCE_LENGTH) { // with the terminating NUL, as GL counts it
+        Guard g(gLock);
+        auto it = gShaders.find(shader);
+        *value = it == gShaders.end() ? 0 : GLint(it->second.source.size() + 1);
+        return;
+    }
     *value = name == GL_COMPILE_STATUS ? GL_TRUE : 0;
+}
+void glGetShaderSource(GLuint shader, GLsizei size, GLsizei* length, GLchar* out) {
+    Guard g(gLock);
+    auto it = gShaders.find(shader);
+    const std::string empty;
+    const std::string& src = it == gShaders.end() ? empty : it->second.source;
+    const GLsizei n = size > 0 ? GLsizei(std::min(src.size(), size_t(size - 1))) : 0;
+    if (size > 0 && out) { std::memcpy(out, src.data(), size_t(n)); out[n] = 0; }
+    if (length) *length = n;
+}
+void glGetAttachedShaders(GLuint program, GLsizei maxCount, GLsizei* count, GLuint* shaders) {
+    Guard g(gLock);
+    auto it = gPrograms.find(program);
+    GLsizei n = 0;
+    if (it != gPrograms.end())
+        for (GLuint sh : it->second.shaders) if (n < maxCount && shaders) shaders[n++] = sh;
+    if (count) *count = n;
 }
 void glGetShaderInfoLog(GLuint, GLsizei size, GLsizei* length, GLchar* log) {
     if (length) *length = 0;
