@@ -34,6 +34,12 @@
 @property (nonatomic, readwrite) BOOL mirrored;
 @end
 
+extern "C" {
+void scamgl_label(const char* name);
+void scamgl_gpu_timing(int on);
+int scamgl_gpu_times(char* out, int size);
+}
+
 /// An NSData that owns `bytes` (moved in, freed with the data): the photo's RGBA and the merged DNG reach Swift without a copy
 static NSData* ownedData(std::vector<uint8_t>&& bytes) {
     if (bytes.empty()) return [NSData data];
@@ -243,8 +249,17 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
             r.rawOnly = rawOnly;
             dngRequest = r;
         }
+        // the GPU time per stage in the log («GPU ms»: the merge, each post node, the output; the next log's device numbers)
+        scamgl_gpu_timing(1);
+        scam_post::postStageHook() = [](const std::string& name) { scamgl_label(name.c_str()); };
+        struct StageReset { ~StageReset() { scam_post::postStageHook() = nullptr; scamgl_label(""); scamgl_gpu_timing(0); } } stageReset;
         scam_post::ShotOutput out = scam_post::runShot(burst.UTF8String, dngBytes, job.UTF8String, shaders.UTF8String, log, makePostContext,
                                                              16384, shotFaces, true, {}, build, dngRequest ? &*dngRequest : nullptr);
+        {
+            std::vector<char> times(4096);
+            scamgl_gpu_times(times.data(), int(times.size()));
+            if (times[0]) log(std::string("GPU ms: ") + times.data());
+        }
         photo = [SCAMPhoto new];
         photo.rgba = ownedData(std::move(out.photo.rgba)); // the pipeline's buffer handed over (48 MB: no copy)
         photo.width = out.photo.width;

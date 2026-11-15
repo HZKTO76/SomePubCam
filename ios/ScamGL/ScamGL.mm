@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -107,6 +108,7 @@ struct Sync {
 };
 
 struct Context {
+    std::string label;                  // scamgl_label: the stage the GPU time of this context's command buffers is booked to
     id<MTLCommandQueue> queue = nil;
     id<MTLCommandBuffer> cb = nil;
     id<MTLComputeCommandEncoder> compute = nil;
@@ -175,9 +177,28 @@ id<MTLComputeCommandEncoder> computeEncoder(Context& c) {
     return c.compute;
 }
 
+// The GPU time of the labelled stages (scamgl_label / scamgl_gpu_times): each command buffer's GPUEndTime - GPUStartTime, booked
+// to the label it was committed under. Only while a label is set (the shot's processing); no effect on what the GPU runs.
+std::mutex gGpuTimesLock;
+std::vector<std::pair<std::string, double>> gGpuTimes; // in first-use order
+std::atomic<bool> gGpuTiming{false};                    // scamgl_gpu_timing: unlabelled contexts book to "merge / other"
+
+void bookGpuTime(const std::string& label, double ms) {
+    std::lock_guard<std::mutex> g(gGpuTimesLock);
+    for (auto& e : gGpuTimes) if (e.first == label) { e.second += ms; return; }
+    gGpuTimes.emplace_back(label, ms);
+}
+
 void submit(Context& c, bool wait) {
     endCompute(c);
     if (c.cb) {
+        if (!c.label.empty() || gGpuTiming.load()) {
+            const std::string label = c.label.empty() ? std::string("merge / other") : c.label;
+            [c.cb addCompletedHandler:^(id<MTLCommandBuffer> b) {
+                const double ms = (b.GPUEndTime - b.GPUStartTime) * 1000.0;
+                if (ms > 0 && ms < 600000) bookGpuTime(label, ms);
+            }];
+        }
         [c.cb commit];
         c.inFlight.push_back(c.cb);
         c.cb = nil;
@@ -1822,6 +1843,40 @@ void glDeleteQueries(GLsizei, const GLuint*) {}
 // FirstRunCompile (P470 on the iPhone): the programs this process linked are kept as recipes (length-prefixed sources, the
 // ones of earlier recipes first) so a later first-run compile builds them all before the first shot needs one; Metal keeps the
 // compiled functions in its own cache across launches.
+// The stage this thread's context books its GPU time to (empty / null: none); the work recorded so far goes under the old one
+void scamgl_label(const char* name) {
+    Guard g(gLock);
+    Context* c = ctx();
+    if (!c) return;
+    const std::string next = name ? name : "";
+    if (next == c->label) return;
+    if (!c->label.empty()) submit(*c, false);
+    c->label = next;
+}
+
+// The shot's GPU timing on (1) / off (0): while on, the command buffers of contexts without a label are booked too
+void scamgl_gpu_timing(int on) { gGpuTiming = on != 0; }
+
+// "label ms, label ms, ..." of the stages booked since the last call (completed command buffers only), then cleared
+int scamgl_gpu_times(char* out, int size) {
+    std::string text;
+    {
+        std::lock_guard<std::mutex> g(gGpuTimesLock);
+        char line[160];
+        for (const auto& e : gGpuTimes) {
+            std::snprintf(line, sizeof line, "%s%s %.0f", text.empty() ? "" : ", ", e.first.c_str(), e.second);
+            text += line;
+        }
+        gGpuTimes.clear();
+    }
+    if (out && size > 0) {
+        const size_t n = std::min(text.size(), size_t(size - 1));
+        std::memcpy(out, text.data(), n);
+        out[n] = 0;
+    }
+    return int(text.size());
+}
+
 size_t scamgl_program_count(void) {
     Guard g(gLock);
     return gRecorded.size();

@@ -26,6 +26,13 @@ inline std::function<void(const std::string&)>& postLog() {
 }
 inline void logI(const std::string& tag, const std::string& line) { postLog()(tag + ": " + line); }
 
+/// The stage the GPU work that follows belongs to (a node's name, "output", "" at the end): iOS books its GPU time per stage
+/// (ScamShot.mm: scamgl_label); unset elsewhere
+inline std::function<void(const std::string&)>& postStageHook() {
+    static std::function<void(const std::string&)> f;
+    return f;
+}
+
 /// What the worker's output and report gave the post pipeline (ScamNeuralClient into ScamHybridBurst's / ScamRgb's statics).
 struct MergeInfo {
     bool hybridShot = true;                 // PreferenceKeys.isHybridShot: the SHDR merge made the RGB
@@ -211,6 +218,7 @@ public:
                 glProg->closed = true;
                 continue;
             }
+            if (postStageHook()) postStageHook()(node.Name);
             node.BeforeCompile();
             node.Compile();
             node.BeforeRun();
@@ -231,6 +239,7 @@ public:
         }
         if (texnum == 1) { if (main2) main2->close(); } else { if (main1) main1->close(); }
         // the final output (GLCoreBlockProcessing.drawBlocksToBitmap): yOffset per tile
+        if (postStageHook()) postStageHook()("output");
         const int tile = GLDrawParams::TileSize();
         GLTexture target({outSize.x, std::min(tile, outSize.y)}, GLFormat(DataType::SIMPLE_8, 4), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
         target.BufferLoad();
@@ -248,6 +257,7 @@ public:
         if (texnum == 1) { if (main1) main1->close(); } else { if (main2) main2->close(); }
         lazyMain1 = lazyMain2 = nullptr;
         Nodes.clear();
+        if (postStageHook()) postStageHook()("");
         return rgba;
     }
 };
