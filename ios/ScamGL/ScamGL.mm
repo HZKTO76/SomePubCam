@@ -68,6 +68,7 @@ struct Linked {
     bool render = false;                     // a vertex + fragment program
     id<MTLFunction> vertex = nil, fragment = nil;
     std::unordered_map<std::string, id<MTLRenderPipelineState>> renderPipelines; // by attachment formats + blend
+    std::string recipe;                      // a render program's recipe key ("R\n" vs \x01 fs): its pipelines' recipes name it
     std::string log;
     bool ready() const { return render ? (vertex && fragment) : pipeline != nil; }
 };
@@ -672,6 +673,7 @@ std::shared_ptr<Linked> linkRender(const std::string& vs, const std::string& fs)
     if (!linked->vertex) return linked;
     linked->fragment = functionOf(linked->compiled, linked->log);
     if (!linked->fragment) return linked;
+    linked->recipe = key;
     linked = storeLink(key, linked, key);
     note("linked render program " + linked->compiled.entry);
     return linked;
@@ -1350,6 +1352,29 @@ static MTLBlendOperation blendOperation(GLenum e) {
 }
 // A draw of the current render program into the draw framebuffer's attachments (GL window rows = texture rows: the vertex
 // stage is flipped by SPIRV-Cross, so gl_FragCoord, the viewport and the scissor keep their GL meaning).
+// A render program's pipeline state for its attachments' formats and the blend (glDrawArrays' key: the formats, "b" eq, src, dst
+// with blending). Its recipe ("P\n" program recipe \x02 key) lets the warm-up build it before the first draw needs it.
+id<MTLRenderPipelineState> makeRenderPipeline(const Linked& l, const std::vector<MTLPixelFormat>& formats, bool blend, GLenum eq, GLenum src,
+                                              GLenum dst, std::string& error) {
+    MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
+    d.vertexFunction = l.vertex;
+    d.fragmentFunction = l.fragment;
+    for (size_t i = 0; i < formats.size(); ++i) {
+        if (formats[i] == MTLPixelFormatInvalid) continue;
+        d.colorAttachments[i].pixelFormat = formats[i];
+        if (blend) {
+            d.colorAttachments[i].blendingEnabled = YES;
+            d.colorAttachments[i].rgbBlendOperation = d.colorAttachments[i].alphaBlendOperation = blendOperation(eq);
+            d.colorAttachments[i].sourceRGBBlendFactor = d.colorAttachments[i].sourceAlphaBlendFactor = blendFactor(src);
+            d.colorAttachments[i].destinationRGBBlendFactor = d.colorAttachments[i].destinationAlphaBlendFactor = blendFactor(dst);
+        }
+    }
+    NSError* e = nil;
+    id<MTLRenderPipelineState> state = [metalDevice() newRenderPipelineStateWithDescriptor:d error:&e];
+    if (!state) error = e ? e.localizedDescription.UTF8String : "unknown";
+    return state;
+}
+
 void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     Guard g(gLock);
     Context* c = ctx();
@@ -1371,27 +1396,17 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     if (c->blend) key += "b" + std::to_string(c->blendEquation) + "," + std::to_string(c->blendSrc) + "," + std::to_string(c->blendDst);
     id<MTLRenderPipelineState> state = p.code->renderPipelines[key];
     if (!state) {
-        MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
-        d.vertexFunction = p.code->vertex;
-        d.fragmentFunction = p.code->fragment;
-        for (size_t i = 0; i < targets.size(); ++i) {
-            if (!targets[i]) continue;
-            d.colorAttachments[i].pixelFormat = targets[i].pixelFormat;
-            if (c->blend) {
-                d.colorAttachments[i].blendingEnabled = YES;
-                d.colorAttachments[i].rgbBlendOperation = d.colorAttachments[i].alphaBlendOperation = blendOperation(c->blendEquation);
-                d.colorAttachments[i].sourceRGBBlendFactor = d.colorAttachments[i].sourceAlphaBlendFactor = blendFactor(c->blendSrc);
-                d.colorAttachments[i].destinationRGBBlendFactor = d.colorAttachments[i].destinationAlphaBlendFactor = blendFactor(c->blendDst);
-            }
-        }
-        NSError* error = nil;
-        state = [metalDevice() newRenderPipelineStateWithDescriptor:d error:&error];
+        std::vector<MTLPixelFormat> formats;
+        for (id<MTLTexture> t : targets) formats.push_back(t ? t.pixelFormat : MTLPixelFormatInvalid);
+        std::string error;
+        state = makeRenderPipeline(*p.code, formats, c->blend, c->blendEquation, c->blendSrc, c->blendDst, error);
         if (!state) {
-            std::fprintf(stderr, "SCAMGL: render pipeline failed: %s\n", error ? error.localizedDescription.UTF8String : "unknown");
+            std::fprintf(stderr, "SCAMGL: render pipeline failed: %s\n", error.c_str());
             fail(GL_INVALID_OPERATION);
             return;
         }
         p.code->renderPipelines[key] = state;
+        if (!p.code->recipe.empty()) gRecorded.push_back("P\n" + p.code->recipe + "\x02" + key);
     }
     endCompute(*c);
     MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1742,7 +1757,7 @@ int scamgl_save_programs(const char* path) {
         std::fclose(in);
     }
     for (const auto& k : keys) if (std::find(all.begin(), all.end(), k) == all.end()) all.push_back(k);
-    if (all.size() > 400) all.erase(all.begin(), all.begin() + (all.size() - 400));
+    if (all.size() > 800) all.erase(all.begin(), all.begin() + (all.size() - 800)); // programs and their pipeline states
     const std::string tmp = std::string(path) + ".tmp";
     FILE* out = std::fopen(tmp.c_str(), "wb");
     if (!out) return -1;
@@ -1777,6 +1792,40 @@ int scamgl_warm_programs(const char* path, void (*progress)(int done, int total,
         } else if (k.rfind("R\n", 0) == 0) {
             const size_t cut = k.find('\x01', 2);
             if (cut != std::string::npos) l = linkRender(k.substr(2, cut - 2), k.substr(cut + 1));
+        } else if (k.rfind("P\n", 0) == 0) {
+            // a render program's pipeline state (glDrawArrays' key), built outside gLock, kept unless a draw made it meanwhile
+            const size_t at = k.find('\x02', 2);
+            const std::string program = at == std::string::npos ? std::string() : k.substr(2, at - 2), key = at == std::string::npos ? std::string() : k.substr(at + 1);
+            const size_t cut = program.find('\x01', 2);
+            if (program.rfind("R\n", 0) == 0 && cut != std::string::npos) l = linkRender(program.substr(2, cut - 2), program.substr(cut + 1));
+            if (l && l->ready()) {
+                std::vector<MTLPixelFormat> formats;
+                bool blend = false;
+                unsigned eq = 0, src = 0, dst = 0;
+                size_t pos = 0;
+                while (pos < key.size() && key[pos] != 'b') {
+                    const size_t comma = key.find(',', pos);
+                    if (comma == std::string::npos) break;
+                    formats.push_back(MTLPixelFormat(std::strtoul(key.c_str() + pos, nullptr, 10)));
+                    pos = comma + 1;
+                }
+                if (pos < key.size() && key[pos] == 'b') blend = std::sscanf(key.c_str() + pos + 1, "%u,%u,%u", &eq, &src, &dst) == 3;
+                bool have = false;
+                {
+                    Guard g(gLock);
+                    have = l->renderPipelines.count(key) != 0;
+                }
+                std::string error;
+                id<MTLRenderPipelineState> state = have || formats.empty() ? nil : makeRenderPipeline(*l, formats, blend, eq, src, dst, error);
+                if (state) {
+                    Guard g(gLock);
+                    if (!l->renderPipelines.count(key)) {
+                        l->renderPipelines[key] = state;
+                        gRecorded.push_back(k);
+                    }
+                }
+                if (!have && !state) l = nullptr;
+            }
         }
         if (l && l->ready()) ++built;
     }

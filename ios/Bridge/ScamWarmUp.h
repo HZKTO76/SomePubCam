@@ -10,7 +10,7 @@ NS_ASSUME_NONNULL_BEGIN
                                          progress:(void (^)(NSInteger done, NSInteger total))progress;
 /// The kept recipes at `path` linked again; returns how many were built.
 + (NSInteger)warmProgramsAtPath:(NSString *)path progress:(void (^)(NSInteger done, NSInteger total))progress;
-/// This run's programs added to the recipes at `path` (at most 400 kept); returns how many the file holds, -1 on failure.
+/// This run's programs and render pipeline states added to the recipes at `path` (at most 800 kept); returns how many the file holds, -1 on failure.
 + (NSInteger)saveProgramsToPath:(NSString *)path;
 /// How many programs this run linked.
 + (NSInteger)programCount;
