@@ -41,6 +41,10 @@ constexpr int kShiftSsbo = 100, kShiftImage = 200, kShiftTexture = 300, kShiftUb
 
 Compiled compile(const std::string& glsl, Stage stage, bool iosPlatform);
 
+// SCAMGL_FILTER: 0 the GPU's own texture filter; 1 ("float") texture() of a uniform sampler2D through texelFetch with float
+// weights where the bound texture is linear, clamped and float (the uniform scam_lin_<sampler> says which, ScamGL sets it)
+int filterMode();
+
 // A directory for the translations (the MSL and the reflection of a source; "" = none): a later launch reads them instead of
 // running glslang and SPIRV-Cross again. Keyed by the source, the stage, the platform and this build.
 void setCacheDir(const std::string& dir);

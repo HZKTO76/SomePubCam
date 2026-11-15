@@ -827,6 +827,29 @@ void bindResources(Context& c, Program& p, id<MTLComputeCommandEncoder> ce, id<M
     auto setSampler = [&](id<MTLSamplerState> s, int index) {
         if (ce) [ce setSamplerState:s atIndex:NSUInteger(index)]; else [re setFragmentSamplerState:s atIndex:NSUInteger(index)];
     };
+    // SCAMGL_FILTER=float: each sampler's scam_lin_<name> (1: its texture is filtered in the shader) before the block is bound
+    if (scamgl::filterMode() == 1 && !p.block.empty()) {
+        int s = 0;
+        for (const auto& r : cc.resources) {
+            if (r.type != scamgl::Resource::Sampled) continue;
+            const int unit = p.samplerUnit[size_t(s++)] & 31;
+            if (r.volume || r.arrayed) continue;
+            const std::string key = "scam_lin_" + r.name;
+            for (const auto& m : cc.members) {
+                if (m.name != key || m.offset + 4 > p.block.size()) continue;
+                auto t = gTextures.find(c.tex2D[unit]);
+                int32_t lin = 0;
+                if (t != gTextures.end()) {
+                    const Texture& x = t->second;
+                    const bool floatFormat = x.internal == GL_R16F || x.internal == GL_RG16F || x.internal == GL_RGBA16F || x.internal == GL_R32F
+                        || x.internal == GL_RG32F || x.internal == GL_RGBA32F || x.internal == GL_R11F_G11F_B10F;
+                    lin = floatFormat && x.magFilter == GL_LINEAR && x.minFilter == GL_LINEAR && x.wrapS == GL_CLAMP_TO_EDGE
+                        && x.wrapT == GL_CLAMP_TO_EDGE ? 1 : 0;
+                }
+                std::memcpy(p.block.data() + m.offset, &lin, 4);
+            }
+        }
+    }
     std::vector<uint32_t> sizes(32, 0);
     int sampled = 0;
     for (const auto& r : cc.resources) {

@@ -162,6 +162,9 @@ jobs:
           # ScamGL's A/B switches on the default fast route: write maps synchronised, dispatches serial
           SCAMGL_SYNC_MAPS=1 python3 ios/tools/replay_bursts.py run "$RUNNER_TEMP/hybrid_replay" "$RUNNER_TEMP/bursts" "$RUNNER_TEMP/metal/fast_sync" "$RUNNER_TEMP/fast.txt" > /dev/null || true
           SCAMGL_SERIAL_DISPATCH=1 python3 ios/tools/replay_bursts.py run "$RUNNER_TEMP/hybrid_replay" "$RUNNER_TEMP/bursts" "$RUNNER_TEMP/metal/fast_serial" "$RUNNER_TEMP/fast.txt" > /dev/null || true
+          # the texture filter in the shader with float weights (llvmpipe's rule) instead of the Apple GPU's fixed-point filter
+          SCAMGL_FILTER=float python3 ios/tools/replay_bursts.py run "$RUNNER_TEMP/hybrid_replay" "$RUNNER_TEMP/bursts" "$RUNNER_TEMP/metal/fast_float" "$RUNNER_TEMP/fast.txt" > /dev/null || true
+          SCAMGL_FILTER=float SCAM_FM_MAX_DONORS=0 python3 ios/tools/replay_bursts.py run "$RUNNER_TEMP/hybrid_replay" "$RUNNER_TEMP/bursts" "$RUNNER_TEMP/metal/fast_float_d0" "$RUNNER_TEMP/fast.txt" > /dev/null || true
       - uses: actions/download-artifact@v4
         with:
           name: merge-reference
@@ -177,8 +180,10 @@ jobs:
             echo "=== fast route $v (d<n>: <n> donors; direct: the plain upload): Metal vs Mesa"
             python3 ios/tools/replay_bursts.py compare "$RUNNER_TEMP/reference/fast_$v" "$RUNNER_TEMP/metal/fast_$v" --max-psnr-drop 70 || true
           done
-          for v in sync serial; do
-            echo "=== fast route, ScamGL $v (SCAMGL_SYNC_MAPS / SCAMGL_SERIAL_DISPATCH): Metal vs Mesa's default fast route"
+          echo "=== base frame alone (d0), the filter in float (SCAMGL_FILTER=float): Metal vs Mesa"
+          python3 ios/tools/replay_bursts.py compare "$RUNNER_TEMP/reference/fast_d0" "$RUNNER_TEMP/metal/fast_float_d0" --max-psnr-drop 70 || true
+          for v in float sync serial; do
+            echo "=== fast route, ScamGL $v (SCAMGL_FILTER=float / SCAMGL_SYNC_MAPS / SCAMGL_SERIAL_DISPATCH): Metal vs Mesa's default fast route"
             python3 ios/tools/replay_bursts.py compare "$RUNNER_TEMP/reference/fast" "$RUNNER_TEMP/metal/fast_$v" --max-psnr-drop 70 || true
           done
           echo "=== the storage-buffer upload against the texture upload, each backend alone (fast vs fast_direct)"

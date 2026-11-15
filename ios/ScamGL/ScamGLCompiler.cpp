@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <cstdlib>
 #include <regex>
 #include <mutex>
 #include <set>
@@ -89,11 +90,62 @@ int baseTypeOf(const spirv_cross::SPIRType& t) {
 
 } // namespace
 
+// SCAMGL_FILTER=float: texture() of a uniform sampler2D becomes scam_tex_<name>(): with the bound texture linear, clamped and
+// float (ScamGL sets scam_lin_<name>), the four texels by texelFetch and the weights in float (llvmpipe's rule: u x size - 0.5,
+// floor / fraction, the edge texels clamped, lerp a + w (b - a)) instead of the GPU's own filter; otherwise texture() as written.
+int filterMode() {
+    static const int mode = [] {
+        const char* e = std::getenv("SCAMGL_FILTER");
+        return e && std::string(e) == "float" ? 1 : 0;
+    }();
+    return mode;
+}
+
+static std::string emulateFilter(const std::string& glsl) {
+    static const std::regex decl("((?:layout\\s*\\([^)]*\\)\\s*)?uniform\\s+(?:(?:highp|mediump|lowp)\\s+)?sampler2D\\s+(\\w+)\\s*;)");
+    std::string out;
+    std::vector<std::string> names;
+    auto begin = std::sregex_iterator(glsl.begin(), glsl.end(), decl);
+    size_t last = 0;
+    for (auto it = begin; it != std::sregex_iterator(); ++it) {
+        const std::smatch& m = *it;
+        const std::string name = m[2].str();
+        out.append(glsl, last, size_t(m.position(0)) - last);
+        out += m[1].str();
+        out += "\nuniform int scam_lin_" + name + ";\n"
+               "highp vec4 scam_tex_" + name + "(highp vec2 scam_uv) {\n"
+               "    if (scam_lin_" + name + " == 0) return texture(" + name + ", scam_uv);\n"
+               "    highp ivec2 sz = textureSize(" + name + ", 0);\n"
+               "    highp vec2 p = scam_uv * vec2(sz) - 0.5;\n"
+               "    highp vec2 f = floor(p);\n"
+               "    highp vec2 w = p - f;\n"
+               "    highp ivec2 i = ivec2(f);\n"
+               "    highp ivec2 a = clamp(i, ivec2(0), sz - 1), b = clamp(i + 1, ivec2(0), sz - 1);\n"
+               "    highp vec4 t00 = texelFetch(" + name + ", a, 0), t10 = texelFetch(" + name + ", ivec2(b.x, a.y), 0);\n"
+               "    highp vec4 t01 = texelFetch(" + name + ", ivec2(a.x, b.y), 0), t11 = texelFetch(" + name + ", b, 0);\n"
+               "    highp vec4 r0 = t00 + (t10 - t00) * w.x, r1 = t01 + (t11 - t01) * w.x;\n"
+               "    return r0 + (r1 - r0) * w.y;\n"
+               "}\n"
+               "highp vec4 scam_tex_" + name + "(highp vec2 scam_uv, highp float scam_bias) { return scam_tex_" + name + "(scam_uv); }\n";
+        last = size_t(m.position(0) + m.length(0));
+        names.push_back(name);
+    }
+    out.append(glsl, last, std::string::npos);
+    if (names.empty()) return glsl;
+    // the calls after the declarations (the helpers' own texture() calls stay: they are written with the name and "scam_uv)")
+    for (const std::string& name : names) {
+        const std::regex call("\\btexture\\s*\\(\\s*" + name + "\\s*,(?!\\s*scam_uv\\))");
+        out = std::regex_replace(out, call, "scam_tex_" + name + "(");
+    }
+    return out;
+}
+
 static Compiled compileUncached(const std::string& source, Stage stage, bool iosPlatform) {
     Compiled out;
     // GLSL ES words that Vulkan GLSL reserves or refuses: a parameter named `sampler` (a type there), #version 100 / 300 es
     std::string glsl = std::regex_replace(source, std::regex("\\bsampler\\b"), "scam_sampler");
     glsl = std::regex_replace(glsl, std::regex("#version[ \\t]+(100|300[ \\t]+es)"), "#version 310 es");
+    if (filterMode() == 1) glsl = emulateFilter(glsl);
     std::vector<uint32_t> spirv;
     if (!toSpirv(glsl, stage, spirv, out.log)) return out;
     try {
@@ -335,7 +387,7 @@ Compiled compile(const std::string& source, Stage stage, bool iosPlatform) {
     }
     if (dir.empty()) return compileUncached(source, stage, iosPlatform);
     // this build's translator: a new app version translates again
-    static const std::string build = std::string(__DATE__) + " " + __TIME__;
+    static const std::string build = std::string(__DATE__) + " " + __TIME__ + " filter " + std::to_string(filterMode());
     char name[64];
     std::snprintf(name, sizeof name, "/%016llx-%d%d.scamglc",
                   static_cast<unsigned long long>(fnv(source, fnv(build))), int(stage), iosPlatform ? 1 : 0);
