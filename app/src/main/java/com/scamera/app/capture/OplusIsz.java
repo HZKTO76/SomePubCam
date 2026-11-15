@@ -159,16 +159,39 @@ public final class OplusIsz {
                         .putBoolean("module_sensorcrop_" + target, true)
                         .putString(SensorModePick.prefKey(target), String.valueOf(r[0]))
                         .apply();
+                ownAe(p, target);
                 Log.i("SCAM_CAPTURE", "OPPO family ISZ module " + target + " («" + label(zoom) + "») on camera " + camera + ": sensor mode row "
                         + r[0] + " " + r[1] + "x" + r[2] + " (" + (OppoNativeFullRes.pyb110() ? "izoom QBC, the sensor's Quad" : "iZoom crop, its frames prove the Quad")
                         + ", no remosaic), zoom " + zoom + ", sensor crop, ISP stream off");
             }
             alignNoiseProfiles(p);
+            for (String slot : ModuleRegistry.slots())
+                if (rowIndex(ModuleRegistry.camera(slot)) == REALME_ROW && SensorModePick.picked(slot) == REALME_ROW) ownAe(p, slot);
             return true;
         } catch (RuntimeException e) {
             Log.w(TAG, "ISZ modules not created: " + e);
             return true;
         }
+    }
+
+    static final String OWN_AE = "module_oplus_isz_ae_";
+
+    /** P722: the module's camera runs no AE of its own in the row (RMX3840: the HAL's AE is off in the engineer mode). */
+    static boolean needsOwnAe(int row) {
+        return row == REALME_ROW && OppoNativeFullRes.rmx3840();
+    }
+
+    /**
+     * P722 (realme RMX3840 log 2026-11-15 13:23:21: row 8 ran, its results reported 0.075 ms at ISO 103 - the sensor's shortest
+     * exposure - frame after frame, the viewfinder and the photo black): the engineer-mode row leaves the camera's AE off, so the
+     * module's «Автоэкспозиция» is Unspektra AE (the app's own, from the RAW), once a module; the owner's later choice stays.
+     */
+    static void ownAe(SharedPreferences p, String slot) {
+        if (!needsOwnAe(REALME_ROW) || p.getBoolean(OWN_AE + slot, false)) return;
+        p.edit().putBoolean(OWN_AE + slot, true)
+                .putString(com.scamera.app.settings.ModuleSensorSettings.prefix(slot) + com.scamera.app.settings.UnspektraAePreferences.ENGINE, "1")
+                .apply();
+        Log.i("SCAM_CAPTURE", "OPPO family ISZ module " + slot + ": «Автоэкспозиция» Unspektra AE (the row's camera AE is off, P722)");
     }
 
     static final String NOISE_KEY = "pref_noise_model_profile_key", NOISE_ALIGNED = "module_oplus_isz_noise_";

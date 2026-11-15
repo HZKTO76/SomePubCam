@@ -2,10 +2,14 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-15 (day, 2) — realme 2×
+
+- realme 12 Pro+: the «2×» module (ISZ without remosaic) now takes its exposure from the app (Unspektra AE): the camera set none in this mode, hence the black frame.
+- realme 12 Pro+: the telephoto and the ultra wide open (the OPPO Find X7 Ultra's package); the earlier note «cannot be opened without root» was wrong.
+
 ## 2026-11-15 (day) — realme
 
 - realme: the camera crash «Image is already closed» when a session closes is fixed.
-- realme 12 Pro+: the phone gives the telephoto and the ultra wide to the system camera only — they cannot be opened without root; the «2×» module (the main camera's ISZ) stays.
 
 ## 2026-11-15 — 50 MP, gallery, HDR and tone
 

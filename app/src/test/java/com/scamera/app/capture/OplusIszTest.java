@@ -62,8 +62,11 @@ public class OplusIszTest {
         assertTrue(isz.rawOnly());
         final SensorModePick.Pick other = new SensorModePick.Pick(11, 4096, 2304);
         assertSame("another row: unchanged", other, OplusIsz.mark("0", "back0", other));
+        assertTrue("P722: the engineer-mode row has no camera AE: the module takes Unspektra AE", OplusIsz.needsOwnAe(8));
+        assertFalse(OplusIsz.needsOwnAe(11));
         ShadowBuild.setModel("RMX5200");
         assertFalse("another realme: no ISZ", OplusIsz.device());
+        assertFalse(OplusIsz.needsOwnAe(8));
         assertEquals(0, OplusIsz.cameras().length);
     }
 
