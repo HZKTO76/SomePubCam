@@ -206,13 +206,13 @@ void submit(Context& c, bool wait) {
 // context's open command buffer is committed when it is that one; one of another context not committed yet: this context's
 // whole queue as before. Nothing recorded: no wait.
 void waitForUse(Context& c, id resource, std::unique_lock<std::recursive_mutex>& lock) {
+    // the work recorded so far is handed to the GPU first (as the full wait did): it runs while this waits for `resource`'s
+    // command buffer only (left open, the GPU would idle until the next flush: the fast merge's band readbacks)
+    submit(c, false);
     auto it = gLastUse.find((__bridge const void*)resource);
     if (it == gLastUse.end()) return;
     id<MTLCommandBuffer> cb = it->second;
     if (!cb) { gLastUse.erase(it); return; }
-    // the work recorded so far is handed to the GPU first (as the full wait did): it runs while this waits for `resource`'s
-    // command buffer only (left open, the GPU would idle until the next flush: the fast merge's band readbacks)
-    submit(c, false);
     if (cb.status < MTLCommandBufferStatusCommitted) { submit(c, true); return; } // another context's, not committed yet
     if (cb.status < MTLCommandBufferStatusCompleted) {
         lock.unlock();
@@ -223,6 +223,22 @@ void waitForUse(Context& c, id resource, std::unique_lock<std::recursive_mutex>&
         std::fprintf(stderr, "SCAMGL: GPU error: %s\n", cb.error.localizedDescription.UTF8String);
         if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
     }
+    // every finished command buffer's error reported here as the full wait reported them (an earlier failed buffer: the
+    // readback's caller must see it); the finished ones are dropped
+    std::vector<id<MTLCommandBuffer>> pending;
+    for (id<MTLCommandBuffer> b : c.inFlight) {
+        if (b.status < MTLCommandBufferStatusCompleted) { pending.push_back(b); continue; }
+        if (b.error) {
+            std::fprintf(stderr, "SCAMGL: GPU error: %s\n", b.error.localizedDescription.UTF8String);
+            if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+        }
+    }
+    c.inFlight.swap(pending);
+}
+
+// A Metal object no longer used by GL (deleted, or its store replaced): its last-use entry goes too
+inline void forgetUse(id resource) {
+    if (resource) gLastUse.erase((__bridge const void*)resource);
 }
 
 // The staging copies of uploads made while work is in flight (glBufferSubData, glTexSubImage*): kept and refilled once the
@@ -959,7 +975,10 @@ void glGenBuffers(GLsizei n, GLuint* names) {
 }
 void glDeleteBuffers(GLsizei n, const GLuint* names) {
     Guard g(gLock);
-    for (GLsizei i = 0; i < n; ++i) gBuffers.erase(names[i]);
+    for (GLsizei i = 0; i < n; ++i) {
+        auto it = gBuffers.find(names[i]);
+        if (it != gBuffers.end()) { forgetUse(it->second.mtl); gBuffers.erase(it); }
+    }
 }
 void glBindBuffer(GLenum target, GLuint name) {
     Guard g(gLock);
@@ -995,6 +1014,7 @@ void glBufferData(GLenum target, GLsizeiptr size, const void* data, GLenum) {
     if (!b || size < 0) { fail(GL_INVALID_OPERATION); return; }
     // A new store: commands recorded before keep the old one alive.
     const size_t bytes = std::max<size_t>(size_t(size), 16);
+    forgetUse(b->mtl); // the old store: commands recorded before keep it alive, no CPU access reaches it any more
     b->mtl = data ? [metalDevice() newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared]
                   : [metalDevice() newBufferWithLength:bytes options:MTLResourceStorageModeShared];
     if (!b->mtl) { b->size = 0; fail(GL_OUT_OF_MEMORY); return; }
@@ -1060,7 +1080,10 @@ void glGenTextures(GLsizei n, GLuint* names) {
 }
 void glDeleteTextures(GLsizei n, const GLuint* names) {
     Guard g(gLock);
-    for (GLsizei i = 0; i < n; ++i) gTextures.erase(names[i]);
+    for (GLsizei i = 0; i < n; ++i) {
+        auto it = gTextures.find(names[i]);
+        if (it != gTextures.end()) { forgetUse(it->second.mtl); gTextures.erase(it); }
+    }
 }
 void glActiveTexture(GLenum unit) {
     if (Context* c = ctx()) c->activeUnit = (unit - GL_TEXTURE0) & 31;
@@ -1114,6 +1137,7 @@ static void storage(GLenum target, GLsizei levels, GLenum internal, GLsizei widt
     d.usage = target == GL_TEXTURE_3D ? MTLTextureUsageShaderRead
                                       : MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView | MTLTextureUsageRenderTarget;
     d.storageMode = MTLStorageModeShared;
+    forgetUse(t->mtl);
     t->mtl = [metalDevice() newTextureWithDescriptor:d];
     if (!t->mtl) { fail(GL_OUT_OF_MEMORY); return; }
     t->target = target;

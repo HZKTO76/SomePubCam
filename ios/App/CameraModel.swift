@@ -570,6 +570,7 @@ final class CameraModel {
                     show(L("capture.not_saved"))
                     return
                 }
+                await saveTail?.value // the shots' saves stay in shot order (a photo's may still be on its way to the library)
                 if let image = await Self.thumbnail(file: rawFile) { thumbnail = image }
                 try await mediaLibrary.save(CapturedPhoto(processed: nil, processedUTI: UTType.heic.identifier, rawFile: rawFile, report: []))
                 SessionLog.i("SHDR", "RAW processing finished: the DNG saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms, "
