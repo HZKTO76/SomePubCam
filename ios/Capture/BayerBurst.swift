@@ -17,7 +17,8 @@ final class BurstHandoff: @unchecked Sendable {
 struct BayerBurst {
     var width = 0, height = 0, cfa = 0
     var frames: [NchFrame] = []
-    var dng = Data()          // the first frame's DNG: levels, noise profile, colour, orientation (the whole frame)
+    var dng = Data()          // the DNG of frame `dngFrame`: levels, noise profile, colour, orientation (the whole frame)
+    var dngFrame = 0          // the newest N frame (the base's metadata, as Android's from the base), else the first
     var processed: Data?      // the camera's own HEIC of the first request, for its EXIF
     var report: [String] = []
     var front = false         // the front camera: the photo is mirrored as Android's Parameters.mirror
@@ -45,10 +46,12 @@ extension FourCharCode {
 }
 
 extension PhotoCapture {
-    /// The SHDR series: bracket requests of up to `maxBracketedCapturePhotoCount` frames at exposure bias 0 until `count` N frames
-    /// arrived, then in the same series the plan's ultrashort (Bento) and bracketed (Shasta) frames as manual exposure brackets
-    /// (HybridPlan from the newest N frame's measured exposure and its clipping / shadows; ultrashort first, as Android takes them).
-    func captureBayerBurst(count: Int, device: AVCaptureDevice) async throws -> BayerBurst {
+    /// The SHDR series: manual exposure bracket requests of up to `maxBracketedCapturePhotoCount` frames at the camera AE's present
+    /// shutter and ISO (the viewfinder's exposure, as Android's ring frames; ETTR's boost when on) until `count` N frames arrived, the
+    /// N frames selected as Android's ring (NormalSelect), then in the same series the plan's ultrashort (Bento) and bracketed
+    /// (Shasta) frames as manual exposure brackets (HybridPlan from the newest N frame's measured exposure and its clipping / shadows;
+    /// ultrashort first, as Android takes them). Every frame is after the press: AVFoundation gives no RAW ring.
+    func captureBayerBurst(count: Int, device: AVCaptureDevice, pressed: Date) async throws -> BayerBurst {
         guard let bayer = output.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }) else {
             throw CameraError.captureException("Bayer RAW is not available on this lens / zoom")
         }
@@ -57,60 +60,145 @@ extension PhotoCapture {
         burst.lens = device.uniqueID
         let wide = Wide169.on
         let started = Date()
-        let perRequest = max(1, min(count, output.maxBracketedCapturePhotoCount))
+        let maxBracket = output.maxBracketedCapturePhotoCount
+        let perRequest = max(1, min(count, maxBracket))
+        let stabilized = output.isLensStabilizationDuringBracketedCaptureSupported
+        let format = device.activeFormat
+        burst.report.append(String(format: "capture: %@ %@, maxBracketedCapturePhotoCount %ld, shutter %.4f..%.1f ms, ISO %.0f..%.0f, "
+                                   + "frame range %.2f..%.2f fps, OIS in brackets %@, flicker %ld Hz (%@), photo %dx%d",
+                                   BuildInfo.machine, device.localizedName, maxBracket, format.minExposureDuration.seconds * 1e3,
+                                   format.maxExposureDuration.seconds * 1e3, format.minISO, format.maxISO,
+                                   1 / device.activeVideoMaxFrameDuration.seconds, 1 / device.activeVideoMinFrameDuration.seconds,
+                                   stabilized ? "on" : "not supported", HybridPlan.antibandingHz,
+                                   StoredPrefs.string("pref_antibanding_hz_key", "-1") == "-1" ? "auto: region \(MainsRegion.region ?? "?")" : "set",
+                                   output.maxPhotoDimensions.width, output.maxPhotoDimensions.height))
+        var log: [String] = []
+        let limits = ExposureLimits.of(lens: device.uniqueID, width: Int(output.maxPhotoDimensions.width),
+                                       height: Int(output.maxPhotoDimensions.height), log: { log.append($0) })
         var clock = BurstClock()
         let ettr = await ettrExposure(bayer: bayer, device: device, burst: &burst)
-        let format = device.activeFormat
-        while burst.frames.count < count {
+        // the camera AE's exposure of this moment, read once: every N frame of the series at it
+        let aeNs = Int64((device.exposureDuration.seconds * 1e9).rounded())
+        let tLow = Int64((format.minExposureDuration.seconds * 1e9).rounded(.up))
+        let tHigh = Int64((format.maxExposureDuration.seconds * 1e9).rounded(.down))
+        let nNs = min(max(ettr?.ns ?? aeNs, tLow), max(tLow, tHigh))
+        let nIso = min(max(ettr.map { Float($0.iso) } ?? device.iso, format.minISO), format.maxISO)
+        let nIsoInt = Int(nIso.rounded())
+        burst.report.append(String(format: "N plan: %ld frames at %.3f ms * ISO %ld (%@), %ld a request", count, Double(nNs) / 1e6, nIsoInt,
+                                   ettr != nil ? "ETTR" : "the camera AE's present exposure", perRequest))
+        var lost = 0, requests = 0
+        var lastN: AVCapturePhoto?
+        let maxRequests = (count + perRequest - 1) / perRequest + 2
+        while burst.frames.count < count && requests < maxRequests {
+            requests += 1
             let n = min(perRequest, count - burst.frames.count)
-            let bracket: [AVCaptureBracketedStillImageSettings] = (0..<n).map { _ -> AVCaptureBracketedStillImageSettings in
-                if let ettr {
-                    return AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(
-                        exposureDuration: CMTime(value: ettr.ns, timescale: 1_000_000_000),
-                        iso: min(max(Float(ettr.iso), format.minISO), format.maxISO))
-                }
-                return AVCaptureAutoExposureBracketedStillImageSettings.autoExposureSettings(exposureTargetBias: 0)
+            let bracket = (0..<n).map { _ in
+                AVCaptureManualExposureBracketedStillImageSettings.manualExposureSettings(
+                    exposureDuration: CMTime(value: nNs, timescale: 1_000_000_000), iso: nIso)
             }
             let first = burst.frames.isEmpty
             func request(withProcessed: Bool) -> AVCapturePhotoBracketSettings {
                 let processed: [String: Any]? = withProcessed ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
                 let settings = AVCapturePhotoBracketSettings(rawPixelFormatType: bayer, processedFormat: processed, bracketedSettings: bracket)
                 settings.maxPhotoDimensions = output.maxPhotoDimensions
+                if stabilized { settings.isLensStabilizationEnabled = true }
                 // one shutter sound for the whole series (CameraSounds), not the system's per request
                 silence(settings)
                 return settings
             }
+            // CaptureController's series timeout: 4 s + 3 x the request's exposures
+            let timeout = 4 + 3 * Double(nNs) * Double(n) / 1e9
             let requestStarted = Date()
             var photos: [AVCapturePhoto]
             do {
-                photos = try await capturePhotos(request(withProcessed: first))
+                photos = try await capturePhotos(request(withProcessed: first), timeout: timeout)
             } catch CameraError.captureException(let reason) where first {
                 // a RAW + HEIC bracket refused: RAW only (the EXIF then comes from the DNG)
                 burst.report.append("burst request with HEIC refused (\(reason)), RAW only")
-                photos = try await capturePhotos(request(withProcessed: false))
+                photos = try await capturePhotos(request(withProcessed: false), timeout: timeout)
+            } catch where !first {
+                // the shot fails only without a frame (P27): the N frames so far are merged
+                burst.report.append("burst request \(n) frames failed (\(error.localizedDescription)), \(burst.frames.count) N frames kept")
+                lost += n
+                break
             }
-            burst.report.append("burst request \(n) frames in \(ms(since: requestStarted)) ms")
-            for photo in photos { try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide) }
-            if photos.isEmpty { break }
+            let raws = photos.filter(\.isRawPhoto)
+            burst.report.append("burst request \(n) frames in \(ms(since: requestStarted)) ms" + (raws.count < n ? ", \(n - raws.count) lost" : ""))
+            lost += max(0, n - raws.count)
+            for photo in photos {
+                if photo.isRawPhoto {
+                    let (ns, iso) = Self.measured(photo)
+                    limits.observe(requestedNs: nNs, requestedIso: nIsoInt, deliveredNs: ns, deliveredIso: iso, log: { log.append($0) })
+                    lastN = photo
+                }
+                try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide)
+            }
+            if raws.isEmpty { break }
         }
+        burst.report.append("N delivered: " + Self.exposures(burst.frames))
+        let delivered = burst.frames.count
+        // Android's ring selection on the delivered N frames (the camera may give another exposure than asked)
+        let selection = NormalSelect.select(burst.frames.enumerated().map {
+            NormalSelect.Frame(index: $0.offset, timestampNs: $0.element.timestampNs, exposureNs: $0.element.exposureNs, iso: Int($0.element.iso))
+        }, requested: count)
+        burst.report += selection.log
+        if selection.keep.count < burst.frames.count {
+            burst.frames = selection.keep.map { burst.frames[$0] }
+            burst.stream?.discard() // the planes of the frames left out are in it: the NCH is written after the capture
+            burst.stream = nil
+        }
+        // the base's metadata (Android: levels, neutral, matrices, noise of the base): the newest N frame's DNG, the base's
+        // candidates are the newest N (HybridSelect)
+        if let lastN, burst.frames.count > 1, let newest = burst.frames.indices.max(by: { burst.frames[$0].timestampNs < burst.frames[$1].timestampNs }),
+           burst.frames[newest].timestampNs == Self.stampNs(lastN), newest != 0, let dng = lastN.fileDataRepresentation() {
+            burst.dng = dng
+            burst.dngFrame = newest
+            burst.report.append("metadata (DNG) of N frame \(newest), the newest")
+        }
+        lastN = nil
         let normals = burst.frames.count
-        if normals > 0, let plan = extrasPlan(for: burst, device: device) {
+        var extras = ExtrasTally()
+        if normals > 0, let plan = extrasPlan(for: burst, device: device, limits: limits) {
             burst.report.append(plan.description)
+            extras.planned = plan.requests.count
             if !plan.requests.isEmpty {
-                await captureExtras(plan, bayer: bayer, device: device, perRequest: max(1, output.maxBracketedCapturePhotoCount),
-                                    burst: &burst, clock: &clock, wide: wide)
+                await captureExtras(plan, bayer: bayer, device: device, perRequest: max(1, maxBracket), stabilized: stabilized,
+                                    limits: limits, burst: &burst, clock: &clock, wide: wide, tally: &extras, log: &log)
             }
         }
+        let lastFrameMs = ms(since: pressed)
+        burst.report += log
         finish(&burst)
-        let extras = burst.frames.count - normals
-        burst.report.append("burst \(burst.frames.count) frames (\(normals) N, \(extras) ultrashort / bracketed) in \(ms(since: started)) ms, per request \(perRequest)"
+        let es = burst.frames.filter { $0.role == NchWriter.roleUltrashort }.count
+        let l = burst.frames.filter { $0.role == NchWriter.roleBracketed }.count
+        let n = burst.frames.filter { $0.role == NchWriter.roleNormal }.count
+        burst.report.append("capture summary: N \(n) of \(count) (\(lost) lost, \(delivered - normals) left out), "
+                            + "ES \(es), L \(l) (planned \(extras.planned): \(extras.lost) lost, \(extras.reassigned) reassigned, \(extras.dropped) dropped), "
+                            + "press -> last frame \(lastFrameMs) ms" + (ettr != nil ? " (ETTR meter frame first)" : ""))
+        burst.report.append("burst \(burst.frames.count) frames (\(normals) N, \(burst.frames.count - normals) ultrashort / bracketed) in \(ms(since: started)) ms, per request \(perRequest)"
                             + (burst.fullHeight > 0 ? ", 16:9 rows \(burst.firstRow)..<\(burst.firstRow + burst.height) of \(burst.fullHeight)" : ""))
         return burst
     }
 
+    struct ExtrasTally {
+        var planned = 0, lost = 0, reassigned = 0, dropped = 0
+    }
+
+    /// The frames' measured exposures, grouped: "20 x 10.000ms*ISO100"
+    static func exposures(_ frames: [NchFrame]) -> String {
+        var groups: [(ns: Int64, iso: UInt32, n: Int)] = []
+        for f in frames {
+            if let i = groups.firstIndex(where: { $0.ns == f.exposureNs && $0.iso == f.iso }) { groups[i].n += 1 }
+            else { groups.append((f.exposureNs, f.iso, 1)) }
+        }
+        return groups.map { String(format: "%ld x %.3fms*ISO%u", $0.n, Double($0.ns) / 1e6, $0.iso) }.joined(separator: ", ")
+    }
+
+    static func stampNs(_ photo: AVCapturePhoto) -> Int64 { photo.timestamp.convertScale(1_000_000_000, method: .default).value }
+
     /// HybridPlan.build from the newest N frame (CaptureController: the newest ring frame's exposure, zslClipFraction's shares), the
     /// lens's ranges as SENSOR_INFO_EXPOSURE_TIME_RANGE / SENSITIVITY_RANGE; nil in «Движение», with «HDR кадры» off or «Oldstyle».
-    private func extrasPlan(for burst: BayerBurst, device: AVCaptureDevice) -> HybridPlan.Plan? {
+    private func extrasPlan(for burst: BayerBurst, device: AVCaptureDevice, limits: ExposureLimits) -> HybridPlan.Plan? {
         guard !HybridPlan.oneExposure, let newest = burst.frames.max(by: { $0.timestampNs < $1.timestampNs }) else { return nil }
         var levels = Self.bufferLevels(DngInfo(dng: burst.dng))
         // P558: the frame's clip plateau under the declared white is the white (the clip share is counted against it)
@@ -121,18 +209,22 @@ extension PhotoCapture {
         let tLow = Int64((format.minExposureDuration.seconds * 1e9).rounded(.up)), tHigh = Int64((format.maxExposureDuration.seconds * 1e9).rounded(.down))
         let iLow = Int(format.minISO.rounded(.up)), iHigh = Int(format.maxISO.rounded(.down))
         guard tLow > 0, tHigh >= tLow, iLow > 0, iHigh >= iLow else { return nil }
+        // ExposureLimits: what this lens really gave manual requests before
+        let (times, isos) = limits.capped(times: tLow...tHigh, isos: iLow...iHigh)
         return HybridPlan.build(nShutterNs: newest.exposureNs, nIso: Int(newest.iso), clip: measure.clip, shadow: measure.shadow,
-                                deepShadow: measure.deep, times: tLow...tHigh,
-                                isos: HybridPlan.rawIsos(iLow...iHigh, nIso: Int(newest.iso)))
+                                deepShadow: measure.deep, times: times,
+                                isos: HybridPlan.rawIsos(isos, nIso: Int(newest.iso)))
     }
 
     /// The plan's frames as manual exposure brackets (AVCaptureManualExposureBracketedStillImageSettings: the plan's shutter and ISO),
     /// RAW only, at most `perRequest` a request. Each delivered frame keeps the role its measured exposure gives (HybridPlan.classify);
     /// a refused request never costs the shot (P27): its N frames stay.
-    private func captureExtras(_ plan: HybridPlan.Plan, bayer: OSType, device: AVCaptureDevice, perRequest: Int, burst: inout BayerBurst,
-                               clock: inout BurstClock, wide: Bool) async {
+    private func captureExtras(_ plan: HybridPlan.Plan, bayer: OSType, device: AVCaptureDevice, perRequest: Int, stabilized: Bool,
+                               limits: ExposureLimits, burst: inout BayerBurst, clock: inout BurstClock, wide: Bool,
+                               tally: inout ExtrasTally, log: inout [String]) async {
         let format = device.activeFormat
         var pending = plan.requests[...]
+        var number = 0
         while !pending.isEmpty {
             let chunk = Array(pending.prefix(perRequest))
             pending = pending.dropFirst(chunk.count)
@@ -143,29 +235,52 @@ extension PhotoCapture {
             }
             let settings = AVCapturePhotoBracketSettings(rawPixelFormatType: bayer, processedFormat: nil, bracketedSettings: bracket)
             settings.maxPhotoDimensions = output.maxPhotoDimensions
+            if stabilized { settings.isLensStabilizationEnabled = true }
             silence(settings)
+            let timeout = 4 + 3 * chunk.reduce(0) { $0 + Double($1.shutterNs) } / 1e9
             let requestStarted = Date()
             let photos: [AVCapturePhoto]
             do {
-                photos = try await capturePhotos(settings)
+                photos = try await capturePhotos(settings, timeout: timeout)
             } catch {
-                burst.report.append("hybrid: \(chunk.count) ultrashort / bracketed frame(s) refused (\(error.localizedDescription)), the N frames merged alone")
+                tally.lost += chunk.count + pending.count
+                burst.report.append("hybrid: \(chunk.count + pending.count) ultrashort / bracketed frame(s) refused (\(error.localizedDescription)), the N frames merged alone")
                 return
             }
-            burst.report.append("burst request \(chunk.count) ultrashort / bracketed frames in \(ms(since: requestStarted)) ms")
-            for (k, photo) in photos.enumerated() where photo.isRawPhoto {
+            let raws = photos.filter(\.isRawPhoto)
+            tally.lost += max(0, chunk.count - raws.count)
+            burst.report.append("burst request \(chunk.count) ultrashort / bracketed frames in \(ms(since: requestStarted)) ms"
+                                + (raws.count < chunk.count ? ", \(chunk.count - raws.count) lost" : ""))
+            var used = Set<Int>()
+            for (k, photo) in raws.enumerated() {
                 let at = photo.sequenceCount >= 1 && photo.sequenceCount <= chunk.count ? photo.sequenceCount - 1 : min(k, chunk.count - 1)
-                let request = chunk[at]
-                let (exposureNs, iso) = Self.measured(photo)
-                var report = burst.report
-                guard let role = HybridPlan.classify(request, exposureNs: exposureNs, iso: iso, plan: plan, log: { report.append($0) }) else {
-                    burst.report = report
+                if used.contains(at) { // a duplicate: dropped alone
+                    tally.dropped += 1
+                    burst.report.append("hybrid: a duplicate of frame \(at + 1) of the request dropped")
                     continue
                 }
+                used.insert(at)
+                let request = chunk[at]
+                let (exposureNs, iso) = Self.measured(photo)
+                limits.observe(requestedNs: request.shutterNs, requestedIso: request.iso, deliveredNs: exposureNs, deliveredIso: iso,
+                               log: { log.append($0) })
+                number += 1
+                var report = burst.report
+                let classified = HybridPlan.classify(request, exposureNs: exposureNs, iso: iso, plan: plan, log: { report.append($0) })
                 burst.report = report
+                burst.report.append(String(format: "extra %ld %@: plan %.3fms*ISO%ld -> %.3fms*ISO%ld (x%.3f of N) %@", number, request.role.name,
+                                           Double(request.shutterNs) / 1e6, request.iso, Double(exposureNs) / 1e6, iso,
+                                           Double(exposureNs) * Double(iso) / (Double(plan.nShutterNs) * Double(plan.nIso)),
+                                           classified.map { $0 == request.role ? $0.name : "reassigned " + $0.name } ?? "dropped"))
+                guard let role = classified else {
+                    tally.dropped += 1
+                    continue
+                }
+                if role != request.role { tally.reassigned += 1 }
                 do {
                     try append(photo, to: &burst, clock: &clock, role: role.rawValue, wide: wide)
                 } catch {
+                    tally.dropped += 1
                     burst.report.append("hybrid: \(request.role.name) frame left out (\(error.localizedDescription))")
                 }
             }
@@ -308,7 +423,7 @@ extension PhotoCapture {
         let (exposureNs, iso) = Self.measured(photo)
         let product = Double(exposureNs) * Double(iso)
         if clock.exposure0 == 0 { clock.exposure0 = product }
-        let stampNs = photo.timestamp.convertScale(1_000_000_000, method: .default).value
+        let stampNs = Self.stampNs(photo)
         let stamp = Double(stampNs) / 1e6
         if clock.t0 == nil { clock.t0 = stamp }
         burst.frames.append(NchFrame(raw: raw, exposure: Float(clock.exposure0 > 0 ? product / clock.exposure0 : 1), iso: UInt32(iso),

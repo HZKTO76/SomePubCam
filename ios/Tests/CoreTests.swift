@@ -53,3 +53,36 @@ final class SupportTests: XCTestCase {
         XCTAssertEqual(try keys("en"), try keys("ru"))
     }
 }
+
+final class CaptureRulesTests: XCTestCase {
+    private func frame(_ i: Int, ms: Int64, ns: Int64 = 10_000_000, iso: Int = 100) -> NormalSelect.Frame {
+        NormalSelect.Frame(index: i, timestampNs: ms * 1_000_000, exposureNs: ns, iso: iso)
+    }
+
+    func testNormalSelectKeepsTheNewestExposure() {
+        // a brighter frame never, a frame 0.3 EV darker only to fill up to min(N, 8)
+        let frames = [frame(0, ms: 0, iso: 150), frame(1, ms: 33, iso: 81), frame(2, ms: 66), frame(3, ms: 99)]
+        let (keep, _) = NormalSelect.select(frames, requested: 2)
+        XCTAssertEqual(keep, [2, 3])
+        let (filled, _) = NormalSelect.select(frames, requested: 4)
+        XCTAssertEqual(filled, [1, 2, 3])
+    }
+
+    func testNormalSelectDropsFramesBehindAGap() {
+        let frames = [frame(0, ms: 0), frame(1, ms: 33), frame(2, ms: 1000), frame(3, ms: 1033)]
+        let (keep, _) = NormalSelect.select(frames, requested: 4)
+        XCTAssertEqual(keep, [2, 3])
+    }
+
+    func testExposureLimitsLearnACapFromTwoClampedResults() {
+        let limits = ExposureLimits.of(lens: "test-\(UUID().uuidString)", width: 4032, height: 3024)
+        XCTAssertEqual(limits.isoCap, Int.max)
+        limits.observe(requestedNs: 10_000_000, requestedIso: 800, deliveredNs: 10_000_000, deliveredIso: 400, log: { _ in })
+        XCTAssertEqual(limits.isoCap, Int.max)
+        limits.observe(requestedNs: 10_000_000, requestedIso: 1600, deliveredNs: 10_000_000, deliveredIso: 400, log: { _ in })
+        XCTAssertEqual(limits.isoCap, 400)
+        // a result above the cap clears it
+        limits.observe(requestedNs: 10_000_000, requestedIso: 500, deliveredNs: 10_000_000, deliveredIso: 500, log: { _ in })
+        XCTAssertEqual(limits.isoCap, Int.max)
+    }
+}

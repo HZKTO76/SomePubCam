@@ -977,3 +977,25 @@ path on, BENTO applied («Качество»), the photo bit for bit. Fixed:
   without extra frames.
 Kept: per-frame noise from the DNG profile scaled by ISO (slope k, offset k^2: NoiseModeler's generator form); the merge measures
 the bracketed frames' noise itself (P358).
+
+## Capture against Android's default «Фото» / «Быстрый» / Why (2026-11-15)
+Checked against the owner's description and CaptureController / HybridPlan / ExposureLimits. Fixed:
+- N were auto-exposure brackets at bias 0 (the still AE, not the viewfinder's; the EV compensation not certain to apply): now manual
+  brackets at the device's present exposureDuration x ISO (ETTR's boost when on), read once at the press.
+- No N selection: NormalSelect = drainZslNormalFrames (newest exposure +-0.05 EV, darker to -0.5 EV only up to min(N, 8), never
+  brighter, gap max(500 ms, 4 x shutter)); a dropped frame sends the NCH to the after-capture writer.
+- Metadata (levels, neutral, matrices, noise) were the oldest N frame's DNG: now the newest N's (the base candidates); noise ISO scaling
+  and P558 from that frame (BayerBurst.dngFrame).
+- No learned limits: ExposureLimits ported (two clamped results, 1.5 % / 2 ISO, cleared above, 14 days, per lens / size / system build),
+  applied to the plan's ranges.
+- No series timeout: 4 s + 3 x the request's exposures; late frames dropped; a failed later request keeps the frames so far.
+- Duplicates in a bracket dropped alone; per-frame plan / fact lines; capture summary (N / ES / L, lost, reassigned, dropped, press -> last
+  frame), the capture facts line (device, maxBracketedCapturePhotoCount, shutter / ISO ranges, frame range, OIS, flicker).
+- Focus held (.locked) for the series from AF-C, AF-C back after.
+- Brackets with isLensStabilizationEnabled where the output supports it (Android: OIS as the preview).
+- «Мерцание ламп» «Авто»: the region's mains (MainsRegion; JP / unknown: none) instead of no snapping.
+- Viewfinder frame range: the format's slowest .. 30 fps (activeVideoMax / MinFrameDuration), read back into the log.
+Not portable / kept: no RAW ring (AVCaptureVideoDataOutput gives no Bayer; ZSL / responsive capture are not for brackets), so N are after
+the press and their time is in «press -> last frame»; no gyro selection, no HAL motion cap; the RAW ISO range 35..200 (rawIsos, measured);
+no AE restore frame / next-press wait (manual brackets leave the device AE alone); ES / L split by maxBracketedCapturePhotoCount.
+To verify on the phone: the frame range's effect on the night viewfinder, OIS in brackets, manual N vs the old auto N (noise / clipping).

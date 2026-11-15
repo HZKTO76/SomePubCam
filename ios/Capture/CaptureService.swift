@@ -207,6 +207,7 @@ actor CaptureService {
         appliedFocusMode = focus
         if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
         Self.applyFacesAndBoost(device)
+        Self.applyFrameRange(device)
         Self.applyMotionCeiling(device)
         device.unlockForConfiguration()
         applyFlash(device)
@@ -238,7 +239,8 @@ actor CaptureService {
         }
         if (try? device.lockForConfiguration()) != nil {
             device.videoZoomFactor = min(max(CGFloat(module.deviceZoom), device.minAvailableVideoZoomFactor), device.maxAvailableVideoZoomFactor)
-            // a preset / format change resets activeMaxExposureDuration: «Спорт»'s shutter ceiling again
+            // a preset / format change resets the frame range and activeMaxExposureDuration: both again
+            Self.applyFrameRange(device)
             Self.applyMotionCeiling(device)
             device.unlockForConfiguration()
         }
@@ -260,12 +262,26 @@ actor CaptureService {
     /// Whether the photo output gives Bayer RAW (an iPad / a lens without RAW: none)
     var hasBayerRaw: Bool { photoCapture.output.availableRawPhotoPixelFormatTypes.contains { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) } }
 
-    func captureBayerBurst(count: Int) async throws -> BayerBurst {
+    func captureBayerBurst(count: Int, pressed: Date) async throws -> BayerBurst {
         guard let device = activeInput?.device else { throw CameraError.videoDeviceUnavailable }
+        // the bracket requests' «AF без нового сканирования»: the lens held where it is for the series, the continuous AF back after
+        let focusWas = device.focusMode
+        var held = false
+        if focusWas == .continuousAutoFocus, device.isFocusModeSupported(.locked), (try? device.lockForConfiguration()) != nil {
+            device.focusMode = .locked
+            device.unlockForConfiguration()
+            held = true
+        }
+        defer {
+            if held, (try? device.lockForConfiguration()) != nil {
+                if device.focusMode == .locked { device.focusMode = focusWas }
+                device.unlockForConfiguration()
+            }
+        }
         // AVFoundation takes Bayer RAW only at videoZoomFactor 1: a zoom (1.5x / 2x, a native-resolution module) is SabreCrop's
         // window of the full frames, as Android's Sabre zoom; the viewfinder keeps the zoomed field digitally meanwhile
         let factor = Double(device.videoZoomFactor)
-        var burst = try await atUnitZoom(device) { try await self.photoCapture.captureBayerBurst(count: count, device: device) }
+        var burst = try await atUnitZoom(device) { try await self.photoCapture.captureBayerBurst(count: count, device: device, pressed: pressed) }
         burst.zoom = factor * (activeModule?.crop ?? 1) // a copy's crop (ModuleSettings) on top of the zoom
         return burst
     }
@@ -315,7 +331,7 @@ actor CaptureService {
 
     /// «Спорт»'s shutter ceiling in ns: 1/pref_scam_hybrid_mm_shutter s (MotionShutter.settingNs; hybridValue: scam_dev
     /// "hybrid_mm_shutter" first; 0 none). P496 «Движение: учитывать мерцание» (pref_scam_hybrid_mm_flicker, default on) under a set
-    /// «Мерцание ламп» (100 / 120 Hz; «Авто» is the Android camera's measured mains, which the iPhone does not report): the
+    /// «Мерцание ламп» (100 / 120 Hz; «Авто»: the region's mains, MainsRegion - the iPhone reports no measured one): the
     /// ceiling in whole half periods of the mains, at least one (MotionShutter.quantizeDown: an action shutter too) - one lamp pulse
     /// per frame. 0 outside the mode.
     static func motionCeilingNs() -> Int64 {
@@ -346,6 +362,26 @@ actor CaptureService {
         if let reason = SCAMObjC.catchException({ device.activeMaxExposureDuration = ceiling }) {
             SessionLog.w("Capture", "shutter ceiling not set: \(reason)")
         }
+    }
+
+    /// CaptureController's preview frame range (CONTROL_AE_TARGET_FPS_RANGE: the lens's slowest .. 30 fps): the camera's own AE may
+    /// lengthen the viewfinder's shutter down to the format's slowest frame, the frame rate never above 30. Called with the device
+    /// locked; what the device took is read back into the log.
+    private static func applyFrameRange(_ device: AVCaptureDevice) {
+        let ranges = device.activeFormat.videoSupportedFrameRateRanges
+        guard let slowest = ranges.min(by: { $0.minFrameRate < $1.minFrameRate }),
+              let fastest = ranges.max(by: { $0.maxFrameRate < $1.maxFrameRate }) else { return }
+        let thirty = ranges.contains { $0.minFrameRate <= 30 && $0.maxFrameRate >= 30 }
+        let shortest = thirty ? CMTime(value: 1, timescale: 30) : fastest.minFrameDuration
+        if let reason = SCAMObjC.catchException({
+            device.activeVideoMinFrameDuration = shortest
+            device.activeVideoMaxFrameDuration = slowest.maxFrameDuration
+        }) {
+            SessionLog.w("Capture", "frame range not set: \(reason)")
+        }
+        SessionLog.i("Capture", String(format: "frame range %.2f..%.2f fps (format %.2f..%.2f fps)",
+                                       1 / device.activeVideoMaxFrameDuration.seconds, 1 / device.activeVideoMinFrameDuration.seconds,
+                                       slowest.minFrameRate, fastest.maxFrameRate))
     }
 
     /// The device-level settings as stored now, on the open lens (CameraModel.settingsChanged: a settings change takes effect at

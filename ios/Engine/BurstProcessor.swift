@@ -188,8 +188,8 @@ enum BurstProcessor {
         }
         // P558 (Parameters.clipWhiteToPlateau): the reference frame's clip plateau under the declared white is the white - else
         // the blown areas never reach it (no clip flags, the fast merge's highlight path and its ultrashort frames off)
-        if let first = frames.first {
-            let h = RawWhite.histogram(first.raw, width: burst.width, height: burst.height)
+        if frames.indices.contains(burst.dngFrame) {
+            let h = RawWhite.histogram(frames[burst.dngFrame].raw, width: burst.width, height: burst.height)
             let (white, plateau) = RawWhite.of(info.white, black: info.black, histogram: h)
             if white != info.white {
                 log.append("RAW white level from data: the frame clips at \(plateau) under the white \(Int(info.white)) (P558)")
@@ -226,9 +226,9 @@ enum BurstProcessor {
             Task { @MainActor in MessageCenter.shared.info(note) }
         }
         let blackMean = info.black.reduce(0, +) / 4
-        // the frame the DNG is (the series' first); the noise of the others is its profile at their ISO (Camera2 gives each frame its
-        // own SENSOR_NOISE_PROFILE; the iPhone's DNG profile is the first frame's)
-        let iso0 = Float(max(frames[0].iso, 1))
+        // the frame the DNG is (BayerBurst.dngFrame: the newest N); the noise of the others is its profile at their ISO (Camera2 gives
+        // each frame its own SENSOR_NOISE_PROFILE; the iPhone's DNG profile is that frame's)
+        let iso0 = Float(max(frames[frames.indices.contains(burst.dngFrame) ? burst.dngFrame : 0].iso, 1))
         var source = "DNG NoiseProfile at each frame's ISO"
         var noise = info.noise
         let normals = frames.indices.filter { frames[$0].role == NchWriter.roleNormal }

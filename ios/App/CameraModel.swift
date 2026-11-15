@@ -452,7 +452,7 @@ final class CameraModel {
                 if count != wanted {
                     SessionLog.i("SHDR", "motion: \(shots.count) shots wait for their merge, \(count) frames for this one (of \(wanted))")
                 }
-                burst = try await Perf.interval("burst capture") { try await captureService.captureBayerBurst(count: count) }
+                burst = try await Perf.interval("burst capture") { try await captureService.captureBayerBurst(count: count, pressed: started) }
             }
             enqueue(burst, started: started, facts: facts, holdMs: Int(Date().timeIntervalSince(started) * 1000), meters: meters)
         } catch {

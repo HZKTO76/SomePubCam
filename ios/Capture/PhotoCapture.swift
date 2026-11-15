@@ -162,18 +162,24 @@ final class PhotoCapture {
         }
     }
 
-    /// Every photo of one request (a bracket of RAW frames), in delivery order.
-    func capturePhotos(_ settings: AVCapturePhotoSettings) async throws -> [AVCapturePhoto] {
+    /// Every photo of one request (a bracket of RAW frames), in delivery order. With `timeout` (CaptureController's series timeout)
+    /// the photos delivered by then are returned and the later ones of the request dropped (a late frame is left out, the shot goes on).
+    func capturePhotos(_ settings: AVCapturePhotoSettings, timeout: TimeInterval? = nil) async throws -> [AVCapturePhoto] {
         try await withCheckedThrowingContinuation { continuation in
             let id = settings.uniqueID
-            let delegate = BurstCaptureDelegate { [weak self] result in
-                self?.keep(id, nil)
+            let delegate = BurstCaptureDelegate(release: { [weak self] in self?.keep(id, nil) }) { result in
                 continuation.resume(with: result)
             }
             keep(id, delegate)
             if let reason = SCAMObjC.catchException({ self.output.capturePhoto(with: settings, delegate: delegate) }) {
                 keep(id, nil)
-                continuation.resume(throwing: CameraError.captureException(reason))
+                delegate.deliver(.failure(CameraError.captureException(reason)))
+                return
+            }
+            if let timeout {
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) { [weak delegate] in
+                    delegate?.expire(after: timeout)
+                }
             }
         }
     }
@@ -272,24 +278,55 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
 
 /// Collects the photos of a bracket request.
 private final class BurstCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
-    private let completion: (Result<[AVCapturePhoto], Error>) -> Void
+    private let lock = NSLock()
+    private var completion: ((Result<[AVCapturePhoto], Error>) -> Void)?
+    private let release: () -> Void
     private var photos: [AVCapturePhoto] = []
     private var failure: Error?
 
-    init(completion: @escaping (Result<[AVCapturePhoto], Error>) -> Void) {
+    init(release: @escaping () -> Void, completion: @escaping (Result<[AVCapturePhoto], Error>) -> Void) {
+        self.release = release
         self.completion = completion
     }
 
+    /// The request's result, once
+    func deliver(_ result: Result<[AVCapturePhoto], Error>) {
+        lock.lock()
+        let c = completion
+        completion = nil
+        lock.unlock()
+        c?(result)
+    }
+
+    /// The timeout: the photos so far (none: the request failed)
+    func expire(after seconds: TimeInterval) {
+        lock.lock()
+        let c = completion
+        completion = nil
+        let got = photos
+        lock.unlock()
+        guard let c else { return }
+        SessionLog.w("PhotoCapture", "request timed out after \(Int(seconds * 1000)) ms: \(got.count) photo(s) delivered, the rest dropped")
+        c(got.isEmpty ? .failure(CameraError.captureException("timed out")) : .success(got))
+    }
+
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard completion != nil else { return } // after the timeout: a late frame, dropped
         if let error { failure = error; return }
         photos.append(photo)
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
-        if let error = error ?? failure, photos.isEmpty {
-            completion(.failure(error))
+        lock.lock()
+        let got = photos, failed = error ?? failure
+        lock.unlock()
+        if let failed, got.isEmpty {
+            deliver(.failure(failed))
         } else {
-            completion(.success(photos))
+            deliver(.success(got))
         }
+        release()
     }
 }

@@ -147,10 +147,10 @@ enum HybridPlan {
     static var shastaDeep: Bool { on("shasta_deep", true) }
 
     /// PreferenceKeys.getAntibandingHz: «Мерцание ламп» as set (100 / 120, 0 off); «Авто» (-1) is the Android camera's measured mains
-    /// (MainsFlicker), which the iPhone does not report: no snapping then
+    /// (MainsFlicker), which the iPhone does not report: the region's mains then (MainsRegion; 0 where unknown)
     static var antibandingHz: Int {
         let hz = Int(StoredPrefs.string("pref_antibanding_hz_key", "-1")) ?? -1
-        return max(0, hz)
+        return hz < 0 ? MainsRegion.flickerHz : hz
     }
 
     /// P410: 1 .. set bracketed frames by the shadow share (NaN: the set count)
