@@ -66,13 +66,13 @@ the GPU merge) and the Swift stats (< 3 ms). Moving the shared ones means changi
 | Batch / change | Gain (numbers) | Checks | Kept |
 |---|---|---|---|
 | 0 tooling | - | image_metrics self-test (CIEDE2000 table pairs exact); a +-1 noise copy PASS, a 4-level posterised copy FAIL (banding x1.33) | yes |
-| 1 ScamGL resource waits, link outside gLock, staging pool | CI Metal, 5 real bursts, «Качество»: align 15.7 -> 8.5 s (-46 %), KLT waits 13.3 -> 1.9 s, total 22.9 -> 22.1 s (-3 %: the paravirtual GPU is the bound there); «Быстрый» submit 9.3 -> 10.9 s with the runner's CPU compile 12 % slower in that run (noise; a second sample pending) | Metal vs Mesa PSNR identical to the run before on all 10 merges (the same output); unit tests built | yes (device numbers pending) |
+| 1 ScamGL resource waits, link outside gLock, staging pool | CI Metal, 5 real bursts (sums of the logs' stage times): «Качество» 22.9 -> 20.4 s (-11 %; the runner's CPU compile -6 % that run: ~-5 % net), align 15.7 -> 7.9 s; «Быстрый» 9.80 -> 9.41 s (-4 %, ~+2 % net: noise). The first version left the recorded work uncommitted during a wait (GPU idle): «Быстрый» +17 / +40 % in two runs - fixed (d392cdcd) | Metal vs Mesa: all 15 comparisons' PSNR identical to the run before (the same output); unit tests pass; review: an earlier buffer's GPU error now reported at a readback, last-use entries dropped with their objects | yes |
 | 1 thread teams at user-initiated QoS, warm-up at utility | [не измерено] (device only) | - | yes |
 | 2 planes released before the merge | peak RAM -547 MB expected (the planes' size in the log) [не измерено] | the Swift plane users checked (faces / lens shading before the release) | yes |
 | 2 NCH madvise(WILLNEED) | [не измерено] (page-ins on the device) | output unchanged (no data change) | yes |
 | 4 transport crop gathered per frame | host: rows 344-637 ms vs frames 477-1076 ms (no gain) | bytes identical | reverted |
 | 4 UHDR halves readback, HEIC 10-bit context, off-main thumbnails / DNG write, no-copy NSData, settings tree ahead | [не измерено] (device) | base0 via the new ShotRun: 0 values differ | yes |
 | 3 render pipeline states in the warm-up | [не измерено] (first shots after an install) | - | yes |
-| 5 saves beside the processing | [не измерено] | saves stay in shot order | yes |
+| 5 saves beside the processing | [не измерено] | saves stay in shot order (the raw-only save waits for them: review) | yes |
 | ManualPanel HUD reads | not done: the collapsing panel's chips would change for its 0.2 s exit | - | - |
 | -O3 C++, private textures / pooling, prepared photo settings | not done: unmeasurable here, risky (settings / memory / preview) | - | - |
