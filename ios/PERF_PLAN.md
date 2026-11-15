@@ -80,6 +80,7 @@ the GPU merge) and the Swift stats (< 3 ms). Moving the shared ones means changi
 | 7 WhyV2Stats / Oldstyle samples read as halves | ScamGL model 14-20 -> 4 ms (under the 30 ms bar) | 0 values differ | reverted (gain too small) |
 | 8 ScamGL textures private (lossless compression), zeroed at creation, readback by blit | CI Metal 5 bursts: «Качество» 20.4 -> 17.3 s (-15 %, the runner ~4 % faster: ~-11 % net); «Быстрый» 9.41 -> 9.57 s (+2 %, noise) | Metal vs Mesa: all 15 comparisons' PSNR identical; unit tests pass | yes |
 | 9 a single-target draw over its whole target does not load the old texels | CI: «Качество» 25.0 s, «Быстрый» 13.79 s with the runner's compile +41 %: ~+2 % / +2 % net (no gain measured) | Metal vs Mesa PSNR identical | reverted |
+| 10 concurrent compute dispatch, glMemoryBarrier as the encoder barrier | CI: «Качество» 23.6 s vs 25.0 s on a runner of the same speed (-6 %), ~-5 % against batch 8 scaled by the compile time; «Быстрый» +2 % (noise) | Metal vs Mesa: all 15 PSNR identical | yes |
 | «GPU ms» per stage in the shot log | instrumentation (the next device log: merge, each post node, output) | no effect on the commands | yes |
 | ManualPanel HUD reads | not done: the collapsing panel's chips would change for its 0.2 s exit | - | - |
 | -O3 C++, private textures / pooling, prepared photo settings | not done: unmeasurable here, risky (settings / memory / preview) | - | - |
