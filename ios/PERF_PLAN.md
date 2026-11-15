@@ -78,5 +78,8 @@ the GPU merge) and the Swift stats (< 3 ms). Moving the shared ones means changi
 | 7 Oldstyle RGB8 uploaded as RGBA8 bands | ScamGL model 216-224 -> 21 ms (Oldstyle only) | os1: 0 values differ | yes |
 | 7 worker output RGB moved, not copied; workerOutput reserved | host 57-70 -> 6-9 ms; -100 MB held through the post | whole shot base0 (ShotRun): 0 of 37748736 values differ | yes |
 | 7 WhyV2Stats / Oldstyle samples read as halves | ScamGL model 14-20 -> 4 ms (under the 30 ms bar) | 0 values differ | reverted (gain too small) |
+| 8 ScamGL textures private (lossless compression), zeroed at creation, readback by blit | CI Metal 5 bursts: «Качество» 20.4 -> 17.3 s (-15 %, the runner ~4 % faster: ~-11 % net); «Быстрый» 9.41 -> 9.57 s (+2 %, noise) | Metal vs Mesa: all 15 comparisons' PSNR identical; unit tests pass | yes |
+| 9 a single-target draw over its whole target does not load the old texels | pending (CI) | no shader discards (grep) | pending |
+| «GPU ms» per stage in the shot log | instrumentation (the next device log: merge, each post node, output) | no effect on the commands | yes |
 | ManualPanel HUD reads | not done: the collapsing panel's chips would change for its 0.2 s exit | - | - |
 | -O3 C++, private textures / pooling, prepared photo settings | not done: unmeasurable here, risky (settings / memory / preview) | - | - |
