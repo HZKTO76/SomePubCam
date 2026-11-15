@@ -2,6 +2,10 @@
 
 English copy of ios/CHANGELOG.md; the build post carries both, section for section (same version, same place).
 
+## 0.3.2 — speed
+- Faster merge and processing with the same result; the first shots after launch no longer wait for the warm-up.
+- Less memory per series; the camera no longer stutters while saving.
+
 ## 0.3.1 — fixes
 - «Быстрый» merge on iPhone and iPad now matches Android (night shots were noisy).
 - iPad: no more black / green photos from a shaken series.
