@@ -151,7 +151,10 @@ void fail(GLenum error) {
 
 // ---- command stream ----
 
-constexpr bool kConcurrentDispatch = true;
+// SCAMGL_SERIAL_DISPATCH (replays): the serial encoder of before, for an A/B of the concurrent one
+const bool kConcurrentDispatch = getenv("SCAMGL_SERIAL_DISPATCH") == nullptr;
+// SCAMGL_SYNC_MAPS (replays): an unsynchronised write map waits for the buffer's last use as a synchronised one does
+const bool kSyncMaps = getenv("SCAMGL_SYNC_MAPS") != nullptr;
 
 id<MTLCommandBuffer> commandBuffer(Context& c) {
     if (!c.cb) c.cb = [c.queue commandBuffer];
@@ -1138,7 +1141,7 @@ void* glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitf
     // GL_MAP_UNSYNCHRONIZED_BIT on a write-only mapping: the caller orders it itself (the fast merge's upload ring waits on each
     // slot's fence): the shared storage is written at once, the recorded work goes on (no submit and wait - it serialised the
     // frames' uploads with the GPU: ~1 s of a 21-frame burst on the M1)
-    const bool unsynchronized = (access & GL_MAP_UNSYNCHRONIZED_BIT) && (access & GL_MAP_WRITE_BIT) && !(access & GL_MAP_READ_BIT);
+    const bool unsynchronized = !kSyncMaps && (access & GL_MAP_UNSYNCHRONIZED_BIT) && (access & GL_MAP_WRITE_BIT) && !(access & GL_MAP_READ_BIT);
     id<MTLBuffer> mtl = b->mtl;
     if (!unsynchronized) waitForUse(*c, mtl, g); // (b may move while gLock is released: the Metal buffer is kept)
     return static_cast<uint8_t*>(mtl.contents) + offset;

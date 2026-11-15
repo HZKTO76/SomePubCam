@@ -10,6 +10,7 @@ reference's 99.9th percentile; exits 1 when a burst is missing or its PSNR is be
 """
 import lzma
 import math
+import re
 import struct
 import subprocess
 import sys
@@ -131,8 +132,15 @@ def sides(ref_dir, cand_dir):
             return (x, y) if x.size == y.size else (None, None)
         e, f = pair('.eff', np.uint8)
         if e is not None:
-            d = np.abs(e.astype(np.int32) - f.astype(np.int32)) / 8.0
-            parts.append(f'effective frames: mean ref {e.mean() / 8:.3f} cand {f.mean() / 8:.3f}, |diff| mean {d.mean():.4f} max {d.max():.3f}, equal {np.mean(d == 0):.4f}')
+            # the map's code is frames x 64 / the run's own median (its log's «code scale»): decoded to frames with each run's scale
+            def scale(log):
+                m = re.search(r'code scale=([0-9.]+)', log.read_text(errors='replace')) if log.exists() else None
+                return float(m.group(1)) if m else 8.0
+            sr, sc = scale(ref_dir / (ref_path.stem + '.log')), scale(cand_dir / (ref_path.stem + '.log'))
+            x, y = e.astype(np.float64) / sr, f.astype(np.float64) / sc
+            d = np.abs(x - y)
+            parts.append(f'effective frames: mean ref {x.mean():.3f} cand {y.mean():.3f}, |diff| mean {d.mean():.4f} p99 {np.percentile(d, 99):.3f}'
+                         f' max {d.max():.3f} (code scale {sr:.3f} / {sc:.3f}), saturated {np.mean(e == 255):.4f} / {np.mean(f == 255):.4f}')
         e, f = pair('.clip', np.uint8)
         if e is not None:
             bits = '/'.join(f'{np.mean(((e >> b) & 1) != ((f >> b) & 1)):.6f}' for b in range(4))
