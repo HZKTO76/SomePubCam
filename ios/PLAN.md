@@ -1013,3 +1013,15 @@ CI (build-ios-ipa: merge-reference on Mesa, merge-metal on ScamGL / Metal, the 5
 change also each channel's histogram, the effective-frame map, the clip bits and the base highlight mask (reported, not gated).
 Per-stage GPU time inside the merge (guide / align / rejection / accumulate) is not split: the merge's own log has front / context /
 objects / submit (base, first donor, uploads) / readback, «GPU ms» the merge as one stage.
+
+## The merge against a phone's own merge (2026-11-15, research/phone-merge-ref-mali)
+One 4000x3000 burst (20 frames merged) on the phone (Mali-G925, the app at 2554639f), on Mesa and on Metal, the same code
+(app/src/main/cpp at 2554639f; ios-phone-merge-ref.yml), compared at the phone's 1000x750 sample points (PSNR over the reference's
+p99.9, the samples under it): phone vs Mesa 55.13 dB, Metal vs Mesa 55.21 dB, Metal vs phone 54.20 dB; SCAMGL_FILTER=float (the
+texture filter in the shader with float weights) 55.39 dB to Mesa, 54.21 dB to the phone (64.8 dB from the GPU filter). The effective
+map's median (20.375) and the highlight mask (mean 0.00408, 0.493 % of cells) are the same on all three; the clip flags differ by
+~1-4 %; the homography's tracked corners differ on every GPU (Mesa 142, phone 145, Metal 148 on frame 20s). Our Mesa replay of the
+same code reproduces the host's reference bit for bit. So the Android merge itself is not bit-identical across GPUs (Mali vs
+llvmpipe ~55 dB), Metal sits at the same distance from both, and the texture filter is not the main cause (its emulation moved
+Metal 0.2 dB): the spread starts where the GPUs' float results cross thresholds (corner selection, KLT, rejection). SCAMGL_FILTER
+stays a replay switch (off in the app).
