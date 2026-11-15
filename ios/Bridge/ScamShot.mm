@@ -34,6 +34,13 @@
 @property (nonatomic, readwrite) BOOL mirrored;
 @end
 
+/// An NSData that owns `bytes` (moved in, freed with the data): the photo's RGBA and the merged DNG reach Swift without a copy
+static NSData* ownedData(std::vector<uint8_t>&& bytes) {
+    if (bytes.empty()) return [NSData data];
+    auto* owned = new std::vector<uint8_t>(std::move(bytes));
+    return [[NSData alloc] initWithBytesNoCopy:owned->data() length:owned->size() deallocator:^(void*, NSUInteger) { delete owned; }];
+}
+
 @implementation SCAMPhoto
 @end
 
@@ -236,10 +243,10 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
             r.rawOnly = rawOnly;
             dngRequest = r;
         }
-        const scam_post::ShotOutput out = scam_post::runShot(burst.UTF8String, dngBytes, job.UTF8String, shaders.UTF8String, log, makePostContext,
+        scam_post::ShotOutput out = scam_post::runShot(burst.UTF8String, dngBytes, job.UTF8String, shaders.UTF8String, log, makePostContext,
                                                              16384, shotFaces, true, {}, build, dngRequest ? &*dngRequest : nullptr);
         photo = [SCAMPhoto new];
-        photo.rgba = [NSData dataWithBytes:out.photo.rgba.data() length:out.photo.rgba.size()];
+        photo.rgba = ownedData(std::move(out.photo.rgba)); // the pipeline's buffer handed over (48 MB: no copy)
         photo.width = out.photo.width;
         photo.height = out.photo.height;
         photo.mergeMilliseconds = out.mergeMs;
@@ -255,7 +262,7 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
         }
         photo.dngRotation = out.params.cameraRotation;
         photo.mirrored = out.params.mirror;
-        if (!out.dng.empty()) photo.mergedDng = [NSData dataWithBytes:out.dng.data() length:out.dng.size()];
+        if (!out.dng.empty()) photo.mergedDng = ownedData(std::move(out.dng));
         if (out.develop) {
             try {
                 const std::vector<uint8_t> tail = out.develop->appendix(scamDevelopCodec());

@@ -44,9 +44,21 @@ inline void snapshotLinear(PostPipeline& p, GLTexture& tex) {
         return;
     }
     tex.BufferLoad();
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+#if defined(__APPLE__)
+    // ScamGL: an RGBA16F texture's halves read as they are stored (the float read and floatToHalf back gave the same halves,
+    // NaN payloads included) - one copy instead of a double conversion per component on the CPU (Mesa keeps the GLES float read)
+    if (tex.mFormat.mFormat == DataType::FLOAT_16 && tex.mFormat.mChannels == 4) {
+        glReadPixels(0, 0, size.x, size.y, GL_RGBA, GL_HALF_FLOAT, halves.data());
+        checkGl("linear scene snapshot");
+        p.demosaicLinear = std::move(halves);
+        p.demosaicLinearSize = size;
+        p.mCaptured = true;
+        return;
+    }
+#endif
     const int strip = 256;
     std::vector<float> rows(size_t(size.x) * size_t(std::min(strip, size.y)) * 4);
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
     for (int y = 0; y < size.y; y += strip) {
         const int n = std::min(strip, size.y - y);
         glReadPixels(0, y, size.x, n, GL_RGBA, GL_FLOAT, rows.data());

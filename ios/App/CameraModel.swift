@@ -389,7 +389,7 @@ final class CameraModel {
             // «Только RAW» (pref_save_raw_key 2): the camera's DNG alone, no photo
             if rawSaving == 2, let dng = photo.rawFile {
                 photo.processed = nil
-                if let data = try? Data(contentsOf: dng) { thumbnail = MediaLibrary.thumbnail(of: data) }
+                if let image = await Self.thumbnail(file: dng) { thumbnail = image }
             } else {
                 var rendered = false
                 if whyTone, let dng = photo.rawFile {
@@ -397,7 +397,7 @@ final class CameraModel {
                 }
                 // the camera's own photo (no «Why» render): «Формат фото», 16:9 and the watermark as the settings write a photo
                 if !rendered { photo = await Self.finishCameraPhoto(photo, time: started) }
-                if let data = photo.processed { thumbnail = MediaLibrary.thumbnail(of: data) }
+                if let data = photo.processed { thumbnail = await Self.thumbnail(data) }
             }
             try await mediaLibrary.save(photo)
             SessionLog.i("Shot", "saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms, \(memoryFootprint())")
@@ -437,7 +437,8 @@ final class CameraModel {
                 } else {
                     photo = await Self.finishCameraPhoto(photo, time: started)
                 }
-                if let data = photo.processed ?? photo.rawFile.flatMap({ try? Data(contentsOf: $0) }) { thumbnail = MediaLibrary.thumbnail(of: data) }
+                if let data = photo.processed { thumbnail = await Self.thumbnail(data) }
+                else if let raw = photo.rawFile, let image = await Self.thumbnail(file: raw) { thumbnail = image }
                 try await mediaLibrary.save(photo)
                 return
             } else {
@@ -454,6 +455,16 @@ final class CameraModel {
             SessionLog.e("SHDR", "failed: \(error.localizedDescription)")
             show(error.localizedDescription)
         }
+    }
+
+    /// The camera button's thumbnail of a photo / a DNG file, decoded off the main actor (a 12 MP HEIC's or a DNG's whole decode
+    /// held the camera's UI)
+    nonisolated private static func thumbnail(_ data: Data) async -> CGImage? {
+        await Task.detached(priority: .userInitiated) { MediaLibrary.thumbnail(of: data) }.value
+    }
+    /// nil: the file could not be read (the thumbnail is left as it was, as before); .some(nil): read, no image in it
+    nonisolated private static func thumbnail(file: URL) async -> CGImage?? {
+        await Task.detached(priority: .userInitiated) { (try? Data(contentsOf: file)).map { MediaLibrary.thumbnail(of: $0) } }.value
     }
 
     /// The burst into the processing queue (CaptureController: «queued for processing pending=N»); processed after the shots before it.
@@ -537,7 +548,8 @@ final class CameraModel {
                 let dng = result.mergedDng ?? burst.dng
                 SessionLog.i("SHDR", result.mergedDng != nil ? "DNG: the merged burst RAW, \(dng.count) bytes"
                                                            : "DNG: the reference frame's (the camera's), \(dng.count) bytes")
-                if (try? dng.write(to: url)) != nil { rawFile = url }
+                // written off the main actor (tens of MB)
+                if await Task.detached(priority: .userInitiated, operation: { (try? dng.write(to: url)) != nil }).value { rawFile = url }
             }
             if let error = result.error {
                 SessionLog.e("SHDR", "processing failed: \(error)")
@@ -551,7 +563,7 @@ final class CameraModel {
                     show(L("capture.not_saved"))
                     return
                 }
-                if let data = try? Data(contentsOf: rawFile) { thumbnail = MediaLibrary.thumbnail(of: data) }
+                if let image = await Self.thumbnail(file: rawFile) { thumbnail = image }
                 try await mediaLibrary.save(CapturedPhoto(processed: nil, processedUTI: UTType.heic.identifier, rawFile: rawFile, report: []))
                 SessionLog.i("SHDR", "RAW processing finished: the DNG saved in \(Int(Date().timeIntervalSince(started) * 1000)) ms, "
                              + "\(shots.count - 1) more queued, \(memoryFootprint())")
@@ -559,7 +571,7 @@ final class CameraModel {
             }
             let heic = result.heic ?? burst.processed
             // the thumbnail decoded off the main actor (a 12 MP HEIC's decode held the camera's UI)
-            if let heic { thumbnail = await Task.detached(priority: .userInitiated) { MediaLibrary.thumbnail(of: heic) }.value }
+            if let heic { thumbnail = await Self.thumbnail(heic) }
             let saveStarted = Date()
             try await Perf.interval("library save") {
                 try await mediaLibrary.save(CapturedPhoto(processed: heic, processedUTI: result.heic != nil ? result.uti : UTType.heic.identifier,

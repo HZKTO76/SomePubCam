@@ -19,6 +19,8 @@ struct SCAMERAApp: App {
                     await camera.start()
                     // P470: the GPU programs before the first shot (a dialog after an install or an update)
                     FirstRunCompile.shared.maybeRun()
+                    // the settings tree (0.9 MB of JSON) decoded off the main thread, before the shade or the settings first need it
+                    Task.detached(priority: .utility) { _ = SettingsCatalog.shared }
                 }
         }
         .onChange(of: scenePhase) { _, phase in

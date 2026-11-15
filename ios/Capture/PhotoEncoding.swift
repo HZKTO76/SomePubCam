@@ -46,6 +46,16 @@ enum PhotoEncoding {
         CGColorSpace(name: f.displayP3 ? CGColorSpace.displayP3 : CGColorSpace.sRGB)
     }
 
+    /// The «HEIC 10 бит» contexts (one per working space, the same options as before): kept, not made for every photo (a CIContext's
+    /// set-up and its kernels per shot). CIContext is thread-safe.
+    private static let heif10Contexts: (srgb: CIContext, p3: CIContext) = (
+        CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!]),
+        CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.displayP3)!]))
+
+    private static func heif10Context(displayP3: Bool, space: CGColorSpace) -> CIContext {
+        displayP3 ? heif10Contexts.p3 : heif10Contexts.srgb
+    }
+
     /// «HEIC 10 бит»: the image as a 10-bit HEIC with `properties` as its metadata; nil when Core Image refuses it (the caller writes
     /// the 8-bit HEIC then)
     static func heif10(_ image: CGImage, properties: [String: Any], format: Format, log: ((String) -> Void)?) -> Data? {
@@ -53,7 +63,7 @@ enum PhotoEncoding {
         let ci = CIImage(cgImage: image, options: [.properties: properties, .colorSpace: space])
         let options = [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): format.quality]
         do {
-            return try CIContext(options: [.workingColorSpace: space]).heif10Representation(of: ci, colorSpace: space, options: options)
+            return try heif10Context(displayP3: format.displayP3, space: space).heif10Representation(of: ci, colorSpace: space, options: options)
         } catch {
             log?("HEIC 10-bit refused (\(error.localizedDescription)): 8-bit HEIC written")
             return nil
