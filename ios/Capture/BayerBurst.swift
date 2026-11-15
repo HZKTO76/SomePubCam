@@ -61,12 +61,7 @@ extension PhotoCapture {
         var clock = BurstClock()
         let ettr = await ettrExposure(bayer: bayer, device: device, burst: &burst)
         let format = device.activeFormat
-        let startNs = Int64(CMClockGetTime(CMClockGetHostTimeClock()).convertScale(1_000_000_000, method: .default).value)
-        let single = ettr == nil ? ZslNormals.inFlight : 0
-        if single > 0 {
-            try await captureSingles(count: count, inFlight: single, bayer: bayer, burst: &burst, clock: &clock, wide: wide)
-        }
-        while single == 0 && burst.frames.count < count {
+        while burst.frames.count < count {
             let n = min(perRequest, count - burst.frames.count)
             let bracket: [AVCaptureBracketedStillImageSettings] = (0..<n).map { _ -> AVCaptureBracketedStillImageSettings in
                 if let ettr {
@@ -106,60 +101,11 @@ extension PhotoCapture {
                                     burst: &burst, clock: &clock, wide: wide)
             }
         }
-        burst.report.append(ZslNormals.timing(burst.frames, startNs: startNs, normals: normals))
         finish(&burst)
         let extras = burst.frames.count - normals
         burst.report.append("burst \(burst.frames.count) frames (\(normals) N, \(extras) ultrashort / bracketed) in \(ms(since: started)) ms, per request \(perRequest)"
                             + (burst.fullHeight > 0 ? ", 16:9 rows \(burst.firstRow)..<\(burst.firstRow + burst.height) of \(burst.fullHeight)" : ""))
         return burst
-    }
-
-    /// ZslNormals: the N frames as single RAW requests (no bracket: the ones AVFoundation may serve with zero shutter lag), up to
-    /// `inFlight` requests issued at once; the frames enter the burst in request order. The first request carries the HEVC photo.
-    private func captureSingles(count: Int, inFlight: Int, bayer: OSType, burst: inout BayerBurst, clock: inout BurstClock,
-                                wide: Bool) async throws {
-        func request(_ k: Int, withProcessed: Bool) -> AVCapturePhotoSettings {
-            let processed: [String: Any]? = withProcessed ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
-            let settings = AVCapturePhotoSettings(rawPixelFormatType: bayer, processedFormat: processed)
-            settings.maxPhotoDimensions = output.maxPhotoDimensions
-            silence(settings)
-            return settings
-        }
-        let started = Date()
-        var first: [AVCapturePhoto]
-        do {
-            first = try await capturePhotos(request(0, withProcessed: true))
-        } catch CameraError.captureException(let reason) {
-            burst.report.append("zsl_n: the RAW + HEIC request refused (\(reason)), RAW only")
-            first = try await capturePhotos(request(0, withProcessed: false))
-        }
-        for photo in first { try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide) }
-        guard count > 1 else { return }
-        var refused = 0
-        try await withThrowingTaskGroup(of: (Int, ZslNormals.Photos).self) { group in
-            var next = 1, ready: [Int: [AVCapturePhoto]] = [:], due = 1
-            func issue() {
-                let k = next
-                next += 1
-                let settings = request(k, withProcessed: false)
-                group.addTask {
-                    let photos = (try? await self.capturePhotos(settings)) ?? []
-                    return (k, ZslNormals.Photos(photos))
-                }
-            }
-            while next < count && next - due < inFlight { issue() }
-            while let (k, photos) = try await group.next() {
-                ready[k] = photos.photos
-                while let p = ready.removeValue(forKey: due) {
-                    if p.isEmpty { refused += 1 }
-                    for photo in p { try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide) }
-                    due += 1
-                }
-                while next < count && next - due < inFlight { issue() }
-            }
-        }
-        burst.report.append("zsl_n: \(count) single RAW requests (\(inFlight) in flight) in \(ms(since: started)) ms"
-                            + (refused > 0 ? ", \(refused) refused" : ""))
     }
 
     /// HybridPlan.build from the newest N frame (CaptureController: the newest ring frame's exposure, zslClipFraction's shares), the
@@ -425,31 +371,5 @@ enum NoiseEstimate {
         let slope = sxx > 0 ? max(sxy / sxx, 1e-7) : 1e-5
         let offset = max(my - slope * mx, 1e-9)
         return (Float(slope), Float(offset))
-    }
-}
-
-/// scam_dev zsl_n (default 0: off): the SHDR N frames as single RAW requests with up to that many in flight instead of auto-exposure
-/// brackets (never with ETTR's manual exposure); the ultrashort / bracketed frames stay manual brackets after them (PSL, as Android).
-/// For an A/B of the press -> frame times: the burst's timing line comes either way.
-enum ZslNormals {
-    static var inFlight: Int {
-        guard let v = ScamDevFile.snapshot()["zsl_n"].flatMap({ Double($0) }), v >= 1 else { return 0 }
-        return min(Int(v), 8)
-    }
-
-    final class Photos: @unchecked Sendable {
-        let photos: [AVCapturePhoto]
-        init(_ photos: [AVCapturePhoto]) { self.photos = photos }
-    }
-
-    /// Each frame's sensor time (AVCapturePhoto.timestamp, the session's clock: the host clock) against the series' start on the
-    /// host clock; a negative time is a frame exposed before the request (zero shutter lag)
-    static func timing(_ frames: [NchFrame], startNs: Int64, normals: Int) -> String {
-        func list(_ f: ArraySlice<NchFrame>) -> String {
-            f.map { String(format: "%.0f", Double($0.timestampNs - startNs) / 1e6) }.joined(separator: " ")
-        }
-        var line = "burst frame times ms from the series start: N " + list(frames.prefix(normals))
-        if frames.count > normals { line += " | ultrashort / bracketed " + list(frames.dropFirst(normals)) }
-        return line
     }
 }
