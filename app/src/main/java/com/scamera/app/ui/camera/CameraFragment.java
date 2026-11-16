@@ -200,8 +200,7 @@ public class CameraFragment extends Fragment implements BaseActivity.BackPressed
         auxModel = models.get(AuxButtonsViewModel.class);
         final DisplayMetrics dm = getResources().getDisplayMetrics();
         logScreen(dm);
-        screenAspect = (float) Math.max(dm.heightPixels, dm.widthPixels) / Math.min(dm.heightPixels, dm.widthPixels);
-        fragmentModel.setScreenAspectRatio(screenAspect);
+        updateWindowAspect(dm.widthPixels, dm.heightPixels);
         manualConsole = ManualInstanceProvider.newConsole();
         // P87: the manual rulers' ISO / shutter range (vendor pro range, frame-duration ceiling, the AE's own ISO extremes)
         com.scamera.app.circularbarlib.camera.CameraProperties.rangeProvider =
@@ -236,7 +235,7 @@ public class CameraFragment extends Fragment implements BaseActivity.BackPressed
     /**
      * The layout editor's preview of the camera screen (CameraLayout calls it while inflating; no fragment, view model or data
      * binding runs there): what the bindings set at runtime, through the same CustomBinding adapters - the 3:4 bottom-bar
-     * anchor and viewfinder, the hidden settings sheet, the notch margin and container anchor of the preview device's aspect.
+     * anchor and viewfinder, the hidden settings sheet and the notch margin of the preview device's aspect.
      */
     static void preparePreviewLayout(View root) {
         CustomBinding.frameRatio(root.findViewById(R.id.frame_anchor), "3:4");
@@ -255,12 +254,14 @@ public class CameraFragment extends Fragment implements BaseActivity.BackPressed
         final float aspect = (float) Math.max(metrics.heightPixels, metrics.widthPixels)
                 / Math.min(metrics.heightPixels, metrics.widthPixels);
         CustomBinding.placeTopBar(root.findViewById(R.id.top_row), aspect);
-        CustomBinding.anchorCameraBlock(root.findViewById(R.id.camera_stage), aspect);
     }
 
     @Override
     public void onViewCreated(@NonNull final View view, Bundle saved) {
         uiView = new CameraUIViewImpl(this);
+        view.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (cameraViews != null && v == cameraViews.getRoot()) updateWindowAspect(r - l, b - t);
+        });
         uiController = new CameraUIController(this);
         uiView.listenTo(uiController);
         captureController = new CaptureController(hostActivity, processPool, new FragmentCameraEvents());
@@ -291,6 +292,18 @@ public class CameraFragment extends Fragment implements BaseActivity.BackPressed
         // P214g: on the window's decor view, which stays attached until the hostActivity goes (this view is detached before onDestroy)
         if (hostActivity.getWindow() != null)
             hostActivity.getWindow().getDecorView().getViewTreeObserver().addOnWindowFocusChangeListener(sessionFocus);
+    }
+
+    /** The camera can stay open while a fold or split-screen resize changes its window. */
+    private void updateWindowAspect(int width, int height) {
+        if (width <= 0 || height <= 0) return;
+        final float aspect = (float) height / width;
+        if (screenAspect == aspect) return;
+        screenAspect = aspect;
+        fragmentModel.setScreenAspectRatio(aspect);
+        if (cameraViews != null && cameraViews.getUimodel() != null) {
+            CameraUIViewImpl.setFrameAnchor(cameraViews, aspect, ScameraApp.getSettings().wide169);
+        }
     }
 
     /**

@@ -111,6 +111,77 @@ static void estimate() {
     }
 }
 
+static void releaseBuffersOnFailure() {
+    struct FakeHardwareBuffer {
+        uint32_t value = 0;
+        bool locked = false, releasedWhileLocked = false;
+    } h;
+    FastMergeGpu g("");
+    const GLuint storage = g.buffer(sizeof(uint32_t));
+    try {
+        g.readBuffer(storage, sizeof(h.value), [](const void*) { throw std::runtime_error("consumer rejected read"); });
+    } catch (const std::runtime_error&) {}
+    GLint mapped = GL_TRUE;
+    glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_MAPPED, &mapped);
+    expect(mapped == GL_FALSE, "a rejected read unmaps GL storage");
+
+    g.ahb.lock = [](AHardwareBuffer* b, uint64_t, int32_t, const ARect*, void** data) -> int {
+        auto& fake = *reinterpret_cast<FakeHardwareBuffer*>(b);
+        if (fake.locked) return -1;
+        fake.locked = true;
+        *data = &fake.value;
+        return 0;
+    };
+    g.ahb.unlock = [](AHardwareBuffer* b, int32_t*) -> int {
+        reinterpret_cast<FakeHardwareBuffer*>(b)->locked = false;
+        return 0;
+    };
+    g.ahb.release = [](AHardwareBuffer* b) {
+        auto& fake = *reinterpret_cast<FakeHardwareBuffer*>(b);
+        fake.releasedWhileLocked = fake.locked;
+    };
+    g.ahbOf[storage] = reinterpret_cast<AHardwareBuffer*>(&h);
+    try {
+        g.readBuffer(storage, sizeof(h.value), [](const void*) { throw std::runtime_error("consumer rejected read"); });
+    } catch (const std::runtime_error&) {}
+    expect(!h.locked, "a rejected read unlocks the hardware buffer");
+    expect(g.mapWrite(storage, 0, sizeof(h.value)) == &h.value && h.locked, "an upload can lock the hardware buffer again");
+    g.freeObjects();
+    expect(!h.locked && !h.releasedWhileLocked, "GPU cleanup unlocks an interrupted upload before release");
+}
+
+static void optionalOutputs() {
+    TestBurst b = burst(768, 512, 1, true, 16);
+    std::vector<uint8_t> clip, eff;
+    std::vector<std::string> fullLog, rgbLog;
+    const std::vector<float> full = hybridFastMerge(b.in, fastTune(), [&](const std::string& l) { fullLog.push_back(l); },
+                                                     nullptr, &eff, nullptr, &clip);
+    const std::vector<float> rgb = hybridFastMerge(b.in, fastTune(), [&](const std::string& l) { rgbLog.push_back(l); },
+                                                    nullptr, nullptr, nullptr, nullptr);
+    expect(rgb.size() == full.size() && std::memcmp(rgb.data(), full.data(), full.size() * sizeof(float)) == 0,
+           "the entire RGB stays exact with both trailers omitted");
+    expect(gpuMbOf(rgbLog) < gpuMbOf(fullLog), "omitted trailers do not allocate their GPU storage");
+}
+
+static void refusedStripCommit() {
+    TestBurst b = burst(256, 256, 1, false, 9);
+    bool commitReached = false, rejected = false;
+    hybridFinalHalvesHook() = [&](const uint16_t* src, int, int, int y0, int, const float*) {
+        if (src || y0 >= 0) return true;
+        commitReached = true;
+        return false;
+    };
+    setenv("SCAM_FM_STRIP_ROWS", "128", 1);
+    try {
+        hybridFastMerge(b.in, fastTune(), [](const std::string&) {}, nullptr, nullptr, nullptr, nullptr);
+    } catch (const std::runtime_error& e) {
+        rejected = std::string(e.what()).find("refused to commit the strips") != std::string::npos;
+    }
+    unsetenv("SCAM_FM_STRIP_ROWS");
+    hybridFinalHalvesHook() = nullptr;
+    expect(commitReached && rejected, "a rejected strip commit fails the merge instead of returning empty floats");
+}
+
 static void plan() {
     TestBurst b = burst(1024, 8192, 1, true, 7); // (not merged: tall enough for bands far smaller than the frame)
     const HybridTuning t = fastTune();
@@ -237,6 +308,9 @@ static void bands(int block) {
 }
 
 int main() {
+    releaseBuffersOnFailure();
+    optionalOutputs();
+    refusedStripCommit();
     estimate();
     plan();
     bands(1);

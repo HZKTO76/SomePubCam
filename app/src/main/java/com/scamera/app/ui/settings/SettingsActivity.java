@@ -99,14 +99,18 @@ public class SettingsActivity extends BaseActivity implements PreferenceFragment
 
     }
     
-    /** The page's container stays above the navigation bar (its bottom margin follows the bar's height). */
+    /** Keep the page clear of bottom and side navigation as well as side cutouts. */
     private void setupWindowInsets() {
         View pages = findViewById(R.id.settings_container);
         if (pages == null) return;
         ViewCompat.setOnApplyWindowInsetsListener(pages, (v, insets) -> {
             MarginLayoutParams margins = (MarginLayoutParams) v.getLayoutParams();
-            if (margins != null) {
-                margins.bottomMargin = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom;
+            Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            if (margins != null && (margins.leftMargin != safe.left || margins.rightMargin != safe.right
+                    || margins.bottomMargin != safe.bottom)) {
+                margins.leftMargin = safe.left;
+                margins.rightMargin = safe.right;
+                margins.bottomMargin = safe.bottom;
                 v.setLayoutParams(margins);
             }
             return insets;

@@ -157,6 +157,26 @@ public class GalleryMoveCopyTest {
     }
 
     @Test
+    public void groupingVisitsTheLibraryOnceAndKeepsEqualIdsInDifferentFolders() {
+        ImageFile jpg = file(1, CAMERA + "IMG_1.jpg");
+        ImageFile dng = file(2, CAMERA + "IMG_1.dng");
+        ImageFile sd = new ImageFile(1, Uri.parse("content://media/1234-abcd/images/media/1"), "IMG_1.jpg",
+                1001, 10, "/storage/1234-ABCD/DCIM/Camera/IMG_1.jpg");
+        List<ImageFile> files = Arrays.asList(jpg, dng, sd);
+        int[] scans = {0};
+        java.util.Collection<ImageFile> library = new java.util.AbstractCollection<ImageFile>() {
+            @Override public int size() { return files.size(); }
+            @Override public java.util.Iterator<ImageFile> iterator() {
+                scans[0]++;
+                return files.iterator();
+            }
+        };
+        List<List<MediaFile>> groups = GalleryMoveCopy.groups(Arrays.asList(jpg, sd), library);
+        assertEquals(1, scans[0]);
+        assertEquals(Arrays.asList(Arrays.asList(jpg, dng), Collections.singletonList(sd)), groups);
+    }
+
+    @Test
     public void aFileInTheFolderAlreadyIsKnown() {
         GalleryMoveCopy.Target camera = GalleryMoveCopy.targetOf("Camera", CAMERA + "x.jpg");
         assertTrue(GalleryMoveCopy.inFolder(file(1, CAMERA + "a.jpg"), camera));

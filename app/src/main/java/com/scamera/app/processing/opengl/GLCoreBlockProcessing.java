@@ -84,7 +84,7 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
 
     /** P713: an {@link RgbaSink#stream} in progress. */
     public interface RowStream {
-        /** Rows [0, {@code rows}) of the frame are final. */
+        /** Rows [0, {@code rows}) of the frame are final. The readback loop owns the current GL context. */
         void ready(int rows);
 
         /** Every row is final: true - the sink took the frame (no bitmap); false - the bitmap is made from the frame. */
@@ -729,6 +729,8 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
             }
             if (glGetError() != GL_NO_ERROR) return failStreamed(deferred);
             glBindFramebuffer(GL_FRAMEBUFFER, tileFramebuffer[0]);
+            // The tiles only change viewport, yOffset and pixel-pack buffer; RowStream.ready works on CPU bytes.
+            final GLDeferredDraw.State outputState = deferred != null && mapping != null ? deferred.captureOutputState() : null;
             final boolean invalidate = PostGlMode.invalidate();
             final int[] colour = {GLES30.GL_COLOR_ATTACHMENT0};
             for (int[] step : ringSteps(tileList.size(), ring)) {
@@ -739,7 +741,7 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
                     if (deferred != null && mapping != null) {
                         final int[] lines = GLDeferredDraw.sourceLines(mapping[0], mapping[1] != 0, tile[0], tile[0] + tile[1],
                                 mapping[2], mapping[3], mapping[4]);
-                        deferred.lines(lines[2] != 0, lines[0], lines[1]);
+                        deferred.lines(lines[2] != 0, lines[0], lines[1], outputState);
                     }
                     GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pbo[step[0] % ring]);
                     if (invalidate) GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, colour, 0);
@@ -785,10 +787,10 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             done = true;
-            final RowStream finishing = stream;
-            stream = null;
             final long encodeAt = System.nanoTime();
-            final boolean encoded = finishing.finish();
+            // A failed finish still leaves the encoder to abort before the frame buffer is freed.
+            final boolean encoded = stream.finish();
+            stream = null;
             timing.encode = System.nanoTime() - encodeAt;
             if (encoded) {
                 sinkTook = true;
@@ -945,26 +947,22 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
 
     @Override
     public void close() {
-        // the GPU work completes before the EGL state goes
-        quietly(GLES30::glFinish);
         // P353: the tile target goes with the shot (a kept context would hold one per shot otherwise)
         quietly(() -> {
             makeCurrent();
+            GLES30.glFinish();
             GLES30.glDeleteFramebuffers(1, tileFramebuffer, 0);
             GLES30.glDeleteRenderbuffers(1, tileRenderbuffer, 0);
-            // P638: gone - the deletes below are only for a context that could not be made current here (they ran again after
-            // super.close() had released the context: «call to OpenGL ES API with no current context» in every shot's log)
-            tileFramebuffer[0] = 0;
-            tileRenderbuffer[0] = 0;
         });
         quietly(super::close);
+        // GL names are context-local. A failed bind must not delete another context's resources.
+        tileFramebuffer[0] = 0;
+        tileRenderbuffer[0] = 0;
         final GLImage out = outImage;
         outImage = null;
         if (out != null) quietly(out::close);
         final ByteBuffer tile = tileBuffer;
         tileBuffer = null;
         if (tile != null) quietly(tile::clear);
-        if (tileFramebuffer[0] != 0) quietly(() -> GLES30.glDeleteFramebuffers(1, tileFramebuffer, 0));
-        if (tileRenderbuffer[0] != 0) quietly(() -> GLES30.glDeleteRenderbuffers(1, tileRenderbuffer, 0));
     }
 }

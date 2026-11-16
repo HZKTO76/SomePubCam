@@ -25,9 +25,15 @@ final class ScamLabBurst implements ScamTransport {
     final int[] crop;
     private final String burstTuning;
     private final boolean half;
+    private final boolean stages;
 
     ScamLabBurst(File file, int[] crop, String burstTuning) throws IOException {
+        this(file, crop, burstTuning, true);
+    }
+
+    ScamLabBurst(File file, int[] crop, String burstTuning, boolean stages) throws IOException {
         this.file = file;
+        this.stages = stages;
         final ByteBuffer h = ByteBuffer.allocate(HEADER).order(ByteOrder.LITTLE_ENDIAN);
         // P363: a burst of an earlier installation through the folder grant
         try (FileChannel in = LabFiles.channel(file)) {
@@ -82,7 +88,7 @@ final class ScamLabBurst implements ScamTransport {
         return learned.isEmpty() ? burstTuning : burstTuning + (burstTuning.isEmpty() || burstTuning.endsWith("\n") ? "" : "\n") + learned;
     }
     @Override public boolean keepable() { return false; }
-    @Override public boolean stages() { return true; }
+    @Override public boolean stages() { return stages; }
 
     /** The whole frame: the file itself (ScamLab cleared its DNG and diagnostics flags), mapped by the worker. */
     @Override public android.os.ParcelFileDescriptor sharedBurst() {

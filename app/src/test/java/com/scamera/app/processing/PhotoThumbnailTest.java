@@ -180,6 +180,49 @@ public class PhotoThumbnailTest {
                 + app1.length + " B in " + (System.nanoTime() - t0) / 1000000 + " ms");
     }
 
+    @Test
+    public void bulkRgbaReadMatchesTheBitmapWithBothAlignedAndUnalignedRows() {
+        final int w = 2304, h = 97, side = 512;
+        final int[] pixels = new int[w * h];
+        final Random random = new Random(571);
+        for (int i = 0; i < pixels.length; i++) pixels[i] = 0xFF000000 | random.nextInt(1 << 24);
+        final Bitmap src = Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888);
+        final Bitmap expected = PhotoThumbnail.scaled(src, side);
+        assertNotNull(expected);
+        final int tw = expected.getWidth(), th = expected.getHeight();
+        final int[] expectedPixels = new int[tw * th], actualPixels = new int[tw * th];
+        expected.getPixels(expectedPixels, 0, tw, 0, 0, tw, th);
+        try {
+            for (int padding : new int[]{44, 45}) {
+                final int stride = w * 4 + padding, offset = padding;
+                final int end = offset + stride * (h - 1) + w * 4;
+                final ByteBuffer rgba = ByteBuffer.allocateDirect(end).order(ByteOrder.LITTLE_ENDIAN);
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        final int c = pixels[y * w + x], at = offset + y * stride + 4 * x;
+                        rgba.put(at, (byte) (c >>> 16)).put(at + 1, (byte) (c >>> 8))
+                                .put(at + 2, (byte) c).put(at + 3, (byte) (x + y));
+                    }
+                }
+                rgba.position(offset);
+                final Bitmap actual = PhotoThumbnail.scaledRgba(rgba, w, h, stride, side);
+                assertNotNull(actual);
+                try {
+                    actual.getPixels(actualPixels, 0, tw, 0, 0, tw, th);
+                    assertArrayEquals(expectedPixels, actualPixels);
+                    assertEquals(offset, rgba.position());
+                    assertEquals(end, rgba.limit());
+                    assertEquals(ByteOrder.LITTLE_ENDIAN, rgba.order());
+                } finally {
+                    actual.recycle();
+                }
+            }
+        } finally {
+            src.recycle();
+            expected.recycle();
+        }
+    }
+
     /** A little-endian TIFF / DNG of IFD 0 only: a 16 x 8 16-bit raw strip and a few tags (an out-of-line Make). */
     private static byte[] rawDng() {
         final ByteBuffer b = ByteBuffer.allocate(8 + 256 + 6 + 2 + 2 + 12 * 8 + 4).order(ByteOrder.LITTLE_ENDIAN);

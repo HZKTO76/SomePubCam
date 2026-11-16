@@ -1186,6 +1186,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
             if(siteTex)g.tex(unpackProg,"u_site_gains",2,siteTex);
             g.dispatch(unpackProg,(w2+15)/16,(h2+15)/16);
             ringFence[slot]=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0); // the slot is free again once this unpack ran
+            if(!ringFence[slot])throw std::runtime_error("FAST MERGE GPU: cannot fence the upload buffer");
             if(enqueueBeforeStaging){
                 const auto beforeStage=Clock::now();
                 stage(next); // submit this unpack before waiting for the next writable upload slot
@@ -1612,6 +1613,13 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     // sabre step is within the tile's halo (2); else kFastOutput
     const bool outTiled=tune.fmOutTile!=0&&(moire>0.f||(quadLift&&validShorts>0))&&OW<=2*W&&g.outputTiledReady();
     const int PO=outTiled?int(A::pOutputTiled):int(A::pOutput);
+    // P634: the Tetra few-frame pass reads the frame map even if the app does not request an effective-map trailer.
+    const bool tetraPost=quad&&sensorType==2&&tune.fastTetraPost!=0&&OW==W&&OH==H;
+    const bool needEff=effMap||tetraPost;
+    g.u1i(PO,"u_skip_flags",clipFlags==nullptr);
+    g.u1i(PO,"u_skip_eff",!needEff);
+    // Keep a valid binding for each shader storage block. The shader never accesses the placeholder.
+    const GLuint unusedOutput=(!clipFlags||!needEff)?g.buffer(sizeof(GLuint)):0;
     for(const std::string& n:g.notes)report(n);
     g.notes.clear();
     std::vector<float> out;double waitMs=0;bool streamed=false;std::string outNote;GLuint bEff=0,bHlMask=0;
@@ -1653,7 +1661,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         const int bandRows=512;
         const int bands=(OH+bandRows-1)/bandRows;
         std::vector<GLuint> bRgb(static_cast<size_t>(bands)),bFlags(static_cast<size_t>(bands));
-        bEff=g.readBuffer(size_t(w2)*h2*4);
+        bEff=needEff?g.readBuffer(size_t(w2)*h2*4):unusedOutput;
         g.tex(PO,"u_accum_color_r",0,acc0);g.tex(PO,"u_accum_weights_gb",1,acc1);g.tex(PO,"u_frame_weights",2,accW);
         g.u2i(PO,"u_size",OW,OH);g.u2i(PO,"u_half",w2,h2);
         g.u3f(PO,"u_inv_wb",1.f/wb[0],1.f/wb[1],1.f/wb[2]);g.u1f(PO,"u_clip",0.94f);g.u1f(PO,"u_clip_short",validShorts>0?clipShort():0.f);g.u1i(PO,"u_fill",validShorts>0?outFill:0);g.u1f(PO,"u_fill_light",std::clamp(tune.fastLightFill,0.f,1.f));g.u1f(PO,"u_quad_lift",quadLift&&validShorts>0?1.f:0.f);g.u1f(PO,"u_moire",moire);g.u1f(PO,"u_step",float(OW)/float(W));g.tex(PO,"u_hl_base",3,bento?hlBase:zeroMask);g.tex(PO,"u_hl_final",4,hlMaskTex);g.tex(PO,"u_base_bayer",5,bayerBase);g.u1i(PO,"u_block",hlBlock);g.u4f(PO,"u_black",blackSensor);g.u1f(PO,"u_white",input.white);
@@ -1665,7 +1673,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         bandDone.f.assign(size_t(bands),nullptr);
         for(int b=0;b<bands;++b){
             const int y0=b*bandRows,rows=std::min(bandRows,OH-y0);
-            bRgb[size_t(b)]=g.readBuffer(size_t(OW)*rows*6);bFlags[size_t(b)]=g.readBuffer(size_t(OW)*rows);
+            bRgb[size_t(b)]=g.readBuffer(size_t(OW)*rows*6);
+            bFlags[size_t(b)]=clipFlags?g.readBuffer(size_t(OW)*rows):unusedOutput;
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER,0,bRgb[size_t(b)]);glBindBufferBase(GL_SHADER_STORAGE_BUFFER,1,bFlags[size_t(b)]);
             g.u1i(PO,"u_row0",y0);g.u1i(PO,"u_rows",rows);
             g.dispatch(PO,outTiled?(OW+31)/32:(OW/4+63)/64,outTiled?(rows+7)/8:rows);
@@ -1728,7 +1737,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         }
     // ---- phase B (row strips): see the strip decision above
     } else {
-    bEff=g.readBuffer(size_t(w2)*h2*4);
+    bEff=needEff?g.readBuffer(size_t(w2)*h2*4):unusedOutput;
     if(hlMaskOut&&bento){ // P480: as the whole-frame branch
         g.hlMaskOutProgram();
         bHlMask=g.readBuffer(size_t(w2)*h2*2);
@@ -1801,6 +1810,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         g.dispatch(A::pUnpackBuf,(w2+15)/16,(qb-qa+15)/16);
         g.u1i(A::pUnpackBuf,"u_row0q",0);
         ringFence[slot]=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);
+        if(!ringFence[slot])throw std::runtime_error("FAST MERGE GPU: cannot fence the upload rows");
         glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT|GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         // P497: over the unpacked rows only (50 MP Quad, 5 strips: the whole frame's passes per strip were most of phase B; the rows
         // outside were stale data nobody read)
@@ -1830,7 +1840,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     };
     // the accumulators of one strip, the readback of one strip (reused)
     const GLuint fStrip=fMerge;
-    const GLuint bRgbS=g.readBuffer(size_t(OW)*stripRows*6),bFlagsS=g.readBuffer(size_t(OW)*stripRows);
+    const GLuint bRgbS=g.readBuffer(size_t(OW)*stripRows*6);
+    const GLuint bFlagsS=clipFlags?g.readBuffer(size_t(OW)*stripRows):unusedOutput;
     g.tex(PO,"u_accum_color_r",0,acc0);g.tex(PO,"u_accum_weights_gb",1,acc1);g.tex(PO,"u_frame_weights",2,accW);
     g.u2i(PO,"u_size",OW,OH);g.u2i(PO,"u_half",w2,h2);
     g.u3f(PO,"u_inv_wb",1.f/wb[0],1.f/wb[1],1.f/wb[2]);g.u1f(PO,"u_clip",0.94f);g.u1f(PO,"u_clip_short",validShorts>0?clipShort():0.f);g.u1i(PO,"u_fill",validShorts>0?outFill:0);g.u1f(PO,"u_fill_light",std::clamp(tune.fastLightFill,0.f,1.f));g.u1f(PO,"u_quad_lift",quadLift&&validShorts>0?1.f:0.f);g.u1f(PO,"u_moire",moire);g.u1f(PO,"u_step",float(OW)/float(W));g.tex(PO,"u_hl_base",3,bento?hlBase:zeroMask);g.tex(PO,"u_hl_final",4,hlMaskTex);g.tex(PO,"u_base_bayer",5,bayerBase);g.u1i(PO,"u_block",hlBlock);g.u4f(PO,"u_black",blackSensor);g.u1f(PO,"u_white",input.white);
@@ -1923,7 +1934,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         });
         if(clipFlags)g.readBuffer(bFlagsS,size_t(OW)*rows,[&](const void* m){std::memcpy(clipFlags->data()+size_t(y0)*OW,m,size_t(OW)*rows);});
     }
-    if(streamed)streamed=halvesHook(nullptr,OW,OH,-1,-1,out.data());
+    if(streamed&&!halvesHook(nullptr,OW,OH,-1,-1,out.data()))
+        throw std::runtime_error("FAST MERGE: the output stream refused to commit the strips");
     outNote=streamed?"halves streamed into the output":"floats";
     if(!streamed&&halvesHook)outNote+=" (the stream did not take the halves)";
     {
@@ -1954,9 +1966,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
             if(std::fabs(dn)>1e-6f)homShift[size_t(k)]=2.f*std::hypot((h[0]*cx+h[1]*cy+h[2])/dn-cx,(h[3]*cx+h[4]*cy+h[5])/dn-cy);
         }
     });
-    // P634: a Tetra result's few-frame pass reads the frame map too
-    const bool tetraPost=quad&&sensorType==2&&tune.fastTetraPost!=0&&OW==W&&OH==H;
-    if(effMap||tetraPost)g.readBuffer(bEff,size_t(w2)*h2*4,[&](const void* m){eff.assign(static_cast<const float*>(m),static_cast<const float*>(m)+size_t(w2)*h2);});
+    if(needEff)g.readBuffer(bEff,size_t(w2)*h2*4,[&](const void* m){eff.assign(static_cast<const float*>(m),static_cast<const float*>(m)+size_t(w2)*h2);});
     std::vector<uint16_t> hlMask; // P480
     if(bHlMask){
         hybridHighlightMaskHeader(hlMask,w2,h2);hlMask.resize(8+size_t(w2)*h2);

@@ -10,6 +10,7 @@ import com.scamera.app.util.Log;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.IntBuffer;
 
 /**
  * P620 (with the gallery's thumbnails, t-thumb): our files carried no embedded preview, so the gallery decoded the whole photo
@@ -72,11 +73,21 @@ public final class PhotoThumbnail {
      */
     @Nullable
     public static Bitmap scaledRgba(@Nullable ByteBuffer rgba, int width, int height, int strideBytes, int longSide) {
-        if (rgba == null || width <= 0 || height <= 0 || strideBytes < 4 * width) return null;
+        if (rgba == null || width <= 0 || height <= 0 || strideBytes < 4L * width) return null;
         final ByteBuffer b = rgba.duplicate();
         final int base = rgba.position();
         if ((long) base + (long) strideBytes * (height - 1) + 4L * width > b.limit()) return null;
         try {
+            if (rgba.isDirect() && ((base | strideBytes) & 3) == 0 && width >= 2L * longSide) {
+                // Read RGBA words in bulk and drop alpha, leaving the sampler's RGB channels in the same order.
+                final IntBuffer words = b.slice().order(ByteOrder.BIG_ENDIAN).asIntBuffer();
+                final int stride = strideBytes / 4;
+                return sample(width, height, longSide, (y, into) -> {
+                    words.position(y * stride);
+                    words.get(into, 0, width);
+                    for (int i = 0; i < width; i++) into[i] >>>= 8;
+                });
+            }
             final byte[] line = new byte[4 * width];
             return sample(width, height, longSide, (y, into) -> {
                 b.position(base + y * strideBytes);

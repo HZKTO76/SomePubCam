@@ -287,7 +287,7 @@ public final class TopBar {
             ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) v.getLayoutParams();
             int ws = lp.width >= 0 ? View.MeasureSpec.makeMeasureSpec(lp.width, View.MeasureSpec.EXACTLY) : unspecified;
             v.measure(ws, View.MeasureSpec.makeMeasureSpec(row.getHeight() > 0 ? row.getHeight() : 1000, View.MeasureSpec.AT_MOST));
-            sum += v.getMeasuredWidth() + lp.leftMargin + lp.rightMargin;
+            sum += v.getMeasuredWidth() + lp.getMarginStart() + lp.getMarginEnd();
         }
         return sum;
     }
@@ -304,11 +304,15 @@ public final class TopBar {
         Context c = tb.getRoot().getContext();
         ViewGroup row = (ViewGroup) tb.getRoot();
         View lead = first(tb);
+        final int gap = UiScale.dp(c, GAPS[level]);
         for (int i = 0; i < row.getChildCount(); i++) {
             View v = row.getChildAt(i);
             ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) v.getLayoutParams();
-            lp.setMarginStart(v == lead ? 0 : UiScale.dp(c, GAPS[level]));
-            v.setLayoutParams(lp);
+            final int start = v == lead ? 0 : gap;
+            if (lp.getMarginStart() != start) {
+                lp.setMarginStart(start);
+                v.setLayoutParams(lp);
+            }
         }
         int rowPad = UiScale.dp(c, level >= 3 ? 4 : level >= 2 ? 6 : 10);
         row.setPaddingRelative(rowPad, row.getPaddingTop(), rowPad, 0);

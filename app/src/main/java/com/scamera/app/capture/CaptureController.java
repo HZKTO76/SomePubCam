@@ -318,7 +318,7 @@ public class CaptureController {
     public volatile com.scamera.app.control.subject.SubjectFocus mSubjectFocus;
 
     private final CameraEvents cameraEventsListener;
-    /** Held from an open request until the device answers (openSettled), so closeCamera waits for an open in flight. */
+    /** Held from an open request until its device callback answers, so closeCamera waits for an open in flight. */
     private final Semaphore mCameraOpenCloseLock = new Semaphore(1);
     /** An open is under way (requested, not answered yet): a second request is dropped, not queued. */
     private final AtomicBoolean mCameraOpening = new AtomicBoolean();
@@ -653,7 +653,7 @@ public class CaptureController {
     /** P27: manual ISO / shutter this camera's HAL honours (learned from shots; null before the first session). */
     private volatile ExposureLimits mExposureLimits;
     /** Unpacked copy of a RAW10 / RAW12 preview frame for the mosaic measurement (reused). */
-    private java.nio.ByteBuffer mMosaicUnpacked;
+    private volatile java.nio.ByteBuffer mMosaicUnpacked;
     /** P30: the arena of the shot being set up / in flight (released when the shot completes or fails). */
     private volatile com.scamera.app.util.ShotArena mShotArena;
     /** P27: watchRawPayload's session restart waits until the shot in flight is complete. */
@@ -1013,35 +1013,61 @@ public class CaptureController {
         mPreviewCaptureResult = result;
     }
 
-    /** An open attempt has its answer: the open/close lock is free again and a new open may start. */
-    private void openSettled() {
-        mCameraOpenCloseLock.release();
-        mCameraOpening.set(false);
-    }
+    private volatile DeviceStateCallback mStateCallback;
 
-    /** The device is gone (disconnected, failed): its open settled, the device closed and forgotten. */
-    private void dropDevice(CameraDevice device) {
-        openSettled();
-        device.close();
-        mCameraDevice = null;
-    }
+    /** The camera device's callbacks own the permit and lease of their own open request. */
+    final class DeviceStateCallback extends CameraDevice.StateCallback {
+        private final AtomicBoolean openPending = new AtomicBoolean(true);
+        private final VivoSdkRawSession iszLease = mIszLease;
+        private final int generation = mSessionGeneration.get();
 
-    /** The camera device's open / close / error answers. */
-    private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
+        private boolean claimOpenPermit() {
+            return openPending.compareAndSet(true, false);
+        }
+
+        /** Called only by whoever claimed this attempt's permit. */
+        private void releaseOpenPermit() {
+            mCameraOpening.set(false);
+            mCameraOpenCloseLock.release();
+        }
+
+        private boolean ownsDevice(CameraDevice device) {
+            return mStateCallback == this && (openPending.get() || mCameraDevice == device);
+        }
+
+        private void dropDevice(CameraDevice device) {
+            final boolean opening = claimOpenPermit();
+            try {
+                device.close();
+            } finally {
+                synchronized (mPreviewStateLock) {
+                    if (mCameraDevice == device) mCameraDevice = null;
+                }
+                if (opening) releaseOpenPermit();
+            }
+        }
 
         @Override
         public void onOpened(@NonNull CameraDevice device) {
-            OpenTimeline.opened(); // P680
+            if (!claimOpenPermit()) {
+                if (device != mCameraDevice) device.close();
+                return;
+            }
             synchronized (mPreviewStateLock) {
+                OpenTimeline.opened(); // P680
                 if (mVivoSdkRawSession != null) mVivoSdkRawDevice = device;
-                openSettled();
                 // an open still in flight when the screen went to the background: a hidden app holds no camera
-                if (!isCameraResumed) {
+                if (!isCameraResumed || generation != mSessionGeneration.get()) {
                     Log.d(TAG, "camera " + device.getId() + " opened after the pause: closed again");
-                    device.close();
+                    try {
+                        device.close();
+                    } finally {
+                        releaseOpenPermit();
+                    }
                     return;
                 }
                 mCameraDevice = device;
+                releaseOpenPermit();
                 if (mVivoSdkRawSession == null) VivoQcomModes.onCameraOpened();
                 mImageSaver = new ImageSaver(cameraEventsListener);
                 startSession();
@@ -1050,7 +1076,9 @@ public class CaptureController {
 
         @Override public void onClosed(@NonNull CameraDevice cameraDevice) {
             closeVivoSdkRawSession(cameraDevice);
-            closeIszLease();
+            synchronized (mIszLeaseLock) {
+                if (iszLease != null && mIszLease == iszLease) closeIszLease();
+            }
             synchronized (mDeviceClosedLock) { // P662: awaitClosedForProcessing
                 if (cameraDevice == mClosingDevice) {
                     mClosingDevice = null;
@@ -1061,6 +1089,10 @@ public class CaptureController {
 
         @Override
         public void onDisconnected(@NonNull CameraDevice cameraDevice) {
+            if (!ownsDevice(cameraDevice)) {
+                cameraDevice.close();
+                return;
+            }
             if (mVivoSdkRawSession != null && mVivoSdkRawDevice == null) mVivoSdkRawDevice = cameraDevice;
             // P635: a recipe session the camera service dropped before its first frame or under a shot (the documents'
             // «disconnected» of a wrong field set): the profile is remembered as failed, the reopen below is the normal session
@@ -1075,6 +1107,10 @@ public class CaptureController {
 
         @Override
         public void onError(@NonNull CameraDevice cameraDevice, int error) {
+            if (!ownsDevice(cameraDevice) && !(mStateCallback == this && cameraDevice == mRetryDevice)) {
+                cameraDevice.close();
+                return;
+            }
             mDeviceErrorMs = android.os.SystemClock.elapsedRealtime();
             // the session's own callback runs on another thread: a refusal the HAL answers with this error at the same moment
             // (vivo X300 log: both within 1 ms) is let to choose its retry first (at most 0.5 s)
@@ -1083,7 +1119,11 @@ public class CaptureController {
             // a session (the vivo EIS session key there); the retry with the next configuration is under way, so the error is
             // expected: no overlay, no message, no module revert - the camera reopens with what the retry chose
             final boolean afterRetry = cameraDevice == mRetryDevice;
-            mRetryDevice = null;
+            if (!ownsDevice(cameraDevice) && !(mStateCallback == this && afterRetry && !mCameraOpening.get())) {
+                cameraDevice.close();
+                return;
+            }
+            if (afterRetry) mRetryDevice = null;
             // P263 (owner, 2026-10-19: «исправь ошибку код4 чтобы её не было ни на одном телефоне»; the OPPO showed «Сбой камеры
             // (код 4), перезапуск» once after an update, the camera of the old process still being released): the first device /
             // service error since the last configured session reopens the same camera and module quietly - no message, no module
@@ -1157,7 +1197,7 @@ public class CaptureController {
                 showError(Lang.t("Камера недоступна (код ", "Camera unavailable (code ") + error + ")");
             }
         }
-    };
+    }
 
     /** P240: the camera screen's «Камера перезапускается…» overlay is up (an error is being recovered from). */
     private volatile boolean mRecovering;
@@ -2285,6 +2325,7 @@ public class CaptureController {
         synchronized (mPreviewStateLock) {
             isCameraResumed = false;
             mSessionGeneration.incrementAndGet();
+            mMosaicUnpacked = null;
             mPreviewRequestBuilder = null;
             mPreviewCaptureResult = null;
             mPreviewCaptureRequest = null;
@@ -2389,7 +2430,7 @@ public class CaptureController {
                     handedOff = true;
                 } catch (RuntimeException rejected) {
                     mAsyncCloseInFlight = false;
-                    outputs.countDown(); // closed below, on this thread
+                    // The inline close below signals outputs after the resources have been released.
                 }
             }
             if (!handedOff) {
@@ -3394,7 +3435,12 @@ public class CaptureController {
             Log.d(TAG, "camera open for a destroyed controller: dropped");
             return;
         }
-        processExecutor.execute(() -> openOnPool(width, height));
+        try {
+            processExecutor.execute(() -> openOnPool(width, height));
+        } catch (java.util.concurrent.RejectedExecutionException destroyed) {
+            mCameraOpening.set(false);
+            Log.d(TAG, "camera open raced controller shutdown: dropped");
+        }
     }
 
     private void openOnPool(int width, int height) {
@@ -3498,6 +3544,7 @@ public class CaptureController {
             return;
         }
         boolean lockHeld = false;
+        DeviceStateCallback callback = null;
         try {
             // P662: a restart's close runs on its own thread holding the lock: the open waits for it (as it waited on the main thread)
             final long lockStart = System.nanoTime();
@@ -3541,7 +3588,7 @@ public class CaptureController {
                 Log.i("PERF", "camera open overlapped the previous camera's close: prepared in " + prepared + " ms, then waited "
                         + waited + " ms for the close (" + overlap + " ms of the close ran beside the preparation)");
                 if (!isCameraResumed) {
-                    openRefused(true);
+                    openRefused(true, null);
                     Log.d(TAG, "screen left while the previous camera closed: no open");
                     return;
                 }
@@ -3555,11 +3602,13 @@ public class CaptureController {
             if (mXiaomiRouted) Log.i(TAG, "camera " + physicalID + " opens through logical camera " + logicalID + " (P41b)");
             // The retry budget belongs to one camera: switching modules during a provider restart used it up for the next one.
             if (!logicalID.equals(mOpenRetryId)) { mOpenRetryId = logicalID; mOpenRetries = 0; }
-            this.mCameraManager.openCamera(logicalID, mStateCallback,
+            callback = new DeviceStateCallback();
+            mStateCallback = callback;
+            this.mCameraManager.openCamera(logicalID, callback,
                     mVivoSdkRawSession != null ? mVivoSdkCallbackHandler : mBackgroundHandler);
             mOpenRetries = 0;
         } catch (CameraAccessException e) {
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             Log.e(TAG, Log.getStackTraceString(e));
             if (retryWithoutXiaomiRoute(width, height, e)) return;
             // CAMERA_ERROR / CAMERA_DISCONNECTED while the provider restarts: the same retry as an unknown device.
@@ -3568,14 +3617,14 @@ public class CaptureController {
         } catch (IllegalArgumentException e) {
             // "Unknown device" while the vendor camera provider restarts after a HAL crash: the device list comes back a few
             // seconds later - a retry, not the app taken down with the HAL.
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             if (retryWithoutXiaomiRoute(width, height, e)) return;
             retryOpen(width, height, e);
         } catch (InterruptedException e) {
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             throw new RuntimeException("Interrupted while trying to lock camera opening.", e);
         } catch (RuntimeException e) {
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             cameraEventsListener.processingFailed(e.getMessage());
             Log.e(TAG, Log.getStackTraceString(e));
         }
@@ -3586,11 +3635,15 @@ public class CaptureController {
      * here, and the open lock taken for it is released (it used to stay held, so the next open waited 1 s and failed with "Time
      * out waiting to lock camera opening").
      */
-    private void openRefused(boolean lockHeld) {
+    private void openRefused(boolean lockHeld, @Nullable DeviceStateCallback callback) {
+        if (callback != null && !callback.claimOpenPermit()) return;
         mCameraOpening.set(false);
-        closeVivoSdkRawSession(null);
-        closeIszLease();
-        if (lockHeld) mCameraOpenCloseLock.release();
+        try {
+            closeVivoSdkRawSession(null);
+            closeIszLease();
+        } finally {
+            if (lockHeld) mCameraOpenCloseLock.release();
+        }
     }
     private String mOpenRetryId = "";
 
@@ -4179,7 +4232,11 @@ public class CaptureController {
      * the viewfinder's repeating request.
      */
     public void startSession() {
-        final int generation = mSessionGeneration.incrementAndGet();
+        final int generation;
+        synchronized (mPreviewStateLock) {
+            generation = mSessionGeneration.incrementAndGet();
+            mMosaicUnpacked = null;
+        }
         unspektraAe.reset();
         final CameraDevice sessionDevice = mCameraDevice;
         if (!isCameraResumed || sessionDevice == null) return;
@@ -7117,6 +7174,7 @@ public class CaptureController {
      */
     private void observeMosaic(Image img) {
         try {
+            final int generation = mSessionGeneration.get();
             if (!mMosaicMeasure || !isRawFormat(img.getFormat()) || !isCameraResumed || mPayloadBad) return;
             if (mRecipePlan != null) return; // P635: a recipe shot's block is measured on its own stills (the truth check, the merge)
             // P35: the measurement is the background check of the stored block: never while a shot takes its frames.
@@ -7134,11 +7192,17 @@ public class CaptureController {
                 if (com.scamera.app.util.RawUnpack.isPacked(readFormat)) {
                     // RAW10 / RAW12: measured on the unpacked frame (only the first frames of a session are measured)
                     final int bytes = img.getWidth() * img.getHeight() * 2;
-                    if (mMosaicUnpacked == null || mMosaicUnpacked.capacity() < bytes)
-                        mMosaicUnpacked = java.nio.ByteBuffer.allocateDirect(bytes).order(java.nio.ByteOrder.nativeOrder());
+                    java.nio.ByteBuffer unpacked = mMosaicUnpacked;
+                    if (unpacked == null || unpacked.capacity() < bytes) {
+                        unpacked = java.nio.ByteBuffer.allocateDirect(bytes).order(java.nio.ByteOrder.nativeOrder());
+                        synchronized (mPreviewStateLock) {
+                            if (generation != mSessionGeneration.get() || !isCameraResumed) return;
+                            mMosaicUnpacked = unpacked;
+                        }
+                    }
                     if (!com.scamera.app.util.RawUnpack.unpack(samples.duplicate(), readFormat, img.getWidth(), img.getHeight(),
-                            sampleStride, mMosaicUnpacked)) return;
-                    samples = mMosaicUnpacked.duplicate().order(java.nio.ByteOrder.nativeOrder());
+                            sampleStride, unpacked)) return;
+                    samples = unpacked.duplicate().order(java.nio.ByteOrder.nativeOrder());
                     samples.position(0); samples.limit(bytes);
                     sampleStride = img.getWidth() * 2;
                 }
@@ -7163,7 +7227,11 @@ public class CaptureController {
                 int block = com.scamera.app.processing.MosaicStream.observe(measured);
                 // P187: measured - the unpacked frame (2 B a pixel, 401 MB on a packed 200 MP stream) is not kept for the
                 // rest of the session
-                if (!com.scamera.app.processing.MosaicStream.wantsFrame()) mMosaicUnpacked = null;
+                if (!com.scamera.app.processing.MosaicStream.wantsFrame()) {
+                    synchronized (mPreviewStateLock) {
+                        if (generation == mSessionGeneration.get()) mMosaicUnpacked = null;
+                    }
+                }
                 // P214i: an X300 Ultra ISZ module's frames against the mosaic its mode declares (before the stream crop below,
                 // which reads the module's sensor crop)
                 final VivoQcomIsz.StreamCheck iszCheck = mIszCheck;

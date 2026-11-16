@@ -54,9 +54,18 @@ public final class GalleryUi {
      * the column settings stay the portrait ones, a wide screen multiplies them (3 columns sideways gave cells as tall as the screen).
      */
     public static int widthFactor(Context c) {
-        android.util.DisplayMetrics m = c.getResources().getDisplayMetrics();
-        float widthDp = m.widthPixels / Math.max(.5f, m.density);
-        return Math.max(1, Math.round(widthDp / 420f));
+        return widthFactor(c, 0);
+    }
+
+    /** Use the gallery's measured viewport when it is narrower than or resized independently of the display. */
+    static int widthFactor(Context c, int viewportWidth) {
+        return Math.max(1, Math.round(widthPx(c, viewportWidth) / Math.max(.5f, c.getResources().getDisplayMetrics().density) / 420f));
+    }
+
+    public static int widthPx(Context c, int viewportWidth) {
+        if (viewportWidth > 0) return viewportWidth;
+        int widthDp = c.getResources().getConfiguration().screenWidthDp;
+        return widthDp > 0 ? dp(c, widthDp) : c.getResources().getDisplayMetrics().widthPixels;
     }
 
     /**

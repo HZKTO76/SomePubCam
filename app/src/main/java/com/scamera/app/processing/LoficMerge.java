@@ -33,6 +33,8 @@ import java.util.Locale;
 public final class LoficMerge {
     private LoficMerge() {}
 
+    private static final int HALF_VALUES = 1 << 16, SCALE_BLOCK = 16 * 1024;
+
     public static final int LONG_BLACK = 1024, LONG_WHITE = 16383, SHORT_BLACK = 64, SHORT_WHITE = 1023;
     /** The Long read's weight goes from 1 at this share of its range down to 0 at {@link #TAPER_HI}. */
     public static final double TAPER_LO = 0.70, TAPER_HI = 0.96;
@@ -182,6 +184,10 @@ public final class LoficMerge {
             inv[i] = 1.0 / e.g[i];
         }
         final int clipCode = e.longWhite - 2, shortClip = SHORT_WHITE - 2;
+        // Division by a fixed positive range preserves ordering within each CFA site.
+        boolean validRanges = true;
+        for (double r : range) validRanges &= r > 0 && Double.isFinite(r);
+        final double[] peakBySite = validRanges ? new double[4] : null;
         double peak = 0;
         for (int y = 0; y < rows; y++) {
             final int row = y * width;
@@ -218,12 +224,19 @@ public final class LoficMerge {
                         if (sc) st.bothClipped++;
                         else if (blend != BLEND_ADAPTIVE || m > L) st.recovered++;
                     }
-                    final double level = m / range[site];
-                    if (level > peak) peak = level;
+                    if (peakBySite != null) {
+                        if (m > peakBySite[site]) peakBySite[site] = m;
+                    } else {
+                        final double level = m / range[site];
+                        if (level > peak) peak = level;
+                    }
                     final long out = Math.round(e.black[site] + m * inv[site]);
                     px.put(row + x, (short) Math.max(0, Math.min(65535, out)));
                 }
             }
+        }
+        if (peakBySite != null) {
+            for (int i = 0; i < 4; i++) peak = Math.max(peak, peakBySite[i] / range[i]);
         }
         st.pixels = (long) width * rows;
         st.maxLevel = peak;
@@ -305,7 +318,22 @@ public final class LoficMerge {
             return;
         }
         final ShortBuffer h = rgb.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer();
-        for (int i = 0, n = h.limit(); i < n; i++) h.put(i, scaleHalf(h.get(i), log2));
+        if (h.remaining() < HALF_VALUES) {
+            for (int i = 0, n = h.limit(); i < n; i++) h.put(i, scaleHalf(h.get(i), log2));
+            return;
+        }
+        // A 12 MP frame has about 36 million RGB samples but only 65,536 distinct half values.
+        final short[] scaled = new short[HALF_VALUES];
+        for (int bits = 0; bits < scaled.length; bits++) scaled[bits] = scaleHalf((short) bits, log2);
+        final short[] block = new short[SCALE_BLOCK];
+        while (h.hasRemaining()) {
+            final int start = h.position();
+            final int count = Math.min(h.remaining(), block.length);
+            h.get(block, 0, count);
+            for (int i = 0; i < count; i++) block[i] = scaled[block[i] & 0xffff];
+            h.position(start);
+            h.put(block, 0, count);
+        }
     }
 
     /** One IEEE half times 2^{@code log2}: the exponent moved (exact), a subnormal through float, an overflow to the largest half. */

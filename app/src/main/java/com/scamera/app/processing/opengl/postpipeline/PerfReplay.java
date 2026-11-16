@@ -17,11 +17,13 @@ import java.util.Objects;
 final class PerfReplay {
     private String rgbHash, mapHash, jpegHash;
     private double frames;
+    private boolean frameMapExpected;
     private int width, height;
 
-    void merge(ByteBuffer rgb, ByteBuffer frameMap, double frames) {
+    void merge(ByteBuffer rgb, ByteBuffer frameMap, boolean expectMap, double frames) {
         rgbHash = hash(rgb);
         mapHash = hash(frameMap);
+        frameMapExpected = expectMap;
         this.frames = frames;
     }
 
@@ -37,7 +39,10 @@ final class PerfReplay {
     }
 
     static boolean report(String burst, PerfReplay a, PerfReplay b, ScamLabRun.Side reference, ScamLabRun.Side candidate) {
-        final boolean framesEqual = Objects.equals(a.mapHash, b.mapHash) && Double.compare(a.frames, b.frames) == 0;
+        final boolean frameMapAvailable = a.mapHash != null && b.mapHash != null;
+        final boolean framesEqual = Double.isFinite(a.frames) && Double.compare(a.frames, b.frames) == 0
+                && (!(a.frameMapExpected || b.frameMapExpected) || frameMapAvailable) && Objects.equals(a.mapHash, b.mapHash);
+        final boolean rgbEqual = a.rgbHash != null && a.rgbHash.equals(b.rgbHash);
         final boolean encoded = a.jpegHash != null && b.jpegHash != null;
         final boolean exact = encoded && a.jpegHash.equals(b.jpegHash);
         Log.i("PERF", "replay " + burst + " A_merge_ms=" + reference.mergeMs + " A_post_ms=" + reference.postMs
@@ -45,9 +50,9 @@ final class PerfReplay {
         final String pixels = exact ? "max_delta=0 psnr_db=inf" : pixelDiff(a, b, reference.photo, candidate.photo);
         Log.i("PERF_VERIFY", "burst=" + burst + " jpeg_core=" + (!encoded ? "unavailable" : exact ? "exact" : "different")
                 + " sha256_a=" + a.jpegHash + " sha256_b=" + b.jpegHash + " " + pixels
-                + " frame_map_available=" + (a.mapHash != null && b.mapHash != null)
-                + " frame_map_and_count_equal=" + framesEqual + " merge_rgb_equal=" + Objects.equals(a.rgbHash, b.rgbHash));
-        return exact && framesEqual;
+                + " frame_map_available=" + frameMapAvailable
+                + " frame_map_and_count_equal=" + framesEqual + " merge_rgb_equal=" + rgbEqual);
+        return exact && framesEqual && rgbEqual;
     }
 
     private static String pixelDiff(PerfReplay a, PerfReplay b, Bitmap first, Bitmap second) {

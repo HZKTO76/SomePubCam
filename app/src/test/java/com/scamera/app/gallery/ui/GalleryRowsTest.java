@@ -329,6 +329,26 @@ public class GalleryRowsTest {
         assertTrue(list.pinch(true));
     }
 
+    @Test
+    public void galleryGridUsesTheMeasuredPaneWidthAsItUnfoldsAndFolds() {
+        LibraryAdapter adapter = adapter(library());
+        RecyclerView grid = new RecyclerView(context);
+        GridLayoutManager layout = new GridLayoutManager(context, 3);
+        grid.setLayoutManager(layout);
+        grid.setAdapter(adapter);
+        GalleryViews view = views(GalleryLayout.Mode.GRID, adapter, grid, layout);
+        int portraitColumns = GalleryView.columns(context);
+        int wide = GalleryUi.dp(context, 840), narrow = GalleryUi.dp(context, 360);
+        grid.layout(0, 0, wide, GalleryUi.dp(context, 300));
+        view.windowWidthChanged();
+        assertEquals(2 * portraitColumns, layout.getSpanCount());
+        assertEquals(RowViews.step(wide / layout.getSpanCount()), adapter.thumbPx());
+        grid.layout(0, 0, narrow, GalleryUi.dp(context, 300));
+        view.windowWidthChanged();
+        assertEquals(portraitColumns, layout.getSpanCount());
+        assertEquals(RowViews.step(narrow / layout.getSpanCount()), adapter.thumbPx());
+    }
+
     /** Lays {@code v} out at {@code widthDp} and checks that no visible child sticks out of its parent. */
     private void assertInside(View v) {
         if (!(v instanceof ViewGroup) || v.getVisibility() != View.VISIBLE) return;

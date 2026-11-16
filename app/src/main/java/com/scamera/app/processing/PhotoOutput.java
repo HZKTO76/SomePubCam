@@ -352,7 +352,8 @@ public final class PhotoOutput {
                 jpeg.writeTo(out);
                 out.flush();
                 ok = true;
-            } catch (IOException | RuntimeException e) {
+            } catch (IOException | RuntimeException | OutOfMemoryError e) {
+                ok = false;
                 Log.e(TAG, "streamed JPEG save failed: " + android.util.Log.getStackTraceString(e));
             }
             if (!ok) {
@@ -573,6 +574,7 @@ public final class PhotoOutput {
             encoded = img.compress(cf, (Integer) encoding[1], out);
             out.flush();
         } catch (IOException | RuntimeException | OutOfMemoryError e) {
+            encoded = false;
             Log.e(TAG, "WebP encode failed: " + android.util.Log.getStackTraceString(e));
         }
         if (!encoded) {

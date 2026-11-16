@@ -176,4 +176,18 @@ public class MoveCopyFlowTest {
         // without the folder action the bar is as before
         assertTrue(new SelectionBar(context, () -> {}, () -> {}, () -> {}, () -> {}).folder == null);
     }
+
+    @Test
+    public void selectionBarResizesToACompactWindowWithoutClippingActions() {
+        SelectionBar bar = new SelectionBar(context, () -> {}, () -> {}, () -> {}, () -> {}, () -> {}, () -> {}, v -> {});
+        bar.bind(1234);
+        int width = GalleryUi.dp(context, 280);
+        bar.view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        bar.view.layout(0, 0, bar.view.getMeasuredWidth(), bar.view.getMeasuredHeight());
+        assertTrue(bar.delete.getWidth() > 0);
+        assertTrue(bar.delete.getRight() <= bar.view.getWidth());
+        assertTrue(bar.delete.isEnabled());
+        assertTrue(bar.count.getContentDescription().toString().contains("1234"));
+    }
 }

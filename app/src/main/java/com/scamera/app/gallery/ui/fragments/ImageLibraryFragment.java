@@ -1,6 +1,5 @@
 package com.scamera.app.gallery.ui.fragments;
 
-import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -9,8 +8,6 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.LayoutInflater;
-import android.view.MotionEvent;
-import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -57,6 +54,7 @@ import com.scamera.app.gallery.ui.SelectionBar;
 import com.scamera.app.gallery.ui.MoveCopyFlow;
 import com.scamera.app.gallery.files.GalleryMoveCopy;
 import com.scamera.app.gallery.viewmodel.GalleryViewModel;
+import com.scamera.app.gallery.views.PinchRecyclerView;
 import com.scamera.app.settings.PreferenceKeys;
 import com.scamera.app.ui.Motion;
 import com.scamera.app.util.Lang;
@@ -176,7 +174,10 @@ public class ImageLibraryFragment extends Fragment implements LibraryAdapter.Hos
 
         FrameLayout body = new FrameLayout(c);
         column.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
-        grid = new RecyclerView(c);
+        grid = new PinchRecyclerView(c, spread -> {
+            if (views == null || !views.pinch(spread, false))
+                setColumns(GalleryView.columns(c) + (spread ? -1 : 1), false);
+        });
         grid.setClipToPadding(false);
         grid.setPadding(GalleryUi.dp(c, 9), 0, GalleryUi.dp(c, 9), GalleryUi.dp(c, 120));
         adapter = new LibraryAdapter(this);
@@ -202,6 +203,9 @@ public class ImageLibraryFragment extends Fragment implements LibraryAdapter.Hos
         empty.setVisibility(View.GONE);
         body.addView(empty, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
         views = new com.scamera.app.gallery.ui.GalleryViews(c, grid, layout, adapter, body, rangeRow, photosHeader, this); // P622
+        grid.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (v == grid && views != null && right - left != oldRight - oldLeft) views.windowWidthChanged();
+        });
         grid.addOnScrollListener(new com.scamera.app.gallery.ui.ThumbPreloader(com.bumptech.glide.Glide.with(this), adapter)); // P620
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
@@ -273,7 +277,6 @@ public class ImageLibraryFragment extends Fragment implements LibraryAdapter.Hos
         tabBar = new GalleryTabBar(c, this::showTab, this::reselectTab);
         root.addView(tabBar.view, GalleryTabBar.tabParams(c));
 
-        grid.addOnItemTouchListener(pinch(c));
         grid.addOnItemTouchListener(new DragSelectionItemTouchListener(c, new OnItemInteractionListener() {
             @Override
             public void itemTapped(RecyclerView view, RecyclerView.ViewHolder holder, int position) {}
@@ -784,57 +787,20 @@ public class ImageLibraryFragment extends Fragment implements LibraryAdapter.Hos
 
     // ---------------------------------------------------------------- P498: columns, view sheet
 
-    /** Pinch on the grid: spread for bigger thumbnails (fewer columns), pinch for more columns. */
-    private RecyclerView.OnItemTouchListener pinch(Context c) {
-        final ScaleGestureDetector detector = new ScaleGestureDetector(c, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            float acc = 1f;
-
-            @Override
-            public boolean onScaleBegin(@NonNull ScaleGestureDetector d) {
-                acc = 1f;
-                return true;
-            }
-
-            @Override
-            public boolean onScale(@NonNull ScaleGestureDetector d) {
-                acc *= d.getScaleFactor();
-                if (acc > 1.25f) {
-                    if (views == null || !views.pinch(true)) setColumns(GalleryView.columns(c) - 1); // P622: the view's own zoom first
-                    acc = 1f;
-                } else if (acc < .8f) {
-                    if (views == null || !views.pinch(false)) setColumns(GalleryView.columns(c) + 1);
-                    acc = 1f;
-                }
-                return true;
-            }
-        });
-        return new RecyclerView.OnItemTouchListener() {
-            @Override
-            public boolean onInterceptTouchEvent(@NonNull RecyclerView rv, @NonNull MotionEvent e) {
-                detector.onTouchEvent(e);
-                return e.getPointerCount() > 1 || detector.isInProgress();
-            }
-
-            @SuppressLint("ClickableViewAccessibility")
-            @Override
-            public void onTouchEvent(@NonNull RecyclerView rv, @NonNull MotionEvent e) {
-                detector.onTouchEvent(e);
-            }
-
-            @Override
-            public void onRequestDisallowInterceptTouchEvent(boolean disallow) {}
-        };
+    private void setColumns(int n) {
+        setColumns(n, true);
     }
 
     /** {@code n}: the portrait column setting; the grid shows it times the screen's width factor (P502). */
-    private void setColumns(int n) {
+    private void setColumns(int n, boolean animate) {
         if (layout == null || grid == null || adapter == null) return;
         n = GalleryView.clampColumns(n);
-        GalleryView.setColumns(requireContext(), n);
+        if (n != GalleryView.columns(requireContext())) GalleryView.setColumns(requireContext(), n);
         if (views != null && views.mode() != com.scamera.app.gallery.model.GalleryLayout.Mode.GRID) return; // P622: the grid's setting, kept
-        n *= GalleryUi.widthFactor(requireContext());
+        n = views != null ? views.columns() : n * GalleryUi.widthFactor(requireContext());
         if (n == layout.getSpanCount()) return;
-        if (Motion.enabled(grid)) {
+        // ChangeBounds suppresses RecyclerView's layout and cancels its active touch stream.
+        if (animate && Motion.enabled(grid)) {
             android.transition.ChangeBounds move = new android.transition.ChangeBounds();
             move.setDuration(300);
             move.setInterpolator(Motion.SHEET);
@@ -852,7 +818,7 @@ public class ImageLibraryFragment extends Fragment implements LibraryAdapter.Hos
             views.updateThumbSize(); // P622: the list's and the timeline's sizes
             return;
         }
-        int width = getResources().getDisplayMetrics().widthPixels;
+        int width = GalleryUi.widthPx(requireContext(), grid != null ? grid.getWidth() : 0);
         adapter.setThumbPx(width / Math.max(1, columns));
         com.scamera.app.gallery.glide.GalleryThumb.setGridPx(getContext(), adapter.thumbPx()); // P620: the viewer's first picture
     }

@@ -1341,15 +1341,24 @@ public final class ScamRgb extends Node {
             passOut=p.getMain();shaderProg.drawBlocks(passOut);shaderProg.closed=true;
             if(purpleBound!=null){purpleBound.close();purpleBound=null;}
             if(oppGpu!=null){oppGpu.close();oppGpu=null;}
-            final int shorter=wholeShorter(p.frozen,WhyTone.lowFactor(p.shotParams),size);
-            if(hybrid&&flagsTex!=null){
-                p.sunBloom=sunBloom(flagsTex,size,shorter);p.sunBloomSize=p.sunBloom!=null?new Point(size):null;p.sunBloomBlock=shareBlock(shorter);
+            // WhyV2Tone only releases these two maps. WhyCombine is their image consumer.
+            final boolean v2Maps = (hybrid && flagsTex != null || opposed) && p.hasWhyV2Tone();
+            final boolean skipMaps = v2Maps && !PostGlMode.legacy() && !ScamDiagnostics.active()
+                    && PreferenceKeys.scamDevSwitch("post_skip_unused_sun", false);
+            final long mapsStarted = v2Maps ? System.nanoTime() : 0L;
+            if (!skipMaps) {
+                final int shorter=wholeShorter(p.frozen,WhyTone.lowFactor(p.shotParams),size);
+                if(hybrid&&flagsTex!=null){
+                    p.sunBloom=sunBloom(flagsTex,size,shorter);p.sunBloomSize=p.sunBloom!=null?new Point(size):null;p.sunBloomBlock=shareBlock(shorter);
+                }
+                // P378: the low-chroma glow round a light «Inpaint opposed» rebuilt lands on white in WhyCombine (with the flags or without)
+                if(opposed){
+                    p.opposedShare=opposedShare(p,input,flagsTex,cc,size,shorter);
+                    p.opposedShareSize=p.opposedShare!=null?new Point(size):null;p.opposedShareBlock=shareBlock(shorter);
+                }
             }
-            // P378: the low-chroma glow round a light «Inpaint opposed» rebuilt lands on white in WhyCombine (with the flags or without)
-            if(opposed){
-                p.opposedShare=opposedShare(p,input,flagsTex,cc,size,shorter);
-                p.opposedShareSize=p.opposedShare!=null?new Point(size):null;p.opposedShareBlock=shareBlock(shorter);
-            }
+            if (v2Maps) com.scamera.app.util.Log.i("PERF", "WHY V2 highlight maps skipped=" + skipMaps
+                    + " submit_us=" + (System.nanoTime() - mapsStarted) / 1_000);
             final String chromaLog=chromaNear!=null?chromaNear.size.x+"x"+chromaNear.size.y+" block "+block:"neutral";
             // Clip band: the dashed orange/blue line where a slanted clip edge alternates between clipped-mean and
             // unclipped-sample colours (assets/shaders/scamhdr/clipband.glsl). pref_scam_hybrid_highlight_band 0..1.

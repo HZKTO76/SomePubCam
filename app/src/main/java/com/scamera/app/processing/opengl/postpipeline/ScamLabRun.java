@@ -465,7 +465,8 @@ public final class ScamLabRun {
         }
         final Map<String, Float> reference = new HashMap<>(devLines(shot));
         final Map<String, Float> candidate = new HashMap<>(reference);
-        for (String key : new String[]{"post_gpu_timer", "post_gpu_pace", "post_band_ms", "post_pbo_ring", "hybrid_fm_ahb"}) {
+        for (String key : new String[]{"post_gpu_timer", "post_gpu_pace", "post_band_ms", "post_pbo_ring",
+                "post_stream_gl_state", "post_skip_unused_sun", "hybrid_fm_ahb"}) {
             reference.remove(key);
             candidate.remove(key);
             if (now.containsKey(key)) candidate.put(key, now.get(key));
@@ -522,7 +523,8 @@ public final class ScamLabRun {
         boolean returned = false;
         try {
             ScamHybridBurst.loadLearned(context); // P377: the same-result variants this driver died on, before the burst's tuning
-            final ScamLabBurst burst = new ScamLabBurst(ScamLab.burstOf(shot.dir), crop, shot.meta.optString("tuningBurst", ""));
+            // Replay timings should use the live shot's work, without saving the lab's intermediate stage images.
+            final ScamLabBurst burst = new ScamLabBurst(ScamLab.burstOf(shot.dir), crop, shot.meta.optString("tuningBurst", ""), check == null);
             // what the worker merges with: the tuning file (the burst's own lines last, the last value of a name wins) and the CRE
             // source, a job marker beside it (ScamNeuralClient)
             final String tuning = effective(burst.settingsTuning() + burst.burstTuning()) + " creSource " + PreferenceKeys.getScamCreSource();
@@ -531,7 +533,10 @@ public final class ScamLabRun {
             final long t0 = System.nanoTime();
             rgb = ScamNeuralClient.processScamBurst(context, burst);
             final long t1 = System.nanoTime();
-            if (check != null) check.merge(rgb, ScamHybridBurst.lastEffectiveFrames, ScamHybridBurst.lastMergeFrames);
+            if (check != null) {
+                if (rgb == null) throw new IOException(Lang.t("Склейка не вернула результат", "The merge returned no result"));
+                check.merge(rgb, ScamHybridBurst.lastEffectiveFrames, burst.effectiveMap(), ScamHybridBurst.lastMergeFrames);
+            }
             map = frameMap(ScamHybridBurst.lastEffectiveFrames, burst.outputWidth(), burst.outputHeight(), shot.orient);
             final ScamMergeStages stages = ScamNeuralClient.lastStages;
             ScamNeuralClient.lastStages = null;

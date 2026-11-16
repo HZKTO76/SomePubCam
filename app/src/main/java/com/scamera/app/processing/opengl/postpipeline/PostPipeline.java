@@ -900,6 +900,12 @@ public class PostPipeline extends GLBasePipeline {
         return new Node[]{new WhyV2Stats(), sharpen, new WhyV2Highlights(), new WhyV2Fusion(), new WhyV2Tone()};
     }
 
+    /** Uses the assembled route, including the fallbacks for film and large grids. */
+    boolean hasWhyV2Tone() {
+        for (Node node : passList) if (node instanceof WhyV2Tone) return true;
+        return false;
+    }
+
     /**
      * P614: whether this shot takes «Why тон» V2 - the press's choice ({@code look}, ShotLook.toneV2; the settings now without
      * one), never with a film of the old route ({@code film} set and not {@code referenceFilm}: its scene feed is V1's) nor on a

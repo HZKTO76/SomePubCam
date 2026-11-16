@@ -1477,15 +1477,18 @@ public class ScamProcessor extends ProcessorBase {
     static void appendDngPreview(Path dng, Bitmap photoSmall, int cameraRotation, boolean p3) {
         final long started = System.nanoTime();
         final Bitmap sensor = com.scamera.app.processing.PhotoThumbnail.dngSource(photoSmall, cameraRotation);
-        final byte[] jpeg = com.scamera.app.processing.PhotoThumbnail.jpeg(sensor, 90);
-        final boolean ok = jpeg != null && com.scamera.app.processing.DngPreview.append(dng, jpeg, sensor.getWidth(),
-                sensor.getHeight(), p3 ? com.scamera.app.processing.DngPreview.COLOUR_UNKNOWN
-                        : com.scamera.app.processing.DngPreview.COLOUR_SRGB,
-                com.scamera.app.processing.DngMetadata.software());
-        final String size = sensor == null ? "" : sensor.getWidth() + "x" + sensor.getHeight();
-        if (sensor != null) sensor.recycle();
-        Log.i(TAG, "DNG preview " + (ok ? size + " " + jpeg.length / 1024 + " KB" : "not written")
-                + " in " + (System.nanoTime() - started) / 1000000 + " ms");
+        try {
+            final byte[] jpeg = com.scamera.app.processing.PhotoThumbnail.jpeg(sensor, 90);
+            final boolean ok = jpeg != null && com.scamera.app.processing.DngPreview.append(dng, jpeg, sensor.getWidth(),
+                    sensor.getHeight(), p3 ? com.scamera.app.processing.DngPreview.COLOUR_UNKNOWN
+                            : com.scamera.app.processing.DngPreview.COLOUR_SRGB,
+                    com.scamera.app.processing.DngMetadata.software());
+            final String size = sensor == null ? "" : sensor.getWidth() + "x" + sensor.getHeight();
+            Log.i(TAG, "DNG preview " + (ok ? size + " " + jpeg.length / 1024 + " KB" : "not written")
+                    + " in " + (System.nanoTime() - started) / 1000000 + " ms");
+        } finally {
+            if (sensor != null && sensor != photoSmall) sensor.recycle();
+        }
     }
 
     /** P681: the media scanner reads the shot's DNG once, when nothing is appended to it any more (DngReport). */
@@ -2059,6 +2062,7 @@ public class ScamProcessor extends ProcessorBase {
                 : Math.round(PreferenceKeys.scamDevNumber("lofic_blend", LoficMerge.BLEND_NOISE)) == LoficMerge.BLEND_RAMP
                 ? LoficMerge.BLEND_RAMP : LoficMerge.BLEND_NOISE;
         final LoficMerge.Stats[] stats = new LoficMerge.Stats[pairs.size()];
+        final long mergeStarted = android.os.SystemClock.elapsedRealtime();
         com.scamera.app.util.ParallelWork.forEach(pairs.size(), i -> {
             final ImageFrame f = pairs.get(i);
             final int rows = Math.min(f.height, f.lofic.rows);
@@ -2066,6 +2070,8 @@ public class ScamProcessor extends ProcessorBase {
             final float offset = Float.isFinite(f.noiseOffset) && f.noiseOffset >= 0 ? f.noiseOffset : 1e-7f;
             stats[i] = LoficMerge.merge(f.buffer, f.lofic.shortPacked, f.width, rows, ks[i], slope, offset, e, blend);
         });
+        Log.i("PERF", "LOFIC pairs=" + pairs.size() + " setup_ms=" + (mergeStarted - started)
+                + " merge_ms=" + (android.os.SystemClock.elapsedRealtime() - mergeStarted));
         for (int i = 0; i < pairs.size(); i++) {
             pairs.get(i).lofic = null;
             Log.i("SCAM_HDR", "LOFIC pair " + i + " (frame " + pairs.get(i).number
@@ -2088,7 +2094,10 @@ public class ScamProcessor extends ProcessorBase {
      */
     static void loficResult(Parameters p, ByteBuffer rgb) {
         final boolean half = com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastRgbHalf;
+        final long started = android.os.SystemClock.elapsedRealtime();
         LoficMerge.scale(rgb, half, p.loficLog2);
+        Log.i("PERF", "LOFIC RGB " + (half ? "FP16" : "FP32") + " scale_ms="
+                + (android.os.SystemClock.elapsedRealtime() - started));
         final float h = (float) Math.scalb(1.0, p.loficLog2);
         com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastBentoApplied = true;
         com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom =

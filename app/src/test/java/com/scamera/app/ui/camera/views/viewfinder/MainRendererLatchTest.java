@@ -1,6 +1,5 @@
 package com.scamera.app.ui.camera.views.viewfinder;
 
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -29,16 +28,26 @@ public class MainRendererLatchTest {
      */
     @Test
     public void noLatchWithoutAContext() throws Exception {
-        assertFalse(MainRenderer.latchable(true, true, false));
-        assertFalse(MainRenderer.latchable(false, true, true));
-        assertFalse(MainRenderer.latchable(true, false, true));
-        assertTrue(MainRenderer.latchable(true, true, true));
-        final String latch = body(src(), "private synchronized void latchIsp()");
-        final int check = latch.indexOf("latchable(ispPending, glReady, !android.opengl.EGL14.EGL_NO_CONTEXT.equals(android.opengl.EGL14.eglGetCurrentContext()))");
-        final int update = latch.indexOf("ispSurface.updateTexImage();");
+        final String latch = body(src(), "private void latchIsp(boolean queued)");
+        final int check = latch.indexOf("queued && android.opengl.EGL14.EGL_NO_CONTEXT.equals(android.opengl.EGL14.eglGetCurrentContext())");
+        final int update = latch.indexOf("surface.updateTexImage();");
+        final int clear = latch.indexOf("ispPending = false;");
         assertTrue("the context is checked before the latch", check > 0 && update > check);
         assertTrue("a failed latch is caught", latch.indexOf("catch (RuntimeException e)", update) > update);
-        assertTrue("ispPending is cleared only after a latch", latch.indexOf("ispPending = false;") > latch.indexOf("catch (RuntimeException e)"));
+        assertTrue("a frame arriving during the latch stays pending", clear > check && clear < update);
+        assertTrue("failed work remains pending", latch.indexOf("ispPending = true;", update) > update);
+    }
+
+    @Test
+    public void callbacksCoalesceOnlyForTheCurrentSurface() throws Exception {
+        final String s = src();
+        final String callback = body(s, "public void onFrameAvailable(SurfaceTexture st)");
+        assertTrue(callback.contains("if (st != ispSurface || ispLatchTask == null) return;"));
+        assertTrue(callback.contains("if (latchOnly && !ispLatchQueued)"));
+        final String queued = body(s, "private void latchQueuedIsp(SurfaceTexture surface)");
+        final int check = queued.indexOf("if (surface != ispSurface || ispLatchTask == null) return;");
+        assertTrue(check > 0 && check < queued.indexOf("ispLatchQueued = false;"));
+        assertTrue(queued.contains("latchIsp(true);"));
     }
 
     /** Missed bug: each new context made a new SurfaceTexture and left the old one (its BufferQueue, the last preview buffer). */
@@ -48,7 +57,7 @@ public class MainRendererLatchTest {
         final int release = created.indexOf("old.release();");
         assertTrue(created.indexOf("final SurfaceTexture old = ispSurface;") > 0 && release > 0);
         assertTrue(created.indexOf("old.setOnFrameAvailableListener(null);") < release);
-        assertTrue("before the new one is made", release < created.indexOf("ispSurface = new SurfaceTexture(ispTex);"));
+        assertTrue("before the new one is made", release < created.indexOf("new SurfaceTexture(ispTex);"));
     }
 
     /**

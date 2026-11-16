@@ -63,7 +63,7 @@ public final class DevKeys {
             "jpeg_stream", // P483: the JPEG encoded from the mapped readback (the same bytes)
             "hybrid_fm_out_tile", "hybrid_fm_guide_cells", "hybrid_fm_lattice_tiled", "hybrid_fm_keep_context", "hybrid_fm_chroma_fused", "hybrid_fm_ahb", // P712: speed only (the same photo)
             "jpeg_stream_marks", // P642: the watermark and the ES / L stamp drawn into the streamed JPEG's rows (the same file)
-            "jpeg_stream_tiles", "jpeg_stream_combine", // P713: the JPEG encoded while the GPU draws the later tiles (the same file)
+            "jpeg_stream_tiles", "jpeg_stream_combine", "post_stream_gl_state", "post_skip_unused_sun",
             "sharpen_stripes", // P713: the sharpening above 100 MP on stripes (the same plane, less memory)
             "prewarm_give_up", // P656: whether a prewarm that keeps crashing is run (speed only: the shot compiles the same programs)
             "ahb_transport", // P482: the merge RGB in the app's hardware buffer instead of the memfd (the same bytes)
@@ -417,8 +417,8 @@ public final class DevKeys {
                 "«Fast», 50 / 200 MP in row bands: one GPU context for every band of the merge, the programs not loaded again for each band - the same photo, faster (off: as before)")));
         k.add(s(merge, "hybrid_fm_chroma_fused", true, Lang.t("Quad / Tetra: медиана цветности считает пары окон (по строкам, затем по столбцам) за один проход GPU - тот же снимок быстрее (выкл. - как раньше)",
                 "Quad / Tetra: the chroma median makes its window pairs (along the rows, then the columns) in one GPU pass - the same photo, faster (off: as before)")));
-        k.add(n(merge, "hybrid_fm_ahb", "3", Lang.t("«Быстрый»: где лежат буферы склейки на GPU - чтения результата (1) и загрузки RAW (2) в аппаратных буферах (3 как раньше, 0 оба в памяти драйвера); для сравнения времени выхода и распаковки (снимок тот же)",
-                "«Fast»: where the merge's GPU buffers live - the result's readback (1) and the RAW upload (2) in hardware buffers (3 as before, 0 both in the driver's memory); to compare the output's and the unpack's time (the same photo)")));
+        k.add(n(merge, "hybrid_fm_ahb", "3", Lang.t("«Быстрый»: 1 — чтение через аппаратный буфер, 2 — загрузка RAW через него, 3 — оба (по умолчанию), 0 — память драйвера. 7 — как 3, с запуском распаковки перед ожиданием следующего буфера RAW",
+                "Fast merge: 1 uses hardware buffers for readback, 2 for RAW upload, 3 for both (default), 0 for driver storage. 7 uses the same buffers as 3 and queues unpack before waiting for the next RAW buffer")));
         k.add(n(merge, "hybrid_fast_night_motion", "1", Lang.t("«Быстрый» ночью: кадр, который вокруг точки отличается от базового сильнее шума, там не склеивается - листва на ветру и проезжающая машина не просвечивают, неподвижные места очищаются как раньше; днём без изменений (1 вкл., 0 как раньше; 0..1)",
                 "«Fast» at night: a frame that differs from the base around a pixel beyond the noise is not merged there - wind-blown leaves and a passing car are no longer see-through, static areas are cleaned as before; by day unchanged (1 on, 0 as before; 0..1)")));
         k.add(n(merge, "hybrid_us_weak_hom", "1", Lang.t("«Качество», ночь: короткий кадр, у которого выравнивание нашло мало точек, начинает со своей гомографии, а не со сдвига всего кадра - фонари у края кадра на месте, без серого овала и призрачной дуги (1 вкл., 0 как раньше)",
@@ -940,6 +940,10 @@ public final class DevKeys {
         // P713: the streamed JPEG's strips encoded while the GPU draws the later tiles, the WHY combine drawn beside them
         k.add(s(post, "jpeg_stream_tiles", true, Lang.t("JPEG кодируется полосами, пока GPU рисует следующие плитки (тот же файл). Выкл — кодирование после чтения всего кадра, как раньше",
                 "The JPEG encoded strip by strip while the GPU draws the next tiles (the same file). Off: the encode after the whole frame is read, as before")));
+        k.add(s(post, "post_stream_gl_state", false, Lang.t("Опыт: переиспользовать состояние GPU между полосами потокового JPEG. Сравнить скорость и JPEG в лаборатории",
+                "Experiment: reuse GPU bindings between streamed JPEG strips. Compare performance and JPEG output in the lab")));
+        k.add(s(post, "post_skip_unused_sun", false, Lang.t("Опыт: пропускать расчёт неиспользуемых карт свечения в WHY V2. Сравнить скорость и JPEG в лаборатории",
+                "Experiment: skip preparing unused glow maps in WHY V2. Compare performance and JPEG output in the lab")));
         k.add(s(post, "jpeg_stream_combine", true, Lang.t("Последний проход тона WHY рисуется полосами рядом с плитками вывода, кодирование начинается раньше (тот же снимок). Выкл — весь проход сразу, как раньше",
                 "The WHY tone's last pass drawn in bands beside the output tiles, so the encode starts earlier (the same photo). Off: the whole pass at once, as before")));
         k.add(s(post, "post_noise_quantile_gpu", true, Lang.t("Ускоренная оценка шума на GPU. При несовместимости используется прежний расчёт на CPU; результат шумоподавления сохраняется",

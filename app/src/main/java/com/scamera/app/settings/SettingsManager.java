@@ -122,19 +122,19 @@ public class SettingsManager {
     }
 
     /** The private file of a scope, with every registered watcher attached. */
-    protected SharedPreferences openPreferences(String area) {
+    protected synchronized SharedPreferences openPreferences(String area) {
         SharedPreferences file = appContext.getSharedPreferences(appContext.getPackageName() + area, Context.MODE_PRIVATE);
         for (SharedPreferences.OnSharedPreferenceChangeListener b : bridges) file.registerOnSharedPreferenceChangeListener(b);
         return file;
     }
 
     /** Detaches the registered watchers from a scope's file (the file itself needs no closing). */
-    protected void closePreferences(SharedPreferences file) {
+    protected synchronized void closePreferences(SharedPreferences file) {
         for (SharedPreferences.OnSharedPreferenceChangeListener b : bridges) file.unregisterOnSharedPreferenceChangeListener(b);
     }
 
     /** Calls the watcher for every change in the global file and in the scoped file currently held; a second add is ignored. */
-    public void addListener(OnSettingChangedListener watcher) {
+    public synchronized void addListener(OnSettingChangedListener watcher) {
         if (watcher == null) throw new IllegalArgumentException("OnSettingChangedListener cannot be null.");
         if (watchers.contains(watcher)) return;
         SharedPreferences.OnSharedPreferenceChangeListener bridge = (file, id) -> watcher.onSettingChanged(this, id);
@@ -150,11 +150,13 @@ public class SettingsManager {
      */
     private SharedPreferences file(String area) {
         if (SCOPE_GLOBAL.equals(area)) return global;
-        if (scoped != null && area.equals(scopedName)) return scoped;
-        if (scoped != null) closePreferences(scoped);
-        scoped = openPreferences(area);
-        scopedName = area;
-        return scoped;
+        synchronized (this) {
+            if (scoped != null && area.equals(scopedName)) return scoped;
+            if (scoped != null) closePreferences(scoped);
+            scoped = openPreferences(area);
+            scopedName = area;
+            return scoped;
+        }
     }
 
     private static Object raw(SharedPreferences file, String id) {

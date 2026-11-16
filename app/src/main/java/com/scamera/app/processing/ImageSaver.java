@@ -322,13 +322,14 @@ public class ImageSaver {
                     if (!written) Log.e(TAG, "JPEG save failed: " + Log.getStackTraceString(failed));
                 }
             } finally {
-                exif.await(); // the helper reads the bitmap: never recycled under it
-                if (recycle && !img.isRecycled()) img.recycle();
+                try {
+                    exif.await(); // the helper reads the bitmap: never recycled under it
+                } finally {
+                    if (recycle && !img.isRecycled()) img.recycle();
+                    if (!written) deleteQuietly(fileToSave);
+                }
             }
-            if (!written) {
-                deleteQuietly(fileToSave);
-                return false;
-            }
+            if (!written) return false;
             final long encoded = System.nanoTime();
             Log.d(TAG, "JPEG encode ms=" + (encoded - started) / 1000000); // P33
             if (exif.await() != null) {
@@ -367,7 +368,7 @@ public class ImageSaver {
         private static void deleteQuietly(Path file) {
             try {
                 Files.deleteIfExists(file);
-            } catch (IOException ignored) {
+            } catch (IOException | RuntimeException ignored) {
                 // nothing more to do about a file that cannot be deleted
             }
         }
@@ -457,10 +458,18 @@ public class ImageSaver {
                     } catch (Throwable t) {
                         Log.e(TAG, "DNG save failed: " + Log.getStackTraceString(new RuntimeException(t)));
                     } finally {
-                        creator.close();
-                        try { done.run(); } catch (RuntimeException e) { Log.e(TAG, "DNG buffer release: " + e); }
-                        out.endedNanos = android.os.SystemClock.elapsedRealtimeNanos();
-                        result.complete(ok);
+                        try {
+                            try {
+                                creator.close();
+                            } finally {
+                                done.run();
+                            }
+                        } catch (RuntimeException | OutOfMemoryError e) {
+                            Log.e(TAG, "DNG writer or buffer release: " + e);
+                        } finally {
+                            out.endedNanos = android.os.SystemClock.elapsedRealtimeNanos();
+                            result.complete(ok);
+                        }
                     }
                 });
             } catch (java.util.concurrent.RejectedExecutionException e) {

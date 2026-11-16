@@ -25,7 +25,7 @@ enum : uint64_t { AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN = 3, AHARDWAREBUFFER_USAG
 #include <condition_variable>
 #include <dirent.h>
 #include <fstream>
-#include <iterator>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sys/stat.h>
@@ -54,6 +54,8 @@ uniform int u_rows;       // rows of this band
 uniform int u_acc_row0;   // the accumulators' first row (row strips; 0 = the whole frame)
 uniform vec3 u_inv_wb;    // 1 / the white balance gains of the merge
 uniform float u_clip;
+uniform bool u_skip_flags;
+uniform bool u_skip_eff;
 // P540 (owner, 2026-11-07: «засветы ... без артефактов»): > 0 = 0.94 x the lowest gain of the valid short frames. Where they
 // carried the light (the final mask, or any value above the base frames' 1) the merge holds measured light up to their clip:
 // flagged there at >= 1 (as before) the app recovered real data channel by channel (lime speckle in a sunlit gilded arch, white
@@ -309,14 +311,16 @@ void main(){
         // refused pixels' partial clip back (the fill had no effect on a Quad stream); the filled light is smooth and kept
         if(af>0.0&&(u_quad_lift>0.0||u_moire>0.0))v=mix(v,vf,af);
         c[k]=v;
-        float cf=b.z/max(b.w,1.0e-6);
-        uint f=0u;
-        bool sd=u_clip_short>0.0&&textureLod(u_hl_final,halfUv(p),0.0).r>0.5;
-        if(clipAt(v.r,sd))f|=1u;
-        if(clipAt(v.g,sd))f|=2u;
-        if(clipAt(v.b,sd))f|=4u;
-        if(cf>0.02&&cf<0.98&&!(sd&&max(v.r,max(v.g,v.b))>1.02))f|=8u; // P540: not over the short frames' measured light
-        fl|=f<<(8u*uint(k));
+        if(!u_skip_flags){
+            float cf=b.z/max(b.w,1.0e-6);
+            uint f=0u;
+            bool sd=u_clip_short>0.0&&textureLod(u_hl_final,halfUv(p),0.0).r>0.5;
+            if(clipAt(v.r,sd))f|=1u;
+            if(clipAt(v.g,sd))f|=2u;
+            if(clipAt(v.b,sd))f|=4u;
+            if(cf>0.02&&cf<0.98&&!(sd&&max(v.r,max(v.g,v.b))>1.02))f|=8u; // P540: not over the short frames' measured light
+            fl|=f<<(8u*uint(k));
+        }
     }
     int o=(yb*u_size.x+q*4)*3/2;
     rgb[o+0]=packHalf2x16(c[0].rg);
@@ -325,9 +329,9 @@ void main(){
     rgb[o+3]=packHalf2x16(c[2].rg);
     rgb[o+4]=packHalf2x16(vec2(c[2].b,c[3].r));
     rgb[o+5]=packHalf2x16(c[3].gb);
-    flags[(yb*u_size.x+q*4)/4]=fl;
+    if(!u_skip_flags)flags[(yb*u_size.x+q*4)/4]=fl;
     // P501: each HALF cell once, by the first OUT pixel over it (p = ceil(h OUT / HALF)); at OUT = 2 HALF the even pixels, as before
-    for(int k=0;k<4;++k){
+    if(!u_skip_eff)for(int k=0;k<4;++k){
         ivec2 p=ivec2(q*4+k,y);
         ivec2 h=p*u_half/u_size;
         if(p==(h*u_size+u_half-ivec2(1))/u_half&&h.x<u_half.x&&h.y<u_half.y)eff[h.y*u_half.x+h.x]=texelFetch(u_frame_weights,h,0).r+1.0;
@@ -800,6 +804,8 @@ public:
     }
     // GPU objects of one merge (the programs stay)
     void freeObjects(){
+        // The staging future is joined before the merge releases its GPU objects, also on error.
+        if(mappedWrite)unmapWrite(mappedWrite);
         if(!fbos.empty())glDeleteFramebuffers(GLsizei(fbos.size()),fbos.data());
         if(!textures.empty())glDeleteTextures(GLsizei(textures.size()),textures.data());
         if(!buffers.empty())glDeleteBuffers(GLsizei(buffers.size()),buffers.data());
@@ -935,17 +941,24 @@ public:
     }
     /** An upload buffer for the CPU's writes (the caller waited for the GPU's last read of it): the AHB's view, else the map. */
     void* mapWrite(GLuint b,size_t offset,size_t bytes){
+        if(mappedWrite)throw std::logic_error("FAST MERGE GPU: an upload buffer is still mapped");
         const auto ah=ahbOf.find(b);
+        void* p=nullptr;
         if(ah!=ahbOf.end()){
-            void* p=nullptr;
-            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,-1,nullptr,&p)!=0||!p)return nullptr;
-            return static_cast<char*>(p)+offset;
+            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,-1,nullptr,&p)!=0)return nullptr;
+            if(!p){ahb.unlock(ah->second,nullptr);return nullptr;}
+            p=static_cast<char*>(p)+offset;
+        }else{
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
+            p=glMapBufferRange(GL_SHADER_STORAGE_BUFFER,GLintptr(offset),GLsizeiptr(bytes),GL_MAP_WRITE_BIT|GL_MAP_UNSYNCHRONIZED_BIT|GL_MAP_INVALIDATE_RANGE_BIT);
         }
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
-        return glMapBufferRange(GL_SHADER_STORAGE_BUFFER,GLintptr(offset),GLsizeiptr(bytes),GL_MAP_WRITE_BIT|GL_MAP_UNSYNCHRONIZED_BIT|GL_MAP_INVALIDATE_RANGE_BIT);
+        if(p)mappedWrite=b;
+        return p;
     }
     bool unmapWrite(GLuint b){
+        if(mappedWrite!=b)return false;
         const auto ah=ahbOf.find(b);
+        mappedWrite=0;
         if(ah!=ahbOf.end())return ahb.unlock(ah->second,nullptr)==0;
         glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
         return glUnmapBuffer(GL_SHADER_STORAGE_BUFFER)==GL_TRUE;
@@ -987,42 +1000,62 @@ public:
             }
             if(!waited)glFinish();
             void* p=nullptr;
-            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,-1,nullptr,&p)!=0||!p)throw std::runtime_error("FAST MERGE GPU: readback buffer not locked");
+            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,-1,nullptr,&p)!=0)throw std::runtime_error("FAST MERGE GPU: readback buffer not locked");
+            struct UnlockRead {
+                Ahb& api;
+                AHardwareBuffer* buffer;
+                ~UnlockRead(){if(buffer)api.unlock(buffer,nullptr);}
+            } unlock{ahb,ah->second};
+            if(!p)throw std::runtime_error("FAST MERGE GPU: readback buffer has no CPU view");
             const auto t1=std::chrono::steady_clock::now();
             use(static_cast<const void*>(p));
             const auto t2=std::chrono::steady_clock::now();
-            ahb.unlock(ah->second,nullptr);
+            const int status=ahb.unlock(unlock.buffer,nullptr);
+            unlock.buffer=nullptr;
+            if(status!=0)throw std::runtime_error("FAST MERGE GPU: readback buffer not unlocked");
             mapMs+=std::chrono::duration<double,std::milli>(t1-t0).count();useMs+=std::chrono::duration<double,std::milli>(t2-t1).count();
             unmapMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t2).count();
             return;
         }
+        struct UnmapRead {
+            GLenum target;
+            GLuint temporary=0;
+            bool mapped=false;
+            ~UnmapRead(){
+                if(mapped)glUnmapBuffer(target);
+                if(temporary)glDeleteBuffers(1,&temporary);
+            }
+            bool unmap(){mapped=false;return glUnmapBuffer(target)==GL_TRUE;}
+        };
         glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
         const void* m=glMapBufferRange(GL_SHADER_STORAGE_BUFFER,0,GLsizeiptr(bytes),GL_MAP_READ_BIT);
         if(!m){glGetError();glFinish();m=glMapBufferRange(GL_SHADER_STORAGE_BUFFER,0,GLsizeiptr(bytes),GL_MAP_READ_BIT);}
         if(m){
+            UnmapRead read{GL_SHADER_STORAGE_BUFFER,0,true};
             const auto t1=std::chrono::steady_clock::now();
             use(m);
             const auto t2=std::chrono::steady_clock::now();
-            if(!glUnmapBuffer(GL_SHADER_STORAGE_BUFFER))throw std::runtime_error("FAST MERGE GPU storage invalidated");
+            if(!read.unmap())throw std::runtime_error("FAST MERGE GPU storage invalidated");
             mapMs+=std::chrono::duration<double,std::milli>(t1-t0).count();useMs+=std::chrono::duration<double,std::milli>(t2-t1).count();
             unmapMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t2).count();
             return;
         }
         glGetError();
-        GLuint tmp=0;glGenBuffers(1,&tmp);
-        glBindBuffer(GL_COPY_READ_BUFFER,b);glBindBuffer(GL_COPY_WRITE_BUFFER,tmp);
+        UnmapRead read{GL_COPY_WRITE_BUFFER};
+        glGenBuffers(1,&read.temporary);
+        glBindBuffer(GL_COPY_READ_BUFFER,b);glBindBuffer(GL_COPY_WRITE_BUFFER,read.temporary);
         glBufferData(GL_COPY_WRITE_BUFFER,GLsizeiptr(bytes),nullptr,GL_DYNAMIC_READ);
         glCopyBufferSubData(GL_COPY_READ_BUFFER,GL_COPY_WRITE_BUFFER,0,0,GLsizeiptr(bytes));
         glFinish();
         m=glMapBufferRange(GL_COPY_WRITE_BUFFER,0,GLsizeiptr(bytes),GL_MAP_READ_BIT);
-        if(!m){glDeleteBuffers(1,&tmp);throw std::runtime_error("FAST MERGE GPU readback failed ("+std::to_string(bytes)+" bytes)");}
+        if(!m)throw std::runtime_error("FAST MERGE GPU readback failed ("+std::to_string(bytes)+" bytes)");
+        read.mapped=true;
         use(m);
-        const bool ok=glUnmapBuffer(GL_COPY_WRITE_BUFFER)!=GL_FALSE;
-        glDeleteBuffers(1,&tmp);
-        if(!ok)throw std::runtime_error("FAST MERGE GPU storage invalidated");
+        if(!read.unmap())throw std::runtime_error("FAST MERGE GPU storage invalidated");
     }
     std::string cacheNote() const {return std::to_string(cacheHits)+"/"+std::to_string(kProgs-1)+" from the cache";} // P480: pHlMaskOut not at init
 private:
+    GLuint mappedWrite=0;
     void cleanup() noexcept {
         if(display==EGL_NO_DISPLAY)return;
         if(context!=EGL_NO_CONTEXT&&eglMakeCurrent(display,surface,surface,context)){
@@ -1048,15 +1081,19 @@ private:
         return cacheDir+"/"+name;
     }
     GLuint loadBinary(const std::string& file){
-        std::ifstream in(file,std::ios::binary);
-        if(!in)return 0;
-        std::vector<char> data((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
-        if(data.size()<=sizeof(GLenum))return 0;
+        std::ifstream in(file,std::ios::binary|std::ios::ate);
+        constexpr std::streamoff header=sizeof(GLenum);
+        const std::streamoff length=in.tellg();
+        if(length<=header||length-header>std::numeric_limits<GLsizei>::max())return 0;
+        in.seekg(0);
+        std::vector<char> data(static_cast<size_t>(length));
+        if(!in.read(data.data(),length))return 0;
         GLenum format=0;std::memcpy(&format,data.data(),sizeof(format));
         GLuint program=glCreateProgram();
         glProgramBinary(program,format,data.data()+sizeof(format),GLsizei(data.size()-sizeof(format)));
         GLint ok=0;glGetProgramiv(program,GL_LINK_STATUS,&ok);
-        if(!ok||glGetError()!=GL_NO_ERROR){glDeleteProgram(program);std::remove(file.c_str());return 0;}
+        const GLenum error=glGetError();
+        if(!ok||error!=GL_NO_ERROR){glDeleteProgram(program);std::remove(file.c_str());return 0;}
         ++cacheHits;
         utime(file.c_str(),nullptr); // P501: a hit is fresh for trimCache (least recently used goes first)
         return program;

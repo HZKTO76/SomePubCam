@@ -102,6 +102,16 @@ public class ShotTimelineTest {
         assertFalse("every stage is there", s.contains("=-1"));
     }
 
+    @Test public void shutterToSaveExcludesPrespawnAndTeardown() throws Exception {
+        ShotTimeline.attach(null);
+        ShotTimeline.markAt("prespawn", 1_000_000_000L);
+        ShotTimeline.markAt("shutter", 3_483_000_000L);
+        ShotTimeline.markAt("saved", 9_517_000_000L);
+        ShotTimeline.markAt("gl_teardown", 9_519_000_000L);
+        final String summary = processing().summary();
+        assertTrue(summary, summary.endsWith(" total=8519 shutter_to_save=6034"));
+    }
+
     /** P440: the plain merge's chroma sink end and the first Mochi frame from the lines the worker prints today. */
     @Test public void plainChromaAndMochiLinesMarkTheirStages() throws Exception {
         ShotTimeline.attach(null);

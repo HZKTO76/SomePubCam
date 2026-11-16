@@ -2,6 +2,12 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 — Stability and large screens
+
+- The gallery responds immediately after a pinch. The grid adapts to the window width.
+- Camera and settings layouts adapt to tablets and foldables.
+- Fixed issues when opening the camera, processing RAW, and saving photos.
+
 ## 2026-11-16 — Camera layout and processing
 
 - Camera controls stay within compact screens and clear display cutouts.

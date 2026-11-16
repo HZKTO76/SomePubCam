@@ -33,8 +33,6 @@ public class SurfaceViewOverViewfinder extends SurfaceView {
     private static final int[][] HIST_ARGB = {{0xDD, 0xFF, 0x1A, 0x1A}, {0xDD, 0x1A, 0xD4, 0x2A}, {0xDD, 0x2A, 0x55, 0xFF}};
 
     private final SurfaceHolder holder;
-    /** The screen's long : short side: a tall screen starts the debug table higher. */
-    private final float screenAspect;
     private final float dp;
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint debugPaint = new TextPaint(TextPaint.ANTI_ALIAS_FLAG);
@@ -73,14 +71,14 @@ public class SurfaceViewOverViewfinder extends SurfaceView {
         holder = getHolder();
         holder.setFormat(PixelFormat.TRANSPARENT);
         final android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-        screenAspect = (float) Math.max(metrics.heightPixels, metrics.widthPixels) / Math.min(metrics.heightPixels, metrics.widthPixels);
         dp = metrics.density;
 
         gridPaint.setColor(0x47FFFFFF); // P583: the concept's grid, rgba(255, 255, 255, .28), one dp wide
         gridPaint.setStrokeWidth(Math.max(1f, dp));
 
         debugPaint.setColor(Color.WHITE);
-        debugPaint.setTextSize(25);
+        debugPaint.setTextSize(9f * dp);
+        debugPaint.setTypeface(com.scamera.app.ui.style.Fonts.of(getContext(), com.scamera.app.ui.style.Fonts.REGULAR));
         debugPaint.setTextAlign(Paint.Align.LEFT);
         regionPaint.setStyle(Paint.Style.STROKE);
         regionPaint.setStrokeWidth(3);
@@ -325,11 +323,12 @@ public class SurfaceViewOverViewfinder extends SurfaceView {
         region(canvas, aeRegion, Color.YELLOW);
         final String text = debugText;
         if (text == null) return;
-        int y = screenAspect > 16 / 9f ? 50 : 180; // whole pixels: each line's height is cut to them
+        final float inset = 12f * dp;
+        float y = Math.max(inset, columnTopPx) - debugPaint.ascent();
         final float lineHeight = debugPaint.descent() - debugPaint.ascent();
         for (String line : text.split("\n")) {
             debugPaint.setColor(line.contains("AF_RECT") ? Color.GREEN : line.contains("AE_RECT") ? Color.YELLOW : Color.WHITE);
-            canvas.drawText(line, 50, y, debugPaint);
+            canvas.drawText(line, inset, y, debugPaint);
             y += lineHeight;
         }
     }

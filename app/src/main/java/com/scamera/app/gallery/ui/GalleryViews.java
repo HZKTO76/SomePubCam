@@ -161,6 +161,10 @@ public final class GalleryViews {
      * the grid (the fragment changes its columns).
      */
     public boolean pinch(boolean spread) {
+        return pinch(spread, true);
+    }
+
+    public boolean pinch(boolean spread, boolean animateColumns) {
         if (mode == GalleryLayout.Mode.GRID) return false;
         if (mode == GalleryLayout.Mode.LIST || switching) return true;
         int[] next = GalleryLayout.zoomStep(level, GalleryLayout.timelineColumns(c), spread);
@@ -172,7 +176,7 @@ public final class GalleryViews {
         }
         if (next[1] == GalleryLayout.timelineColumns(c)) return true;
         GalleryLayout.setTimelineColumns(c, next[1]);
-        if (Motion.enabled(grid)) {
+        if (animateColumns && Motion.enabled(grid)) {
             android.transition.ChangeBounds move = new android.transition.ChangeBounds();
             move.setDuration(300);
             move.setInterpolator(Motion.SHEET);
@@ -228,7 +232,7 @@ public final class GalleryViews {
 
     /** The span count of the view (times the screen's width factor; the list is one column). */
     public int columns() {
-        int wf = GalleryUi.widthFactor(c);
+        int wf = GalleryUi.widthFactor(c, grid.getWidth());
         switch (mode) {
             case LIST: return 1;
             case TIMELINE: return level == GalleryLayout.Level.ALL ? GalleryLayout.timelineColumns(c) * wf : wf;
@@ -244,7 +248,7 @@ public final class GalleryViews {
 
     /** The thumbnail size the view's cells need (px; the grid: the cell width, as P498). */
     public int thumbPx() {
-        int width = c.getResources().getDisplayMetrics().widthPixels;
+        int width = GalleryUi.widthPx(c, grid.getWidth());
         if (mode == GalleryLayout.Mode.LIST) return ListRows.thumbPx(c);
         return width / Math.max(1, columns());
     }
@@ -252,6 +256,12 @@ public final class GalleryViews {
     public void updateThumbSize() {
         adapter.setThumbPx(thumbPx());
         GalleryThumb.setGridPx(c, adapter.thumbPx()); // P620: the viewer's first picture asks for the same size
+    }
+
+    /** The fold state and split-screen divider can resize the viewport without recreating the gallery. */
+    public void windowWidthChanged() {
+        if (columns() != layout.getSpanCount()) spans();
+        updateThumbSize();
     }
 
     // ---------------------------------------------------------------- the switch's motion

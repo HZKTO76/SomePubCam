@@ -63,15 +63,6 @@ public class CustomBinding {
         }
     }
 
-    /** A screen up to 16:9: the camera block hangs from the top of the screen (a taller one keeps the layout's anchor). */
-    @BindingAdapter("adjustCameraContainer")
-    public static void anchorCameraBlock(ConstraintLayout block, float screenAspect) {
-        if (screenAspect > 16f / 9) return;
-        final ConstraintLayout.LayoutParams anchor = (ConstraintLayout.LayoutParams) block.getLayoutParams();
-        anchor.topToBottom = ConstraintLayout.LayoutParams.UNSET;
-        anchor.topToTop = ConstraintLayout.LayoutParams.PARENT_ID;
-    }
-
     /**
      * The top bar's margin in dp (pixels and dp must not be mixed). P583 (the concept: the row's items centred 40dp down, the
      * preview 70dp down): on a tall display the 64dp bar starts 6dp down (its row 4dp lower inside it), so the preview starts
@@ -80,7 +71,9 @@ public class CustomBinding {
     @BindingAdapter("adjustTopBar")
     public static void placeTopBar(View bar, float screenAspect) {
         final ConstraintLayout.LayoutParams margins = (ConstraintLayout.LayoutParams) bar.getLayoutParams();
-        margins.topMargin = Math.round((screenAspect > 1.9f ? 6 : 4) * bar.getResources().getDisplayMetrics().density);
+        final int margin = Math.round((screenAspect > 1.9f ? 6 : 4) * bar.getResources().getDisplayMetrics().density);
+        if (margins.topMargin == margin) return;
+        margins.topMargin = margin;
         bar.setLayoutParams(margins);
     }
 

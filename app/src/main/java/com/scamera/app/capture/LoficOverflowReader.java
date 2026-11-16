@@ -44,29 +44,32 @@ final class LoficOverflowReader {
      * frames go only while it is still the session's (an open meanwhile may have made its own).
      */
     void close(@Nullable ImageReader r) {
-        final boolean current = reader == r;
-        if (current) reader = null;
-        if (r != null) try { r.close(); } catch (RuntimeException ignored) { }
-        if (current) synchronized (ring) {
-            ring.clear();
-            mainStats = null;
+        synchronized (ring) {
+            if (reader == r) {
+                reader = null;
+                ring.clear();
+                mainStats = null;
+            }
         }
+        if (r != null) try { r.close(); } catch (RuntimeException ignored) { }
     }
 
     /** The overflow stream's reader at the main RAW's size; false when it cannot be made here (the rung fails at once). */
     boolean open(@Nullable ImageReader raw, @Nullable Handler handler, String physicalID) {
         close();
         if (Build.VERSION.SDK_INT < 33 || raw == null || handler == null) return false;
+        ImageReader overflow = null;
         try {
-            final ImageReader reader = ImageReader.newInstance(raw.getWidth(), raw.getHeight(), ImageFormat.RAW10, 3);
-            reader.setOnImageAvailableListener(r -> {
+            overflow = ImageReader.newInstance(raw.getWidth(), raw.getHeight(), ImageFormat.RAW10, 3);
+            overflow.setOnImageAvailableListener(r -> {
                 Image img = null;
                 try {
                     img = r.acquireNextImage();
                     if (img == null) return;
-                    final Image.Plane plane = img.getPlanes()[0];
-                    final long ts = img.getTimestamp();
                     synchronized (ring) {
+                        if (reader != r) return;
+                        final Image.Plane plane = img.getPlanes()[0];
+                        final long ts = img.getTimestamp();
                         ring.store(ts, plane.getBuffer(), img.getWidth(), img.getHeight(), plane.getRowStride());
                         proof(ts);
                     }
@@ -76,12 +79,15 @@ final class LoficOverflowReader {
                     if (img != null) img.close();
                 }
             }, handler);
-            this.reader = reader;
+            synchronized (ring) {
+                reader = overflow;
+            }
             Log.i("SCAM_CAPTURE", "XIAOMI DCG+LOFIC camera " + physicalID + ": overflow stream " + raw.getWidth() + "x" + raw.getHeight()
                     + " RAW10, use case 0x" + Long.toHexString(LoficPair.USE_CASE) + ", in the repeating request and the stills; its frames"
                     + " are kept by timestamp (8 newest) and proven against the main frames before any is used (P641d)");
             return true;
         } catch (RuntimeException e) {
+            if (overflow != null) close(overflow);
             Log.w("SCAM_CAPTURE", "XIAOMI DCG+LOFIC camera " + physicalID + ": no reader for the overflow stream: " + e);
             return false;
         }
@@ -89,7 +95,8 @@ final class LoficOverflowReader {
 
     /** A checked main frame of a pair session: its blocks wait for (or meet) the overflow frame of its timestamp. */
     void mainFrame(Image img, @Nullable com.scamera.app.processing.RawPayloadCheck.Layout layout, CameraCharacteristics characteristics) {
-        if (reader == null || !XiaomiDualGain.pairWanted() || img.getFormat() != ImageFormat.RAW_SENSOR
+        final ImageReader source = reader;
+        if (source == null || !XiaomiDualGain.pairWanted() || img.getFormat() != ImageFormat.RAW_SENSOR
                 || com.scamera.app.processing.RawLevels.knownBits() < 12) return;
         try {
             final java.nio.ByteBuffer buffer = img.getPlanes()[0].getBuffer();
@@ -100,6 +107,7 @@ final class LoficOverflowReader {
             float black = 0f;
             for (float b : levels.black) black += b / levels.black.length;
             synchronized (ring) {
+                if (reader != source) return;
                 mainStats = LoficPair.stats(samples, img.getWidth(), img.getHeight());
                 mainTs = img.getTimestamp();
                 mainBlack = black;
@@ -130,20 +138,23 @@ final class LoficOverflowReader {
      */
     void attachPartners(List<ImageFrame> normals) {
         final double sessionRatio = XiaomiDualGain.pairRatio();
-        if (reader == null || normals == null || normals.isEmpty()) return;
+        final ImageReader source = reader;
+        if (source == null || normals == null || normals.isEmpty()) return;
         if (!(sessionRatio > 0)) {
             if (XiaomiDualGain.pairWanted()) Log.i("SCAM_HDR", "DCG+LOFIC: the overflow pair is not proven in this session yet: the shot is"
                     + " the DCG frames alone (P641d)");
             return;
         }
         final List<ImageFrame> newest = new ArrayList<>(normals);
+        newest.removeIf(java.util.Objects::isNull);
         newest.sort((a, b) -> Long.compare(b.timestamp, a.timestamp));
         int made = 0, missing = 0;
         final String rung = "lofic-pair";
         synchronized (ring) {
+            if (reader != source) return;
             for (ImageFrame f : newest) {
                 if (made >= 2) break;
-                if (f == null || f.width <= 0 || f.height <= 0) continue;
+                if (f.width <= 0 || f.height <= 0) continue;
                 final LoficPair.Frame o = ring.find(f.timestamp, LOFIC_PAIR_NS);
                 if (o == null || o.width != f.width) { missing++; continue; }
                 // the shot's 16:9 cut of the main frame (Wide169) is the overflow frame's too
