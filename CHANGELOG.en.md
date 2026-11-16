@@ -2,6 +2,10 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-16 — Sabre in DNG
+
+- DNG supports Sabre 1×, 1.5× and 2×, including 50 MP and ISZ with remosaic off.
+
 ## 2026-11-15 (day, 2) — realme 2×
 
 - realme 12 Pro+: the «2×» module (ISZ without remosaic) now takes its exposure from the app (Unspektra AE): the camera set none in this mode, hence the black frame.

@@ -11,7 +11,7 @@
     <string name="prefs_scam_hybrid_resize_px_title">Своё разрешение</string>
     <string name="prefs_scam_hybrid_resize_px_hint">Ширина x высота, в которые впишется фото (4000x3000), или длинная сторона (4000)</string>
     <string name="prefs_scam_hybrid_output_title">Разрешение</string>
-    <string name="prefs_scam_hybrid_output_summary">Сколько пикселей получает фото. 2× даёт больше деталей, но обработка идёт примерно вчетверо дольше.</string>
+    <string name="prefs_scam_hybrid_output_summary">Размер склейки Sabre для фото и склеенного DNG. 2× даёт больше деталей, но обработка идёт примерно вчетверо дольше.</string>
     <string name="prefs_scam_hybrid_processing_title">Режим обработки</string>
     <string name="prefs_scam_hybrid_processing_summary">Как камера собирает снимок из серии кадров. «Быстрый» — фото готово заметно раньше. «Качество» — обработка дольше, зато чище выходят движение, вода и мелкие детали. Каждый режим всегда собирает снимок своим способом и не передаёт его другому — с любыми сенсорами (Quad, Tetra, DCG) и при сбоях GPU.</string>
     <string name="prefs_scam_hybrid_fringe_method_title">Подавление аберраций</string>

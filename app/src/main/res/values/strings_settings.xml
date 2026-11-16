@@ -11,7 +11,7 @@
     <string name="prefs_scam_hybrid_resize_px_title">Own resolution</string>
     <string name="prefs_scam_hybrid_resize_px_hint">Width x height the photo fits in (4000x3000), or its long side (4000)</string>
     <string name="prefs_scam_hybrid_output_title">Resolution</string>
-    <string name="prefs_scam_hybrid_output_summary">How many pixels the photo gets. 2× gives more detail but takes about four times longer to process.</string>
+    <string name="prefs_scam_hybrid_output_summary">Sabre merge size for the photo and merged DNG. 2× gives more detail but takes about four times longer to process.</string>
     <string name="prefs_scam_hybrid_processing_title">Processing mode</string>
     <string name="prefs_scam_hybrid_processing_summary">How the camera builds a photo from its burst. Fast: the photo is ready noticeably sooner. Quality: slower, but motion, water and fine detail come out cleaner. Every mode always makes the photo its own way and never hands it to another, on any sensor (Quad, Tetra, DCG) and through GPU failures.</string>
     <string name="prefs_scam_hybrid_fringe_method_title">Chromatic aberration</string>

@@ -393,8 +393,8 @@ public class ScamHybridBurstAnyResolutionTest {
 
     /**
      * P267 «Наш ремозаик» off (owner, 2026-10-19: «При выкл сохраняй только днг без ремозаика»; «Склейка должны быть, просто без
-     * ремозаика»): a Quad / Tetra stream the app knows is merged at the sensor grid (no 2x) and asks for its merged RAW in the mosaic
-     * layout (dngMosaic 1, the merged-DNG flag); on (default), an unknown block or a frame of partial colour periods merges into a
+     * ремозаика»): a Quad / Tetra stream asks for its merged RAW in its mosaic layout and at the selected Sabre scale.
+     * With remosaic on, an unknown block or a frame of partial colour periods merges into a
      * photo as before; the worker is always told to remosaic its RGB (mosaicRemosaic 1).
      */
     @Test public void withoutTheRemosaicAMosaicShotIsItsMergedMosaicDng() throws Exception {
@@ -420,7 +420,7 @@ public class ScamHybridBurstAnyResolutionTest {
             assertEquals(1, on.dngMosaic());
             assertEquals(2, ((ByteBuffer) header.invoke(on)).getInt(52));
             prefs.when(() -> PreferenceKeys.hybridSwitch("mosaic_remosaic", true)).thenReturn(false);
-            // off, Quad of whole periods: merged on the sensor grid, the merged RAW in the mosaic layout
+            outputMode = "sensor";
             ScamHybridBurst quad = burst(List.of(frame(128, 128, ByteBuffer.allocate(128 * 128 * 2))), parameters(128, 128));
             assertEquals(2, quad.dngMosaic());
             assertEquals(128, quad.outputWidth());
@@ -442,6 +442,40 @@ public class ScamHybridBurstAnyResolutionTest {
             assertEquals(260L * 256, partial.mergedRawPixels());
             assertEquals(1, partial.dngMosaic());
             assertTrue(partial.tuningOverride(), partial.tuningOverride().startsWith("mosaicRemosaic 1\n"));
+        } finally {
+            com.scamera.app.processing.MosaicBlockStore.setShotKey("", -1);
+        }
+    }
+
+    @Test public void mosaicDngUsesTheSabreScaleFor50MpAndIsz() throws Exception {
+        assertEquals(new Point(12288, 9216), ScamHybridBurst.sabreSize(8192, 6144, "1.5x", 2));
+        assertEquals(new Point(12240, 9184), ScamHybridBurst.sabreSize(8160, 6120, "1.5x", 4));
+        assertEquals(new Point(16320, 12240), ScamHybridBurst.sabreSize(8160, 6120, "2x", 4));
+
+        prefs.when(() -> PreferenceKeys.hybridSwitch("mosaic_remosaic", true)).thenReturn(false);
+        prefs.when(PreferenceKeys::cropShot).thenReturn(true);
+        prefs.when(PreferenceKeys::cropUpscale).thenReturn(false);
+        Field merged = ScamHybridBurst.class.getDeclaredField("mergedDng");
+        merged.setAccessible(true);
+        java.lang.reflect.Method header = ScamHybridBurst.class.getDeclaredMethod("header");
+        header.setAccessible(true);
+        try {
+            for (int block : new int[]{2, 4}) {
+                com.scamera.app.processing.MosaicBlockStore.setShotKey("sabre-dng-test", block);
+                for (String mode : new String[]{"sensor", "1.5x", "2x"}) {
+                    outputMode = mode;
+                    int size = "sensor".equals(mode) ? 256 : "1.5x".equals(mode) ? 384 : 512;
+                    ScamHybridBurst b = burst(List.of(frame(256, 256, ByteBuffer.allocate(256 * 256 * 2))), parameters(256, 256));
+                    merged.setBoolean(b, true);
+                    assertEquals(block, b.dngMosaic());
+                    assertEquals((long) size * size, b.mergedRawPixels());
+                    assertEquals(size, b.outputWidth());
+                    assertEquals(size, b.outputHeight());
+                    ByteBuffer encoded = (ByteBuffer) header.invoke(b);
+                    assertEquals(size == 256 ? 0 : 64, encoded.getInt(44) & 64);
+                    assertEquals(block, encoded.getInt(56));
+                }
+            }
         } finally {
             com.scamera.app.processing.MosaicBlockStore.setShotKey("", -1);
         }

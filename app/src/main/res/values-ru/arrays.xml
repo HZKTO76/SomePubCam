@@ -58,8 +58,8 @@
     </string-array>
     <string-array name="scam_hybrid_output_entries">
         <item>1.0× (размер сенсора, по умолчанию)</item>
-        <item>1.5× (≈28 МП)</item>
-        <item>2.0× (≈50 МП)</item>
+        <item>1.5×</item>
+        <item>2.0×</item>
     </string-array>
     <string-array name="scam_hybrid_resize_entries">
         <item>Выкл. (размер склейки)</item>

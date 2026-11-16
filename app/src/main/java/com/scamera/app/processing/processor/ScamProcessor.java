@@ -779,7 +779,7 @@ public class ScamProcessor extends ProcessorBase {
                 processingParameters.scamHdrRawScale=1f;
                 // P656: a YUV shot has no RAW and no DNG (log 7 said «DNG retains the reference RAW» after each YUV merge)
                 Log.i("SCAM_HDR",yuvShot?"YUV merge completed; RGB goes directly to the tone (the camera's colour), no DNG (no RAW frame)."
-                        :"Original model capture completed; RGB goes directly to WB/LSC/tone. DNG retains the reference RAW.");
+                        :"RAW merge completed; RGB goes directly to WB/LSC/tone.");
             } catch(Exception e) {
                 throw new IllegalStateException("SCAM capture failed: "+e.getMessage(),e);
             }
@@ -819,6 +819,7 @@ public class ScamProcessor extends ProcessorBase {
         Path developTarget = null;
         int developDngW = 0, developDngH = 0;
         boolean mergedDngWritten = false;
+        final Point hybridOut = hybridShot && !yuvShot ? com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastOutputSize : null;
         // P646: a YUV shot has no RAW for a DNG («RAW only» saves its photo)
         if (yuvShot && rawSaving >= 1) Log.i(TAG, "DNG: none for a YUV shot (no RAW frame), the photo only");
         if (dngWanted) {
@@ -842,8 +843,12 @@ public class ScamProcessor extends ProcessorBase {
             // mosaic DNG alone (the worker's dngMosaic: the sensor's layout, uncompressed - Scam Remosaic's single-DNG input for its
             // neural remosaic); a merge that gave none (the CPU tier) leaves the reference frame's mosaic as captured.
             final boolean mosaicDng = mosaicDngOnly;
+            final Point sensorSize = processingParameters.rawSize;
+            final Point dngSize = hybridOut != null ? hybridOut : sensorSize;
+            if (scamMergedDng == null && !dngSize.equals(sensorSize))
+                throw new IllegalStateException("The scaled Sabre DNG buffer is unavailable");
             if (mosaicDng) Log.i("SCAM_HDR", "DNG: " + (scamMergedDng != null ? "the merged" : "the reference frame's (no merged RAW)")
-                    + " mosaic " + processingParameters.rawSize.x + "x" + processingParameters.rawSize.y
+                    + " mosaic " + dngSize.x + "x" + dngSize.y
                     + " (no remosaic: the DNG alone, for the neural remosaic of Scam Remosaic)");
             if (scamMergedDng != null) {
                 // The whole burst's merge (the N frames, the bracketed and the ultrashort ones; nothing else, no denoise),
@@ -878,6 +883,9 @@ public class ScamProcessor extends ProcessorBase {
                             single, noiseFactor, headroom, framesKnown ? mergeFrames : 1, 1);
                     processingParameters.dngMosaicBlock = mergedDngBlock;
                     processingParameters.dngMerged = true; // P618: its ImageDescription
+                    processingParameters.rawSize = dngSize;
+                    if (scamMergedDng.remaining() != 2L * dngSize.x * dngSize.y)
+                        throw new IllegalStateException("Merged DNG size does not match the RAW buffer");
                     // P681: beside the post pipeline when memory allows (DngReport.offPostPath); the writer takes every value of
                     // the file now, so the restore below is safe at once, and frees the merged DNG on its thread when it is done
                     if (DngReport.offPostPath(PreferenceKeys.scamDevSwitch("dng_async", true), dngReport.photoFollows,
@@ -894,8 +902,13 @@ public class ScamProcessor extends ProcessorBase {
                                 : ImageSaver.Util.saveStackedRaw(dngPath, scamMergedDng, processingParameters);
                     }
                     mergedDngWritten = imageSaved && !mosaicDng; // P665
-                    Log.i("SCAM_HDR", String.format(java.util.Locale.ROOT, "DNG: merged burst RAW (N, bracketed and ultrashort frames), "
-                            + "16-bit, headroom x%.3f, BaselineExposure %+.2f EV", headroom, processingParameters.dngBaselineExposure));
+                    if (mergedDngWritten) {
+                        developDngW = dngSize.x;
+                        developDngH = dngSize.y;
+                    }
+                    Log.i("SCAM_HDR", String.format(java.util.Locale.ROOT, "DNG: merged burst RAW %dx%d, "
+                            + "16-bit, headroom x%.3f, BaselineExposure %+.2f EV",
+                            dngSize.x, dngSize.y, headroom, processingParameters.dngBaselineExposure));
                     final double[] np = processingParameters.dngNoiseProfile;
                     if (np != null && single != null) Log.i("SCAM_HDR", String.format(java.util.Locale.ROOT, "DNG: NoiseProfile G %.4g / %.4g (frames %s, "
                             + "headroom x%.3f, noise x%.3f; one frame %.4g / %.4g)", np[2], np[3],
@@ -908,6 +921,7 @@ public class ScamProcessor extends ProcessorBase {
                     processingParameters.dngNoiseProfile = null;
                     processingParameters.dngMosaicBlock = 1;
                     processingParameters.dngMerged = false;
+                    processingParameters.rawSize = sensorSize;
                     if (!handedOff) {
                         mergedDng = null;
                         Allocator.free(scamMergedDng);
@@ -954,8 +968,6 @@ public class ScamProcessor extends ProcessorBase {
             // it is not the RGB the pipeline took)
             if (mergedDngWritten && !mosaicDngOnly && rawSaving != 2 && hybridShot) {
                 developTarget = dngPath;
-                developDngW = processingParameters.rawSize.x;
-                developDngH = processingParameters.rawSize.y;
             }
             if (mosaicDngOnly) {
                 try {
@@ -1002,11 +1014,7 @@ public class ScamProcessor extends ProcessorBase {
             output = null;
         }
         ByteBuffer jpegInput = output;
-        // SCAM HDR hybrid on the Sabre 2x grid: the RGB is larger than the sensor grid (the DNG above stayed sensor
-        // size). Like mosaic SR, the pipeline size follows the RGB; the LSC map is sampled in normalised coordinates.
-        // Only a hybrid shot has the hybrid's output size: the static keeps the last hybrid shot's size, which a SCAM HDR
-        // shot (sensor size) must not take (it rendered the SCAM HDR RGB at the 2x size, black).
-        final Point hybridOut = hybridShot && !yuvShot ? com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastOutputSize : null;
+        // The post pipeline follows the merged RGB grid, using the LSC map in normalized coordinates.
         processingParameters.hybridFinalSize = null;
         // P503 «Уменьшить до» (any Sabre scale, 1X too): resized on the GPU at the end of the pipeline (HybridFinalResize); the CPU
         // resize below only remains as a fallback when the pipeline did not apply it.

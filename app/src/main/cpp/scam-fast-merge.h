@@ -2010,7 +2010,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         report("HYBRID CLIP FLAGS: trailer "+std::to_string(OW)+"x"+std::to_string(OH)+" uint8 (fast merge: bits R,G,B merged >= 0.94, border 2..98 % clipped kernel weight) R="
             +std::to_string(counts[0].load())+" G="+std::to_string(counts[1].load())+" B="+std::to_string(counts[2].load())+" border="+std::to_string(counts[3].load()));
     }
-    if(mergedDng&&input.mergedDng){
+    if(hybridWriteSensorDng(input,mergedDng)){
         const int dngBlock=quad&&tune.dngMosaic!=0?mosaicBlock:1; // P267
         if(dngBlock>1)report("HYBRID DNG: merged mosaic layout, colour block "+std::to_string(dngBlock)+" (dngMosaic 1, no remosaic)");
         // P501: OUT != RAW: the OUT pixels over the sensor pixel, area weighted (sabre_scale 2: the mean of its 2 x 2, the SCAM
@@ -2257,7 +2257,7 @@ inline std::vector<float> hybridFastMergeBands(const HybridInput& input,const Hy
     for(int X=0;X<OW;++X){const float w=wsum[size_t(X)];if(w>0.f&&w!=1.f)for(int y=0;y<OH;++y){float* d=out.data()+(size_t(y)*OW+X)*3;d[0]/=w;d[1]/=w;d[2]/=w;}}
     if(effMap)effMap->swap(eff);
     if(clipFlags)clipFlags->swap(clip);
-    if(mergedDng&&input.mergedDng){
+    if(hybridWriteSensorDng(input,mergedDng)){
         const int block=input.mosaic!=0?input.mosaic:hybridMosaicBlock(input,tune,report);
         const int dngBlock=(block==2||block==4)&&tune.dngMosaic!=0?block:1;
         const double kx=double(OW)/W,ky=double(OH)/H;
@@ -2330,7 +2330,8 @@ inline FastRowPlan fastRowPlan(const HybridInput& in,const HybridTuning& tune,in
     const bool hooked=bool(hybridFinalHalvesHook())&&!std::getenv("SCAM_NO_STREAM_OUT");
     const bool wholeFloats=!hooked||mergedDng||outPx*6>(uint64_t(1)<<30);
     const FastMemShape ws=fastShapeOf(in,tune,block,in.h,donors+longs,shorts,wholeFloats,effMap,clipFlags);
-    p.whole=fastMergeBytes(ws)+(ws.floats?0:outPx*6);
+    const bool sabreDng=mergedDng&&in.sabreDngCeiling;
+    p.whole=fastMergeBytes(ws)+(ws.floats?0:outPx*6)+(sabreDng?outPx*2:0);
     p.avail=hybridMemAvailable();
     if(const char* fake=std::getenv("SCAM_FM_MEMAVAIL_MB"))p.avail=uint64_t(std::max(0L,std::atol(fake)))<<20;
     int forcedRows=0;
@@ -2339,9 +2340,9 @@ inline FastRowPlan fastRowPlan(const HybridInput& in,const HybridTuning& tune,in
     if(!p.forced&&(p.avail==0||double(p.whole)<=kFastMemWhole*double(p.avail)))return p;
     // the bands: the frame's outputs (the streamed halves, else the floats; the trailers; a merged DNG's site plane and words) and
     // one band's merge (its float result, no stream)
-    const bool planeDng=mergedDng&&o[0]==in.w&&o[1]==in.h;
+    const bool planeDng=mergedDng&&!sabreDng&&o[0]==in.w&&o[1]==in.h;
     p.fixed=(hooked&&!(mergedDng&&!planeDng)?outPx*6:outPx*12)+(clipFlags?outPx:0)+(effMap?outPx:0)+(hybridHighlightMaskOut()?half*2:0)
-           +(mergedDng?uint64_t(in.w)*in.h*(planeDng?6:2):0);
+           +(sabreDng?outPx*2:mergedDng?uint64_t(in.w)*in.h*(planeDng?6:2):0);
     p.budget=uint64_t(kFastMemBands*double(p.avail));
     auto bandRows=[&](int nb){const int core=(((in.h+nb-1)/nb+kFastRowStep-1)/kFastRowStep)*kFastRowStep;
         return std::min(in.h,core+2*kFastBandMargin);};
@@ -2450,7 +2451,7 @@ inline std::vector<float> hybridFastMergeRowBands(const HybridInput& input,const
         ~Restore(){std::swap(h,hybridFinalHalvesHook());hybridHighlightMaskOut()=m;}} restore{hook,hl};
     if(hl)hl->clear();
     const size_t nOut=size_t(OW)*OH*3;
-    const bool dng=mergedDng&&input.mergedDng,planeDng=dng&&sameGrid;
+    const bool dng=mergedDng&&input.mergedDng,planeDng=dng&&sameGrid&&!input.sabreDngCeiling;
     std::vector<float> out;bool streamed=false;
     if(hook&&!(dng&&!planeDng)&&!std::getenv("SCAM_NO_STREAM_OUT")){out.reserve(nOut);streamed=hook(nullptr,OW,OH,0,-1,out.data());}
     if(!streamed){
@@ -2555,7 +2556,7 @@ inline std::vector<float> hybridFastMergeRowBands(const HybridInput& input,const
     if(clipFlags)clipFlags->swap(clipAll);
     if(effMap)effMap->swap(effAll);
     if(hl&&hlAny)*hl=std::move(hlAll);
-    if(dng){
+    if(hybridWriteSensorDng(input,mergedDng)){
         float headroom=1.f;
         if(planeDng)headroom=hybridWriteMergedDng(*mergedDng,W,H,input,[&](int x,int y,int){return plane[size_t(y)*W+x];},tune.dngDither!=0,dngBlock);
         else {

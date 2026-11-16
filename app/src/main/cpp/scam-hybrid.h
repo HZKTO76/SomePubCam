@@ -88,6 +88,7 @@ struct HybridInput {
     std::array<float,4> black{};
     std::vector<HybridFrame> frames; // frames[0] = base (normal)
     bool diagnostics=false,mergedDng=false;
+    float* sabreDngCeiling=nullptr; // export after the final output resize, using the merge's measured exposure ratios
     bool clipFlags=false; // header flag 4: append the per-pixel clip flags (uint8 per output pixel) after the effective map
     bool strict2x=false; // header flag 8: native 2x samples; no coarse-grid resize or sensor-grid fallback
     // header flag 16 (P187): no effective-frame map - the app reads none at this size (above 100 MP: no denoise); the clip-flags
@@ -1344,6 +1345,12 @@ inline float hybridDngCeiling(const HybridInput& input){
         if(f.role==kRoleUltrashort&&f.exposure>0.f&&std::isfinite(f.exposure))ceiling=std::max(ceiling,1.f/f.exposure);
     return std::min(ceiling,16.f);
 }
+inline bool hybridWriteSensorDng(const HybridInput& input,const std::vector<uint16_t>* dng){
+    if(!dng||!input.mergedDng)return false;
+    if(!input.sabreDngCeiling)return true;
+    *input.sabreDngCeiling=hybridDngCeiling(input);
+    return false;
+}
 /** P215: triangular dither in (-1, 1) code, a fixed function of the site (the same DNG for the same merge). */
 inline float hybridDngDither(int x,int y){
     auto mix=[](uint32_t v){v^=v>>16;v*=0x7feb352dU;v^=v>>15;v*=0x846ca68bU;v^=v>>16;return v;};
@@ -1352,7 +1359,7 @@ inline float hybridDngDither(int x,int y){
 }
 template<class Sample>
 inline float hybridWriteMergedDng(std::vector<uint16_t>& dng,int w,int h,const HybridInput& input,const Sample& sample,bool dither=false,
-                                  int block=1) {
+                                  int block=1,float sabreCeiling=0.f) {
     // P267: block > 1 - the sensor's Quad / Tetra layout (the colour of the b x b block the site is in, the CFA order of the blocks)
     const auto colour=[&input,block](int x,int y){
         x/=block;y/=block;
@@ -1366,7 +1373,7 @@ inline float hybridWriteMergedDng(std::vector<uint16_t>& dng,int w,int h,const H
     // unclipped grey, its white balance (R x 2.5, B x 1.6) made them purple, and the N range kept one bit less (shadow bands).
     // Now no site exceeds the ceiling of hybridDngCeiling, the headroom is the highest site up to it, and a site at the ceiling is
     // written at 65535 = WhiteLevel: the clipped highlights are clipped for the raw converter too.
-    const float ceiling=hybridDngCeiling(input);
+    const float ceiling=sabreCeiling>0.f?sabreCeiling:hybridDngCeiling(input);
     std::mutex peakLock;float peak=1.f;
     mergeRowBands(h,[&](int y0,int y1){
         float local=1.f;
@@ -1381,13 +1388,23 @@ inline float hybridWriteMergedDng(std::vector<uint16_t>& dng,int w,int h,const H
             // comes out at 7.9996..8 of 8 after the weights): written at WhiteLevel, not one code under it
             const float v=sample(x,y,colour(x,y));
             const float m=!std::isfinite(v)?0.f:headroom>=ceiling&&v>=ceiling*0.9999f?1.f:std::clamp(v/headroom,0.f,1.f);
-            const float black=input.black[((y&1)<<1)|(x&1)];
+            const float black=input.black[(((y/block)&1)<<1)|((x/block)&1)];
             // P215: the dither stays off a clipped site (exactly WhiteLevel) and keeps every code inside 0..65535
             const float code=(black+m*(input.white-black))*k+(dither&&m<1.f?hybridDngDither(x,y):0.f);
             dng[size_t(y)*w+x]=uint16_t(std::clamp(std::lround(code),0L,m<1.f?65534L:65535L));
         }
     });
     return headroom;
+}
+
+inline float hybridWriteSabreDng(std::vector<uint16_t>& dng,int w,int h,const HybridInput& input,
+                                 const std::vector<float>& rgb,bool dither,int block,float ceiling){
+    if(rgb.size()!=size_t(w)*h*3)throw std::runtime_error("Sabre DNG: merge output size mismatch");
+    if((block!=1&&block!=2&&block!=4)||w%(2*block)||h%(2*block))
+        throw std::runtime_error("Sabre DNG: incomplete CFA period");
+    return hybridWriteMergedDng(dng,w,h,input,[&](int x,int y,int c){
+        return rgb[(size_t(y)*w+x)*3+c];
+    },dither,block,ceiling);
 }
 
 inline std::string hybridDngReport(float headroom,int w,int h,float ceiling=0.f,bool dither=false){
@@ -16215,7 +16232,8 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
     if(sink){sunk=sink->finish(out.data());in.rowsDone=nullptr;} // P213c: the last rows (the consumer reports its wait itself)
     scam_progress::pass("finish"); // P220: CA, the DNG RAW, the maps and flags of the merged result
     if(caModel.ok&&!caFinished)finishCa();
-    if(grid==2&&mergedDng&&input.mergedDng){ // sensor-grid RGB for the DNG: mean of the 2x2 sub-positions
+    const bool sensorDng=hybridWriteSensorDng(input,mergedDng);
+    if(grid==2&&sensorDng){ // sensor-grid RGB for the DNG: mean of the 2x2 sub-positions
         sensorRgb.assign(size_t(w)*h*3,0.f);
         mergeRowBands(h,[&](int y0,int y1){
             for(int y=y0;y<y1;++y)for(int x=0;x<w;++x)for(int c=0;c<3;++c){
@@ -16236,7 +16254,7 @@ inline std::vector<float> hybridReconstruct(const HybridInput& input,const Hybri
         report(line+(cnt?"  average="+std::to_string(avg/cnt):""));
     }
     // ---- merged Bayer RAW for the DNG (sensor layout, 16 bit over the headroom: P165), from the RGB
-    if(mergedDng&&input.mergedDng){
+    if(sensorDng){
         const std::vector<float>& srcRgb=grid==2?sensorRgb:out;
         const int dx=input.cfa&1,dy=input.cfa>>1;
         const float headroom=hybridWriteMergedDng(*mergedDng,w,h,input,[&](int x,int y,int c){
@@ -18320,7 +18338,7 @@ inline std::vector<float> hybridReconstructMosaic(const HybridInput& input,int b
     if(effMap)effMap->swap(eOut);
     if(clipFlags)clipFlags->swap(cOut);
     // ---- merged Bayer RAW for the DNG (sensor layout, 16 bit over the headroom: P165): every sensor Bayer site from the RGB
-    if(mergedDng&&input.mergedDng){
+    if(hybridWriteSensorDng(input,mergedDng)){
         const int dngBlock=tune.dngMosaic!=0&&(block==2||block==4)?block:1; // P267
         const float headroom=hybridWriteMergedDng(*mergedDng,W,Ht,input,[&](int x,int y,int c){
             return out[(size_t(y*gridOut)*tw+size_t(x*gridOut))*3+c];
@@ -18755,7 +18773,7 @@ inline std::vector<float> hybridReconstructMosaicNativeMerge(const HybridInput& 
     if(effMap)effMap->swap(eOut);
     if(clipFlags)clipFlags->swap(cOut);
     // ---- merged Bayer RAW for the DNG (sensor layout, 16 bit over the headroom: P165): every sensor Bayer site from the RGB
-    if(mergedDng&&input.mergedDng){
+    if(hybridWriteSensorDng(input,mergedDng)){
         const int dngBlock=tune.dngMosaic!=0&&(block==2||block==4)?block:1; // P267
         const float headroom=hybridWriteMergedDng(*mergedDng,W,Ht,input,[&](int x,int y,int c){
             return out[(size_t(y*gridOut)*tw+size_t(x*gridOut))*3+c];
@@ -18922,6 +18940,7 @@ inline std::vector<float> hybridReconstructMosaicBinned(const HybridInput& input
     // ---- the binned burst through the plain merge
     HybridInput bin;bin.w=vw;bin.h=vh;bin.cfa=input.cfa;bin.white=input.white;bin.black=input.black;bin.diagnostics=input.diagnostics;
     bin.mergedDng=input.mergedDng;bin.clipFlags=input.clipFlags;bin.noEffMap=input.noEffMap;bin.grid=gridOut;bin.mosaic=1;bin.subFrames=0;
+    bin.sabreDngCeiling=input.sabreDngCeiling;
     bin.strict2x=input.strict2x;bin.usRowsChecked=true;bin.usFlicker=usFlicker;
     for(size_t k=0;k<pick.size();++k){
         if(usRefused[k])continue; // P197
@@ -18943,7 +18962,7 @@ inline std::vector<float> hybridReconstructMosaicBinned(const HybridInput& input
 // frameCount, white, black[4], flags, baseIndex), frameCount x 32 B frame table (role, exposure ratio to the
 // base, iso, noise slope, noise offset, order ms, flags, reserved), then the uint16 planes in sensor layout.
 struct MappedHybridBurst {
-    void* address=MAP_FAILED;size_t length=0;HybridInput input;bool hybrid=false;
+    void* address=MAP_FAILED;size_t length=0;HybridInput input;bool hybrid=false,sabreDng=false;
     explicit MappedHybridBurst(const std::string& path, bool halfRgb=false) {
         const int fd=openArgument(path,O_RDONLY);
         if(fd<0)throw std::runtime_error("Cannot open SCAM burst");
@@ -18964,6 +18983,7 @@ struct MappedHybridBurst {
             const uint32_t flags=h[11];input.diagnostics=flags&1;input.mergedDng=flags&2;input.clipFlags=flags&4;input.strict2x=flags&8;
             input.noEffMap=flags&16;
             input.dcg=flags&32; // P320
+            sabreDng=input.mergedDng&&(flags&64);
             if(h[1]>=11){ // v11: h[12] = base index (0), h[13] = output grid 1|2, h[14] = colour block 0 (unknown) | 1 | 2 | 4
                 if(h[13]!=0&&h[13]!=1&&h[13]!=2)throw std::runtime_error("Unsupported hybrid output grid");
                 input.grid=h[13]==0?1:int(h[13]);
@@ -18978,7 +18998,9 @@ struct MappedHybridBurst {
                     input.outW=int(ow);input.outH=int(oh);
                 }
             }
-            const uint64_t rgbBytes=streamPixels*uint64_t(input.grid)*input.grid*(halfRgb?6:12);
+            if(sabreDng&&input.grid!=2)throw std::runtime_error("Sabre DNG requires a scaled merge output");
+            const uint64_t outputPixels=input.outW>0?uint64_t(input.outW)*input.outH:streamPixels*input.grid*input.grid;
+            const uint64_t rgbBytes=outputPixels*(halfRgb?6:12);
             if(rgbBytes>uint64_t(INT32_MAX))
                 throw std::runtime_error("Hybrid: "+std::to_string(h[2])+"x"+std::to_string(h[3])+" needs a "+hybridMB(rgbBytes)
                     +" MB result, above 2 GiB: select FP16 or reduce the output grid");

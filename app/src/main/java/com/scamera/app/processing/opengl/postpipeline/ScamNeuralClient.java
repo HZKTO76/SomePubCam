@@ -66,7 +66,7 @@ public final class ScamNeuralClient {
     static final int SHRINK_SLICE = 256 << 20;
 
     /**
-     * The trailers after the RGB ({@code expected} bytes), each optional, in this order: the merged Bayer RAW (sensor grid,
+     * The trailers after the RGB ({@code expected} bytes), each optional, in this order: the merged CFA RAW (DNG grid,
      * {@code rawTrailer} bytes, if requested), the effective-frame map (OUTPUT grid, {@code outTrailer}), the clip flags (OUTPUT
      * grid; SCAM Hybrid, only if requested and only after the map - P187: or with no map asked for, header flag 16). The fullest
      * layout that matches the output's size wins: {dng, eff, clip} bytes, or null when none does.
