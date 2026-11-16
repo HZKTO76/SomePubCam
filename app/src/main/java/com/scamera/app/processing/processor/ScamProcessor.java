@@ -12,6 +12,7 @@ import com.scamera.app.api.Camera2ApiAutoFix;
 import com.scamera.app.api.ParseExif;
 import com.scamera.app.app.ScameraApp;
 import com.scamera.app.capture.CaptureController;
+import com.scamera.app.capture.LoficPair;
 import com.scamera.app.control.GyroBurst;
 import com.scamera.app.processing.ImageFrame;
 import com.scamera.app.processing.LoficMerge;
@@ -1998,8 +1999,8 @@ public class ScamProcessor extends ProcessorBase {
      * the burst merge (LoficMerge) - the Short read is the same moment, pixel-aligned, so it extends the Long frame's highlights
      * with nothing to align; the merged frames then go to our merge as plain N frames. The levels are the streams' own (Long
      * black 1024 / white 16383: the metadata reports them wrongly); k (Long / Short) is measured on each pair. A pair without a
-     * measured k takes the burst's median; with none measured, or no pair adding light over the Long clip, the Long frames go
-     * alone. Sets Parameters.loficLog2.
+     * measured k takes the burst's median when metadata confirms it. Without that confirmation, every frame must carry a
+     * verified Short read to put the entire burst on the same scale. Sets Parameters.loficLog2.
      */
     void loficPremerge(Parameters p, ArrayList<ImageFrame> frames) {
         p.loficLog2 = 0;
@@ -2013,18 +2014,31 @@ public class ScamProcessor extends ProcessorBase {
         final ArrayList<ImageFrame> pairs = new ArrayList<>();
         for (ImageFrame f : frames) if (f != null && f.lofic != null && f.lofic.shortPacked != null && f.buffer != null) pairs.add(f);
         if (pairs.isEmpty()) {
-            Log.w("SCAM_HDR", "LOFIC shot: no frame carries its Short read (no ExposureCount 2 at the press): the Long frames alone,"
+            Log.w("SCAM_HDR", "LOFIC shot: no frame carries a same-grid Short read: the Long frames alone,"
                     + " black " + java.util.Arrays.toString(p.cfaBlack) + " / white " + p.whiteLevel + " (declared " + declaredWhite + ") (P679)");
             return;
         }
         final float[] black = p.cfaBlack.clone();
         final double[] ks = new double[pairs.size()];
+        final boolean verifyShort = pairs.get(0).lofic.verifyShort;
         final long started = android.os.SystemClock.elapsedRealtime();
         com.scamera.app.util.ParallelWork.forEach(pairs.size(), i -> {
             final ImageFrame f = pairs.get(i);
             final int rows = Math.min(f.height, f.lofic.rows);
-            ks[i] = LoficMerge.ratioPlain(f.buffer, f.lofic.shortPacked, f.width, rows, black, 4);
+            if (verifyShort) {
+                final LoficPair.Measure proof =
+                        LoficMerge.measureShort(f.buffer, f.lofic.shortPacked, f.width, rows, black, p.whiteLevel);
+                ks[i] = LoficMerge.verifiedRatio(proof, f.buffer, f.lofic.shortPacked, f.width, rows, black, p.whiteLevel);
+                Log.i("SCAM_HDR", "LOFIC Short verification at " + f.timestamp + ": " + proof + "; accepted k=" + ks[i] + " (P679)");
+            } else {
+                ks[i] = LoficMerge.ratioPlain(f.buffer, f.lofic.shortPacked, f.width, rows, black, 4);
+            }
         });
+        if (verifyShort && (pairs.size() != frames.size() || java.util.Arrays.stream(ks).anyMatch(k -> !(k > 0)))) {
+            for (ImageFrame f : pairs) f.lofic = null;
+            Log.w("SCAM_HDR", "LOFIC shot: Short reads could not be verified for the whole burst; keeping the Long frames (P679)");
+            return;
+        }
         final double median = LoficMerge.median(ks);
         double kMax = 0;
         for (int i = 0; i < ks.length; i++) {
@@ -2041,7 +2055,8 @@ public class ScamProcessor extends ProcessorBase {
             for (ImageFrame f : pairs) f.lofic = null;
             return;
         }
-        final int blend = Math.round(PreferenceKeys.scamDevNumber("lofic_blend", LoficMerge.BLEND_NOISE)) == LoficMerge.BLEND_RAMP
+        final int blend = PreferenceKeys.adaptiveHighlightMerge() ? LoficMerge.BLEND_ADAPTIVE
+                : Math.round(PreferenceKeys.scamDevNumber("lofic_blend", LoficMerge.BLEND_NOISE)) == LoficMerge.BLEND_RAMP
                 ? LoficMerge.BLEND_RAMP : LoficMerge.BLEND_NOISE;
         final LoficMerge.Stats[] stats = new LoficMerge.Stats[pairs.size()];
         com.scamera.app.util.ParallelWork.forEach(pairs.size(), i -> {
@@ -2053,14 +2068,16 @@ public class ScamProcessor extends ProcessorBase {
         });
         for (int i = 0; i < pairs.size(); i++) {
             pairs.get(i).lofic = null;
-            Log.i("SCAM_HDR", "LOFIC pair " + i + " (frame " + pairs.get(i).number + ", ExposureCount 2): " + stats[i] + " (P679)");
+            Log.i("SCAM_HDR", "LOFIC pair " + i + " (frame " + pairs.get(i).number
+                    + (verifyShort ? ", verified from RAW" : ", ExposureCount 2") + "): " + stats[i] + " (P679)");
         }
         // frames of the shot without a Short read (none in a LOFIC shot by construction) would be at the Long scale: left out
         frames.removeIf(f -> f != null && !pairs.contains(f));
         p.whiteLevel = 65535;
         p.loficLog2 = e.headroomLog2;
         p.dngBaselineExposure = e.headroomLog2;
-        Log.i("SCAM_HDR", "LOFIC pairs merged (" + (blend == LoficMerge.BLEND_RAMP ? "the release's fixed ramp" : "noise-weighted")
+        Log.i("SCAM_HDR", "LOFIC pairs merged (" + (blend == LoficMerge.BLEND_ADAPTIVE ? "adaptive highlights"
+                : blend == LoficMerge.BLEND_RAMP ? "the release's fixed ramp" : "noise-weighted")
                 + ") in " + (android.os.SystemClock.elapsedRealtime() - started) + " ms: frames white 65535, the Long clip at 1/"
                 + Math.round(e.headroom) + " of it; the merge's result is scaled back x" + Math.round(e.headroom) + " (P679)");
     }

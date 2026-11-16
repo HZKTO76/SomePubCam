@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""P662: the shipped APK is shrunk by R8 (app/proguard-rules.pro). Every class the app reaches by name must be in its dex:
+"""The shipped APK is shrunk and obfuscated by R8. Every class the app reaches by name must be in its dex:
 manifest components, class names in compiled resource XML (views, preferences, fragments, navigation) and in resource values
-(viewInflaterClass), the Java_* JNI entry points of the native libraries CMake builds, the su launcher's app_process main,
-and the classes a library makes from their Class object (a constructor must be left).
-usage: check_r8_names.py <apk> [<repository>]   (aapt2: $AAPT2, else $ANDROID_HOME/build-tools/36.0.0/aapt2)"""
+(viewInflaterClass), the Java_* JNI entry points and the classes a library instantiates through a Class object.
+usage: check_r8_names.py <apk> [<repository> [<mapping>]]   (aapt2: $AAPT2, else $ANDROID_HOME/build-tools/36.0.0/aapt2)"""
 import glob
 import os
 import re
@@ -147,13 +146,29 @@ def reflective_constructions(repo):
     return out
 
 
-def check(apk, repo, aapt2):
+def renamed_app_classes(mapping, defined):
+    with open(mapping, encoding='utf-8') as entries:
+        return sum(1 for line in entries
+                   if (m := re.fullmatch(r'(com\.scamera\.app\.[^ ]+) -> ([^ ]+):\s*', line))
+                   and m[1] != m[2] and desc(m[2]) in defined)
+
+
+def check(apk, repo, aapt2, mapping=None):
     defined, methods = set(), {}
+    problems, warnings, checked = [], [], 0
     with zipfile.ZipFile(apk) as z:
         for n in z.namelist():
             if re.fullmatch(r'classes\d*\.dex', n):
-                dex_classes(z.read(n), defined, methods)
-    problems, warnings, checked = [], [], 0
+                data = z.read(n)
+                dex_classes(data, defined, methods)
+                for marker in (b'/system/bin/app_process64', b'scam-aec/frida-inject', b'stock-ae/frida-inject'):
+                    if marker in data:
+                        problems.append(f'{n}: retired root code contains {marker.decode()}')
+    if mapping is not None:
+        renamed = renamed_app_classes(mapping, defined)
+        print(f'R8: {renamed} renamed SCAMERA classes in the APK')
+        if not renamed:
+            problems.append('R8 obfuscation did not rename any SCAMERA class in the APK')
     aliases = set()
     manifest = subprocess.run([aapt2, 'dump', 'xmltree', apk, '--file', 'AndroidManifest.xml'], capture_output=True, text=True,
                               check=True).stdout
@@ -167,10 +182,6 @@ def check(apk, repo, aapt2):
         checked += 1
         if desc(name) not in defined:
             problems.append('%s: %s (%s) is not in the dex' % (where, name, what))
-    for cls in ('com.scamera.app.processing.opengl.postpipeline.ScamNeuralWorker',):
-        checked += 1
-        if 'main' not in methods.get(desc(cls), {}):
-            problems.append('su launcher: %s.main is not in the dex (app_process starts it by name)' % cls)
     for simple, where in reflective_constructions(repo):
         checked += 1
         found = [c for c in defined if c.startswith('Lcom/scamera/') and (c.endswith('/' + simple + ';') or c.endswith('$' + simple + ';'))]
@@ -193,8 +204,9 @@ def check(apk, repo, aapt2):
 def main():
     apk = sys.argv[1]
     repo = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    mapping = sys.argv[3] if len(sys.argv) > 3 else None
     aapt2 = os.environ.get('AAPT2') or os.path.join(os.environ.get('ANDROID_HOME', '/opt/android-sdk'), 'build-tools/36.0.0/aapt2')
-    checked, problems, warnings = check(apk, repo, aapt2)
+    checked, problems, warnings = check(apk, repo, aapt2, mapping)
     for w in warnings:
         print('R8 NAMES WARN:', w)
     for p in problems:

@@ -7,6 +7,7 @@
        group right under «Режим обработки» (the everyday «Шумоподавление Resolve» slider stays with the image's six sliders); the rows
        only another mode's merge reads are greyed (SettingsAvailability.routeReason); P644: «Статика» and its group are gone -->
   <PreferenceScreen android:key="scam_hybrid_dnmerge_screen" android:title="@string/prefs_scam_hybrid_dnmerge_screen_title" android:summary="@string/prefs_scam_hybrid_dnmerge_screen_summary" android:icon="@drawable/cs_ic_merge">
+    <com.scamera.app.ui.settings.custompreferences.SegmentedListPreference android:key="pref_scam_hybrid_highlight_merge" android:icon="@drawable/cs_ic_sun" android:title="@string/prefs_scam_hybrid_highlight_merge_title" android:summary="@string/prefs_scam_hybrid_highlight_merge_summary" android:entries="@array/scam_hybrid_highlight_merge_entries" android:entryValues="@array/scam_hybrid_highlight_merge_values" android:defaultValue="classic" />
     <PreferenceCategory android:key="scam_hybrid_nr_merge_category" android:title="@string/prefs_scam_hybrid_nr_merge_category_title" app:iconSpaceReserved="false">
       <SwitchPreferenceCompat android:key="pref_scam_hybrid_denoise" android:title="@string/prefs_scam_hybrid_denoise_title" android:defaultValue="true" app:iconSpaceReserved="false" android:summary="@string/prefs_scam_hybrid_denoise_summary" android:icon="@drawable/cs_ic_noise" />
       <!-- P648 «Подстройка под свет (SNR)»: the post pipeline's strengths follow the shot's SNR (PostSnr); off = as set -->
@@ -802,7 +803,6 @@
       <Preference android:key="pref_camera_package_spoof_help" android:selectable="false" android:title="@string/prefs_camera_package_spoof_help_title" android:summary="@string/prefs_camera_package_spoof_help_summary" />
     </PreferenceScreen>
     <PreferenceScreen android:key="developer_settings_screen" android:title="@string/prefs_developer_settings_screen_title" android:summary="@string/prefs_developer_settings_screen_summary" app:iconSpaceReserved="false" android:icon="@drawable/cs_ic_chip" />
-    <SwitchPreferenceCompat android:key="pref_root_enabled" android:title="@string/prefs_root_enabled_title" android:defaultValue="false" android:summary="@string/prefs_root_enabled_summary" android:icon="@drawable/cs_ic_lock" />
   </PreferenceCategory>
   <PreferenceCategory android:key="root_about" android:title="@string/prefs_root_about_title" app:iconSpaceReserved="false">
     <Preference android:icon="@drawable/cs_ic_info" android:title="@string/app_name" android:key="pref_app_key" android:summary="@string/app_summary" android:selectable="false" />

@@ -47,6 +47,8 @@ public final class GpuPace {
     public static final float DEFAULT_BAND_MS = 10f;
     /** P668: band heights are multiples of this (2 x 2 pixel quads never straddle two bands' starts), and at least this. */
     static final int BAND_STEP = 16;
+    private static final int LEGACY_ADRENO_MIN_BAND_ROWS = 128;
+    private static final java.util.regex.Pattern ADRENO_MODEL = java.util.regex.Pattern.compile("(?i)Adreno\\s*(?:\\(TM\\)\\s*)?(\\d{3})\\b");
 
     /** The GL side, a fake on the host. */
     public interface Gpu {
@@ -89,6 +91,7 @@ public final class GpuPace {
         final int inFlight;
         /** P668: the GPU time a band is sized to (ns); 0: bands as the caller asks. */
         final long bandNs;
+        private final int minBandRows;
         private final ArrayDeque<Block> pending = new ArrayDeque<>();
         long fences, waits, waitedNs, maxWaitNs, givenUp, finishes, finishNs;
         /** P668: when the last block was seen done (its fence signalled), 0 before any. */
@@ -113,10 +116,15 @@ public final class GpuPace {
         }
 
         public Pacer(Gpu gpu, int inFlight, float bandMs, java.util.function.BooleanSupplier hidden) {
+            this(gpu, inFlight, bandMs, hidden, BAND_STEP);
+        }
+
+        Pacer(Gpu gpu, int inFlight, float bandMs, java.util.function.BooleanSupplier hidden, int minBandRows) {
             this.gpu = gpu;
             this.inFlight = Math.max(1, inFlight);
             this.bandNs = bandMs > 0f ? (long) (bandMs * 1e6) : 0L;
             this.hidden = hidden != null ? hidden : () -> false;
+            this.minBandRows = minBandRows;
         }
 
         /** A block was submitted: its fence, then the wait for the oldest beyond {@link #inFlight}. */
@@ -125,10 +133,10 @@ public final class GpuPace {
         }
 
         /** P668: a band of {@code pixels} of the program {@code pass} was submitted (its GPU time is measured when waited for). */
-        public void submitted(String pass, long pixels) {
-            if (hidden.getAsBoolean()) { unpaced++; return; } // P685: the viewfinder paused: nothing to keep smooth
+        public boolean submitted(String pass, long pixels) {
+            if (hidden.getAsBoolean()) { unpaced++; return false; }
             final long f = gpu.fence();
-            if (f == 0) return; // no fence: nothing to pace by
+            if (f == 0) return true; // the commands are still flushed
             fences++;
             pending.addLast(new Block(f, pass, pixels, gpu.nanoTime()));
             while (pending.size() > inFlight) {
@@ -156,6 +164,7 @@ public final class GpuPace {
                 }
                 lastDoneNs = now;
             }
+            return true;
         }
 
         /**
@@ -164,12 +173,12 @@ public final class GpuPace {
          * measurement, without band sizing or when {@code maxRows} is below the step).
          */
         public int bandRows(String pass, int width, int maxRows) {
-            if (bandNs <= 0 || pass == null || width <= 0 || maxRows <= BAND_STEP || hidden.getAsBoolean()) return maxRows;
+            if (bandNs <= 0 || pass == null || width <= 0 || maxRows <= minBandRows || hidden.getAsBoolean()) return maxRows;
             final Float nsPerPixel = NS_PER_PIXEL.get(pass);
             if (nsPerPixel == null || !(nsPerPixel > 0f)) return maxRows;
             final double rows = bandNs / ((double) nsPerPixel * width);
             if (rows >= maxRows) return maxRows;
-            final int r = Math.max(BAND_STEP, (int) rows / BAND_STEP * BAND_STEP);
+            final int r = Math.max(minBandRows, (int) rows / BAND_STEP * BAND_STEP);
             int[] n = narrowed.get(pass);
             if (n == null) {
                 narrowed.put(pass, n = new int[]{r, 0, maxRows});
@@ -230,6 +239,7 @@ public final class GpuPace {
             final StringBuilder bands = new StringBuilder();
             if (bandNs > 0) {
                 bands.append(String.format(Locale.ROOT, "; bands of %.0f ms (%d measured)", bandNs / 1e6, measured));
+                if (minBandRows > BAND_STEP) bands.append(", minimum ").append(minBandRows).append(" rows");
                 if (narrowed.isEmpty()) bands.append(": none narrowed");
                 else {
                     bands.append(", narrowed:");
@@ -261,6 +271,13 @@ public final class GpuPace {
     public static float bandMsFor(float setting) {
         if (Float.isNaN(setting)) return DEFAULT_BAND_MS;
         return setting > 0f ? Math.min(1000f, Math.max(1f, setting)) : 0f;
+    }
+
+    static int minBandRowsFor(String gpu, float bandSetting) {
+        if (!Float.isNaN(bandSetting) || gpu == null) return BAND_STEP;
+        final java.util.regex.Matcher model = ADRENO_MODEL.matcher(gpu);
+        // Older Adreno drivers can spend tens of milliseconds per submitted band even after shrinking it to 16 rows.
+        return model.find() && Integer.parseInt(model.group(1)) <= 640 ? LEGACY_ADRENO_MIN_BAND_ROWS : BAND_STEP;
     }
 
     /** P683: the first-run calibration's profile (GpuProfile) seeded into this process once. */
@@ -301,16 +318,19 @@ public final class GpuPace {
         CURRENT.remove();
         int n;
         float bandMs;
+        int minBandRows = BAND_STEP;
         try {
             final String gpu = android.opengl.GLES20.glGetString(android.opengl.GLES20.GL_RENDERER);
             renderer = gpu != null ? gpu : "";
             n = inFlightFor(com.scamera.app.settings.PreferenceKeys.scamDevNumber("post_gpu_pace", Float.NaN), gpu);
-            bandMs = bandMsFor(com.scamera.app.settings.PreferenceKeys.scamDevNumber("post_band_ms", Float.NaN));
+            final float bandSetting = com.scamera.app.settings.PreferenceKeys.scamDevNumber("post_band_ms", Float.NaN);
+            bandMs = bandMsFor(bandSetting);
+            minBandRows = minBandRowsFor(gpu, bandSetting);
         } catch (RuntimeException | LinkageError e) {
             n = 0;
             bandMs = 0f;
         }
-        if (n > 0) CURRENT.set(new Pacer(GL, n, bandMs, com.scamera.app.ui.camera.views.viewfinder.VfDrawMeter::hiddenNow));
+        if (n > 0) CURRENT.set(new Pacer(GL, n, bandMs, com.scamera.app.ui.camera.views.viewfinder.VfDrawMeter::hiddenNow, minBandRows));
         // P683: the first shot of a process starts from the first-run calibration's ns per pixel (GpuProfile), not from 256 rows
         if (n > 0 && bandMs > 0f && SEEDED.compareAndSet(false, true)) {
             try {
@@ -330,16 +350,15 @@ public final class GpuPace {
         Log.i(TAG, p.summary());
     }
 
-    /** After a block's glFlush on the post's thread; nothing elsewhere. */
-    public static void submitted() {
-        final Pacer p = CURRENT.get();
-        if (p != null) p.submitted();
+    /** Submits a block without a timing sample. */
+    public static void flushBlock() {
+        flushBlock(null, 0L);
     }
 
-    /** P668: after the glFlush of a band of {@code pixels} drawn by the program {@code pass} (measured for its band height). */
-    public static void submitted(String pass, long pixels) {
+    /** Submits a band with one flush, placing its fence first when pacing is active. */
+    public static void flushBlock(String pass, long pixels) {
         final Pacer p = CURRENT.get();
-        if (p != null) p.submitted(pass, pixels);
+        if (p == null || !p.submitted(pass, pixels)) android.opengl.GLES30.glFlush();
     }
 
     /** P668: the next band's rows for the program {@code pass} {@code width} wide - {@code maxRows} unless paced and measured slow. */
@@ -351,9 +370,7 @@ public final class GpuPace {
     /** A block of a pass drawn without a flush of its own (a pass's row loop): flushed and paced while pacing is on, else nothing. */
     public static void block() {
         final Pacer p = CURRENT.get();
-        if (p == null) return;
-        android.opengl.GLES30.glFlush();
-        p.submitted();
+        if (p != null && !p.submitted(null, 0L)) android.opengl.GLES30.glFlush();
     }
 
     /** glFinish of the post: a polled fence while pacing is on, else glFinish. */

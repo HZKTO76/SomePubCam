@@ -192,8 +192,7 @@ public class HybridFinalResize extends Node {
                     com.scamera.app.processing.opengl.GLDrawParams.TILE_ROWS));
             android.opengl.GLES30.glViewport(0, y, target.x, r);
             shaderProg.draw();
-            android.opengl.GLES30.glFlush();
-            com.scamera.app.processing.opengl.GpuPace.submitted(name, (long) target.x * r);
+            com.scamera.app.processing.opengl.GpuPace.flushBlock(name, (long) target.x * r);
             y += r;
         }
     }

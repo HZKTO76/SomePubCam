@@ -187,8 +187,7 @@ public final class GLDeferredDraw {
                     if (columns) GLES30.glViewport(at, 0, n, height);
                     else GLES30.glViewport(0, at, width, n);
                     prog.drawQuad(attribute);
-                    GLES30.glFlush();
-                    GpuPace.submitted(pass, (long) across * n);
+                    GpuPace.flushBlock(pass, (long) across * n);
                     for (int k = at; k < at + n; k++) drawn[k] = true;
                     drawnCount += n;
                     bands++;

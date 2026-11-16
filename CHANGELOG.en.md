@@ -2,6 +2,20 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-16 — Camera layout and processing
+
+- Camera controls stay within compact screens and clear display cutouts.
+- Post-processing optimizations for the LG V50 and other devices with Adreno 640 or older GPUs.
+
+## 2026-11-16 — Highlight merge
+
+- Noise reduction and merge adds an adaptive mode for ghosting and noise where the short exposure blends in.
+
+## 2026-11-16 — FULLRES and LOFIC
+
+- OPPO Find X7 Ultra retries 50 MP modes previously rejected by a camera session error.
+- Xiaomi 17 Ultra merges verified LOFIC short reads in 4:3 and 16:10 even when the camera omits their metadata flag.
+
 ## 2026-11-16 — RAW (DNG)
 
 - RAW (DNG) saves the full-color burst merge at 1×, 1.5× and 2× resolution.

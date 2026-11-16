@@ -329,8 +329,7 @@ public final class WhyMsDenoise extends Node {
             final int n = Math.min(rows - r, com.scamera.app.processing.opengl.GpuPace.bandRows(pass, w, rows - r));
             android.opengl.GLES30.glViewport(0, y + r, w, n);
             shaderProg.draw();
-            android.opengl.GLES30.glFlush();
-            com.scamera.app.processing.opengl.GpuPace.submitted(pass, (long) w * n);
+            com.scamera.app.processing.opengl.GpuPace.flushBlock(pass, (long) w * n);
             r += n;
         }
     }

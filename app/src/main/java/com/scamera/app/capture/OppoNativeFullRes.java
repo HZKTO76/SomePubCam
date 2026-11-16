@@ -921,7 +921,7 @@ public final class OppoNativeFullRes {
      * P214h: the route revision of the trials' stamp (FullResTrials, with Build.FINGERPRINT: a firmware update tries a camera's
      * modes again); a build that changes the route bumps it to try every camera's modes again.
      */
-    static final int ROW_TRIALS = 1;
+    static final int ROW_TRIALS = 2; // native sessions no longer get Vivo SDK keys
 
     /** P214h: the base of a camera's trial keys (the tried count itself, its reasons, its stamp). */
     static String base(String cameraId) {

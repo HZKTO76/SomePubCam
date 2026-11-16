@@ -14,7 +14,6 @@ public final class SettingsAvailability {
     private String heic10Unavailable;
     /** Why «HDR в HEIC / AVIF» cannot act on this phone (processing.color.HdrOutput.unavailableReason: Android 13), or null. */
     private String hdrUnavailable;
-    /** The vivo stock AE observer runs on this phone (capture.ScamStockAe.supportedDevice: the vivo X200 Ultra). */
     /** Why «Цветовой метод» does not act here (a tuned / ISP matrix replaces it), null when it does. */
     private String colorMethodOverride;
     /** The tele's smooth optical zoom exists here (capture.XiaomiTeleZoom.phone: the Xiaomi 17 Ultra); assumed unless told otherwise. */
@@ -46,7 +45,6 @@ public final class SettingsAvailability {
     public SettingsAvailability heic10Unavailable(String reason) { heic10Unavailable = reason; return this; }
     /** The device fact behind «HDR в HEIC / AVIF»: the reason it cannot act here (Android version) or null. */
     public SettingsAvailability hdrUnavailable(String reason) { hdrUnavailable = reason; return this; }
-    /** The device fact behind «Стоковый AE vivo»: the stock AE observer exists on this phone. */
     /** The device fact behind «Цветовой метод»: the matrix that replaces the choice on this phone, or null. */
     public SettingsAvailability colorMethodOverride(String reason) { colorMethodOverride = reason; return this; }
     /** The device fact behind «Плавный оптический зум»: hidden on any other phone than the Xiaomi 17 Ultra. */

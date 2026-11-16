@@ -1249,9 +1249,11 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     if(bento){ // the base highlight mask (§4.5, 0x173dfc): sh060 -> sh087 -> sh016 -> copy into the final mask; validity accum = 0
         g.tex(A::pHlClipDilate,"u_base_bayer",0,bayerBase);g.u4f(A::pHlClipDilate,"u_tex_size",halfSize);
         g.u4f(A::pHlClipDilate,"u_black_level",blackSensor);g.u1f(A::pHlClipDilate,"u_white_level",input.white);
+        g.u1i(A::pHlClipDilate,"u_adaptive_highlights",tune.adaptiveHighlights>0);
         g.draw(A::pHlClipDilate,fHlClip,w2,h2,1);
         g.tex(A::pHlGaussH,"u_input_mask",0,hlClip);g.u4f(A::pHlGaussH,"u_tex_size",halfSize);g.draw(A::pHlGaussH,fHlBlur,w2,h2,1);
-        g.tex(A::pHlGaussV,"u_input_mask",0,hlBlur);g.u4f(A::pHlGaussV,"u_tex_size",halfSize);g.draw(A::pHlGaussV,fHlBase,w2,h2,1);
+        g.tex(A::pHlGaussV,"u_input_mask",0,hlBlur);g.u4f(A::pHlGaussV,"u_tex_size",halfSize);
+        g.u1i(A::pHlGaussV,"u_adaptive_highlights",tune.adaptiveHighlights>0);g.draw(A::pHlGaussV,fHlBase,w2,h2,1);
         g.tex(A::pPass,"u_tex",0,hlBase);g.draw(A::pPass,fHlFinal,w2,h2,1);
         const float one[4]={1,1,1,1};glBindFramebuffer(GL_FRAMEBUFFER,fHlAccum);glClearBufferfv(GL_COLOR,0,one); // P497: MIN below
     }
@@ -1355,6 +1357,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
             g.u4f(A::pShortRecover,"u_black_level",blackSensor);g.u1f(A::pShortRecover,"u_white_level",input.white);
             g.u4f(A::pShortRecover,"u_wb_gains",wb[0],wb[1],wb[2],1.f);
             g.u1i(A::pShortRecover,"u_block",hlBlock);g.u1i(A::pShortRecover,"u_row1",0); // P686: Quad / Tetra cells of one colour
+            g.u1f(A::pShortRecover,"u_adaptive_gain",tune.adaptiveHighlights>0?lf.ev:0.f);
+            g.u2f(A::pShortRecover,"u_short_noise",std::max(0.f,fr.slope),std::max(0.f,fr.offset));
             lutFrame=&fr;frontEnd(fr.raw,sf.bayer,sf.fGuide,sf.guide,pyrC,fPyrC,next,lf.ev,fr.slope,fr.offset,bayerCur);
         } else {lutFrame=&fr;frontEnd(fr.raw,slotBayer[slot],slotGuideFbo[slot],guideCur,pyrC,fPyrC,next,lf.ev,fr.slope,fr.offset);}
         // global homography (§5.3): KLT of the base corners into the frame's 8-bit L1 guide, RANSAC on the GPU
@@ -1410,6 +1414,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
             g.u1f(A::pHlValidate,"u_white_level",input.white);g.u1f(A::pHlValidate,"u_ev_scale",lf.ev);
             g.u1i(A::pHlValidate,"u_is_first_short",shortsDone==0);g.u1f(A::pHlValidate,"u_err_thresh",0.8f);g.u3f(A::pHlValidate,"u_wb",wb[0],wb[1],wb[2]);
             g.u1i(A::pHlValidate,"u_block",hlBlock);g.u1i(A::pHlValidate,"u_cfa_pattern",cfa); // P686: the base texel's colour
+            g.u1i(A::pHlValidate,"u_adaptive_highlights",tune.adaptiveHighlights>0);
+            g.u4f(A::pHlValidate,"u_highlight_noise",S,O,std::max(0.f,fr.slope),std::max(0.f,fr.offset));
             g.draw(A::pHlValidate,fHlValid,w2,h2,1);
             // quarantine blocks (sh100) and the safety gate (sh018, sums read back): rejected when the homography failed (inliers
             // < 65 % or a shift > 15 px), motion (invalid / mask) > 0.35 or clip (clipped / mask) > 0.35; then every short frame is off
@@ -1795,6 +1801,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         if(unpackTo){ // a short frame: sh011 over its unpacked rows
             g.tex(A::pShortRecover,"u_input_extracted",0,unpackTo);
             glBindImageTexture(1,bayer,0,GL_FALSE,0,GL_WRITE_ONLY,GL_RGBA16F);
+            g.u1f(A::pShortRecover,"u_adaptive_gain",tune.adaptiveHighlights>0?ev:0.f);
+            g.u2f(A::pShortRecover,"u_short_noise",std::max(0.f,fr.slope),std::max(0.f,fr.offset));
             g.u1i(A::pShortRecover,"u_row0",qa);g.u1i(A::pShortRecover,"u_row1",qb); // P686: its neighbours within the rows unpacked
             g.dispatch(A::pShortRecover,(w2+15)/16,(qb-qa+15)/16);
             g.u1i(A::pShortRecover,"u_row0",0);g.u1i(A::pShortRecover,"u_row1",0);

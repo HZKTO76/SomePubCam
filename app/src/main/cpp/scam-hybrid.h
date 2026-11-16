@@ -27,6 +27,7 @@
 #include "scam-progress.h" // P220 the heartbeat counters (the app's watchdog and processing ring)
 #include "scam-bayer-quads.h"
 #include "scam-dcg-noise.h" // P320 the DCG two-zone noise fit (dcgNoiseFit)
+#include "scam-highlight-merge.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -1184,6 +1185,7 @@ struct HybridTuning {
     // that route (its normal frames; ultrashort / bracketed frames stay out in stage 1); anything it cannot take, or any GPU
     // failure of it, merges the same input with the SCAM merge. 0 = the SCAM merge (replays unchanged).
     int fastMerge=0;
+    int adaptiveHighlights=0;
     // P555: the fast native merge reads its normalised blocks through the texture cache (an RGBA32UI image); 0 = the storage buffers
     int mosaicNatTex=0; // P563: 0 by default - on the Adreno 750 (nubia, 50 MP Quad, 11 frames) the image made the merge 62 s against 26 s
     // P563 (owner, 2026-11-08: «на быстрой склейке у Нубии есть сетка, на качестве её нет»): the fast route's Quad / Tetra result gets
@@ -1750,7 +1752,7 @@ inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::functi
             ||set("mochi",nullptr,&t.mochi)
             ||set("markSparse",nullptr,&t.markSparse)||set("creLazy",nullptr,&t.creLazy) // P440
             ||set("stripTrailers",nullptr,&t.stripTrailers)||set("fastExit",nullptr,&t.fastExit)
-            ||set("fastMerge",nullptr,&t.fastMerge)||set("mosaicNatTex",nullptr,&t.mosaicNatTex)||set("fastMosaicChroma",nullptr,&t.fastMosaicChroma)||set("fastSiteGain",nullptr,&t.fastSiteGain)||set("mosaicNatTile",nullptr,&t.mosaicNatTile)||set("fastQuadLattice",nullptr,&t.fastQuadLattice)||set("fastMergeSelect",nullptr,&t.fastMergeSelect)||set("fastMergeTetra",nullptr,&t.fastMergeTetra)
+            ||set("fastMerge",nullptr,&t.fastMerge)||set("adaptiveHighlights",nullptr,&t.adaptiveHighlights)||set("mosaicNatTex",nullptr,&t.mosaicNatTex)||set("fastMosaicChroma",nullptr,&t.fastMosaicChroma)||set("fastSiteGain",nullptr,&t.fastSiteGain)||set("mosaicNatTile",nullptr,&t.mosaicNatTile)||set("fastQuadLattice",nullptr,&t.fastQuadLattice)||set("fastMergeSelect",nullptr,&t.fastMergeSelect)||set("fastMergeTetra",nullptr,&t.fastMergeTetra)
             ||set("normalWeakHom",nullptr,&t.normalWeakHom)||set("normalWeakHomRms",&t.normalWeakHomRms)||set("fastTetraPost",nullptr,&t.fastTetraPost)||set("fastTetraClipNotch",nullptr,&t.fastTetraClipNotch)||set("fastTetraAlongEdgeK",&t.fastTetraAlongEdgeK)||set("fastQuadFlatNoise",&t.fastQuadFlatNoise)||set("fastQuadLineFrames",&t.fastQuadLineFrames)||set("baseDemosaicQuadRadius",&t.baseDemosaicQuadRadius)||set("baseDemosaicRbGreen",&t.baseDemosaicRbGreen)||set("baseDemosaicRbGreenLo",&t.baseDemosaicRbGreenLo)||set("baseDemosaicRbGreenHi",&t.baseDemosaicRbGreenHi)||set("mosaicQuadFine",&t.mosaicQuadFine)||set("fastQuadCone",&t.fastQuadCone)||set("mosaicQuadTexture",&t.mosaicQuadTexture) // P596
             ||set("mosaicQuadTextureFrames",&t.mosaicQuadTextureFrames) // P596
             ||set("mosaicQuadTextureNight",&t.mosaicQuadTextureNight) // P647
@@ -4021,6 +4023,17 @@ vec3 usColourAt(int f,vec2 O,inout uint cl){
             s3.g=G;
             if(c==0){s3.r=X;s3.b=cD;} else {s3.b=X;s3.r=cD;}
         }
+#ifdef ADAPTIVE_HIGHLIGHTS
+        // Reuse the same-CFA taps already fetched for demosaic, only on the exposure transition.
+        float v=w[k],band=smoothstep(0.70,0.82,v)*(1.0-smoothstep(0.88,0.99,v));
+        if(band>0.0&&v<g*clipLevel){
+            float va=max(fNoiseP[f].x*max(v,0.0)*g+fNoiseP[f].y*g*g,0.000324);
+            vec4 taps=vec4(w[k-2],w[k+2],w[k-12],w[k+12]);
+            vec4 d=taps-v,wt=max(vec4(0.0),1.0-d*d/(9.0*va));
+            wt=0.5*wt*wt*(1.0-step(g*clipLevel,taps));
+            s3[c]=mix(v,(v+dot(taps,wt))/(1.0+dot(wt,vec4(1.0))),band);
+        }
+#endif
         o+=s3*((q&1)!=0?t.x:1.0-t.x)*((q>>1)!=0?t.y:1.0-t.y);
     }
 #ifdef US_AA
@@ -4091,7 +4104,9 @@ bool usAt(vec2 p,bool inLight,out vec3 U,out float cover,out uint uclip,out bool
         nf++;if(wmx>0.0&&(wmx-min(wc.r,min(wc.g,wc.b)))/wmx>=blendSatU)nc++;
 #endif
         bestV=max(bestV,v);
+#ifndef ADAPTIVE_HIGHLIGHTS
         if(inLight&&nc*2>nf)v=max(v,0.3);   // coloured light (so far the frames' majority): a residual of the global alignment
+#endif
         if(v<0.004||n>=4)continue;
         fr[n]=f;lum[n]=l;wv[n]=v;mxw[n]=wmx;n++;
     }
@@ -4188,6 +4203,9 @@ bool usAtP(vec2 p,bool inLight,vec4 Tv,vec4 Tv1,vec4 Tm,float c,vec3 lift,out ve
         float wmx=max(wc.r,max(wc.g,wc.b));
         vec4 Tf=v<0.5?Tm:mix(Tv,Tv1,smoothstep(0.9,1.0,v));
         float pf=Tf.y>0.0?smoothstep(Tf.x,Tf.y,wmx):1.0;
+#ifdef ADAPTIVE_HIGHLIGHTS
+        pf*=smoothstep(0.0,0.5,v);
+#endif
         if(pf>0.5){
 #ifdef BLEND_OPTS
             vec3 wq=wc*blendOpt3U.yzw;float qmx=max(wq.r,max(wq.g,wq.b));
@@ -4197,7 +4215,9 @@ bool usAtP(vec2 p,bool inLight,vec4 Tv,vec4 Tv1,vec4 Tm,float c,vec3 lift,out ve
 #endif
         }
         bestV=max(bestV,v*pf);bestP=max(bestP,pf);bestPm=max(bestPm,(1.0-v)*pf);
+#ifndef ADAPTIVE_HIGHLIGHTS
         if(inLight&&nc*2>nf)v=max(v,0.3);
+#endif
         float a=v*pf,b=(1.0-v)*c*pf;
         if(a+b<0.004||n>=4)continue;
         fr[n]=f;lum[n]=l;av[n]=a;am[n]=b;mxw[n]=wmx;ts[n]=Tf.zw;n++;
@@ -4568,11 +4588,15 @@ void regionStage(int i,int row,int ox,int rows,int ow,bool flags){
     // The cells' check (the best ultrashort frame's validity: a dark object moved over a clipped window, a hand) scales the
     // weight - the N frames' clip is the right answer there. Not for coloured light (LEDs on PWM / ARGB effects: their colour
     // and level differ between the exposures, the check refused whole edges of a line and left the N clip's steps).
+#ifdef ADAPTIVE_HIGHLIGHTS
+    alpha*=clamp(bestV,0.0,1.0);
+#else
     if(!coloured)alpha*=clamp(bestV,0.0,1.0);
+#endif
 #endif
     // a pixel inside the light without any usable ultrashort sample (every frame invalid there): the nearest ultrashort colour
     // around it (8 directions, 2 px steps), so no white / lilac clipped spot stays inside a light
-#ifdef BLEND_PARTIAL
+#if defined(BLEND_PARTIAL) || defined(ADAPTIVE_HIGHLIGHTS)
     // P392: the fill plane above instead
 #elif defined(BLEND_OPTS)
     // P350 bentoBlendFillMean: the mean of the hits on the first ring that has any (off: the first hit, as below); one call site
@@ -5050,6 +5074,32 @@ float natSiteG(uvec4 geo,int x,int y,out uint fl){
     return clamp((u-black[cp])*inv[cp],-0.25,1.0);
 }
 float natSite(int f,int x,int y,out uint fl){return natSiteG(nGeo[clamp(f,0,127)],x,y,fl);}
+#ifdef NAT_ADAPTIVE_HIGHLIGHTS
+int natNearestPhase(int x,int phase){
+    int block=1<<natV.x;
+    if(((x>>natV.x)&1)==phase)return x;
+    int left=(x>>natV.x)*block-1,right=left+block+1;
+    return x-left<=right-x?left:right;
+}
+vec4 natShortReferences(uvec4 geo,vec2 O){
+    ivec2 p=ivec2(floor(O+0.5));
+    vec4 ref=vec4(-1.0);
+    for(int ph=0;ph<4;ph++){
+        uint fl;
+        float v=natSiteG(geo,natNearestPhase(p.x,ph&1),natNearestPhase(p.y,ph>>1),fl);
+        if((fl&3u)==0u&&v<clipLevel)ref[ph]=v;
+    }
+    return ref;
+}
+float natShortTap(float ref,float v,float gain,vec2 noise){
+    float level=ref*gain;
+    if(level<=0.70||level>=0.99)return 1.0;
+    float band=smoothstep(0.70,0.82,level)*(1.0-smoothstep(0.88,0.99,level));
+    float variance=max(noise.x*ref+noise.y,0.000324/(gain*gain));
+    float d=v-ref,w=max(0.0,1.0-d*d/(9.0*variance));
+    return mix(1.0,max(0.05,w*w),band);
+}
+#endif
 // P34: the merges' bound on the native kernel precision (HybridTuning::mosaicNativeClamp)
 uniform int natClampU;  // 1: WhyCam's covariance packing range on the native precision, 2: the same bounds on its eigenvalues
 // WhyCam v23 stores the kernel covariance C (exp2(-0.5 d'Cd), C = P / ln 2) in a texture with the ranges cov_range_rg / _b
@@ -5377,6 +5427,9 @@ void natSamples(inout Acc a,int f,vec2 O,float r,float cover,vec3 P,bool win){
     int span=int(ceil(2.0*Rn))-1;
     x1=min(x1,x0+span);y1=min(y1,y0+span);
     vec3 num=vec3(0.0),den=vec3(0.0),cn=vec3(0.0),cd=vec3(0.0);float cv=0.0,uc=0.0;
+#ifdef NAT_ADAPTIVE_HIGHLIGHTS
+    vec4 shortRef=role==5?natShortReferences(geo,O):vec4(-1.0);
+#endif
     for(int sy=y0;sy<=y1;sy++){
         float dy=float(sy)-O.y;
         int py=((sy>>s)&1)<<1;
@@ -5394,6 +5447,9 @@ void natSamples(inout Acc a,int f,vec2 O,float r,float cover,vec3 P,bool win){
                 if(role==5)uc+=kw;
                 continue;
             }
+#ifdef NAT_ADAPTIVE_HIGHLIGHTS
+            if(role==5)kw*=natShortTap(shortRef[py|((sx>>s)&1)],v,g,fNoiseP[f].xy);
+#endif
             num[c]+=kw*v*g;den[c]+=kw;
             if(c==1)cv+=kw;
         }
@@ -5762,9 +5818,12 @@ bool natWideOn=false;
 #else
 struct NatSums{vec3 nm;vec3 dn;vec3 cn;vec3 cd;};
 #endif
-NatSums natTaps(uvec4 geo,vec2 O,vec3 P,bool skipSmall,bool skipClip,bool selfCover){
+NatSums natTaps(uvec4 geo,vec2 O,vec3 P,bool skipSmall,bool skipClip,bool selfCover,int shortFrame){
     ivec2 N=ivec2(floor(O+0.5)),q0=(N-NAT_R)>>1;
     NatSums s;s.nm=vec3(0.0);s.dn=vec3(0.0);s.cn=vec3(0.0);s.cd=vec3(0.0);
+#ifdef NAT_ADAPTIVE_HIGHLIGHTS
+    vec4 shortRef=shortFrame>0?natShortReferences(geo,O):vec4(-1.0);
+#endif
 #if NAT_B==4
     s.wn=vec4(0.0);s.wd=vec4(0.0);
 #endif
@@ -5856,7 +5915,12 @@ NatSums natTaps(uvec4 geo,vec2 O,vec3 P,bool skipSmall,bool skipClip,bool selfCo
 #endif
             else use=use&&!(skipSmall&&kw<0.002)&&!(skipClip&&cl);
             if(!use)continue;
-            if(cl){cn+=kw*v;cd+=kw;} else {nm+=kw*v;dn+=kw;}
+            if(cl){cn+=kw*v;cd+=kw;} else {
+#ifdef NAT_ADAPTIVE_HIGHLIGHTS
+                if(shortFrame>0)kw*=natShortTap(shortRef[ph],v,fParam[shortFrame].x,fNoiseP[shortFrame].xy);
+#endif
+                nm+=kw*v;dn+=kw;
+            }
         }
         vec3 m=ph==0?vec3(1.0,0.0,0.0):ph==3?vec3(0.0,0.0,1.0):vec3(0.0,1.0,0.0);
         s.nm+=m*nm;s.dn+=m*dn;s.cn+=m*cn;s.cd+=m*cd;
@@ -5951,7 +6015,7 @@ void natFrame(inout Acc a,int f,vec2 O,float r,float cover,vec3 P){
 #if NAT_B==4
     natWideOn=natLumU.x>0.0&&role!=5; // P594: the luma guide's colour ratios from every frame's wide window
 #endif
-    NatSums s=natTaps(geo,O,P,f!=0&&role!=5,role==3,false);
+    NatSums s=natTaps(geo,O,P,f!=0&&role!=5,role==3,false,role==5?f:0);
 #if NAT_B==4
     if(natWideOn){natWN+=r*g*s.wn;natWD+=r*s.wd;natWideOn=false;}
 #endif
@@ -6234,9 +6298,9 @@ void main(){
                 float g=fParam[f].x;
                 vec3 Pu=vec3(kE.y,kE.y,0.0);
 #if NAT_B==4
-                NatSums su=natTaps(nGeo[clamp(f,0,127)],Ob*4.0+1.5,natClamp(Pu*(natK.x*4.0))*0.25,false,false,false);
+                NatSums su=natTaps(nGeo[clamp(f,0,127)],Ob*4.0+1.5,natClamp(Pu*(natK.x*4.0))*0.25,false,false,false,f);
 #else
-                NatSums su=natTaps(nGeo[clamp(f,0,127)],Ob*2.0+0.5,natClamp(Pu*natK.x),false,false,false);
+                NatSums su=natTaps(nGeo[clamp(f,0,127)],Ob*2.0+0.5,natClamp(Pu*natK.x),false,false,false,f);
 #endif
                 un+=(r*g)*su.nm;ud+=r*su.dn;ucn+=(r*g)*su.cn;ucd+=r*su.cd;
                 ut=max(ut,clamp(r,0.0,1.0));ucv+=r*su.dn.y;uclip+=r*(su.cd.x+su.cd.y+su.cd.z);
@@ -6365,7 +6429,7 @@ void main(){
         else if((mode&4)!=0)Pb=(natWidenU!=0?frames:4.0*frames+3.0)<kD.x?P/(kD.y*kD.y):P;
 #endif
         else{
-            NatSums s=natTaps(nGeo[0],S,P*natK.x,false,false,true);
+            NatSums s=natTaps(nGeo[0],S,P*natK.x,false,false,true,0);
             float widen=mix(kD.y,1.0,smoothstep(0.5*kD.x,kD.x,a.cover+s.dn.y));Pb=P/(widen*widen);
         }
 #if NAT_B==4
@@ -7334,6 +7398,8 @@ inline std::string hybridPartialSpec(const HybridTuning& t,bool native=false){
         +(!native&&t.bentoBlend>0&&t.bentoBlendUsBox>0?"#define US_BOX 1\n":"")
         +(!native&&t.bentoBlend>0&&t.usClipVote>0?"#define US_CLIP_VOTE 1\n":"") // P607
         +(!native&&t.bentoBlend>0&&t.bentoUsCache>0?"#define US_CACHE 1\n":"")
+        +(!native&&t.bentoBlend>0&&t.adaptiveHighlights>0?"#define ADAPTIVE_HIGHLIGHTS 1\n":"")
+        +(native&&t.adaptiveHighlights>0?"#define NAT_ADAPTIVE_HIGHLIGHTS 1\n":"")
         +(!native&&t.bentoBlend>0&&t.bentoBlendUsAa>0.f?"#define US_AA "+std::to_string(std::clamp(t.bentoBlendUsAa,0.f,1.f))+"\n":"")
         +(!native&&t.bentoBlend>0&&t.bentoBlendUsSoftClip>0.f?"#define US_SOFTCLIP "+std::to_string(std::clamp(t.bentoBlendUsSoftClip,0.5f,0.99f))+"\n":"") // P441
         +(t.rejPixDiff>0.f?"#define REJ_PD 1\n":""); // P488: kHybDilate's guarded post-filter
@@ -7660,7 +7726,7 @@ class HybridGpu {
             const auto t0=std::chrono::steady_clock::now();
             std::string body=std::string(tile?"#define NAT_SHARED 1\n":"")+(natNorm2?"#define NAT_NORM2 1\n":"")+(natTex?"#define NAT_TEX 1\n":"")+(usPass?"#define NAT_US_PASS 1\n":"")+(usTol?"#define NAT_US_TOL 1\n":"")+"#define NAT_B "+(tetra?"4":"2")+"\n#define NAT_R "+std::to_string(r)+"\n#define NAT_MARKED "+(marked?"1":"0")
                 +"\n#define NAT_FILL "+(fill?"1":"0")+"\n#define NAT_BASEFILL "+(baseFill?"1":"0")+"\n#define NAT_DEMOSAIC "+(demosaic?"1":"0")+"\n"
-                +mergeCommon()+kHybNatAccess+mosaicFast();
+                +hybridSpecLine(partialSpec,"#define NAT_ADAPTIVE_HIGHLIGHTS ")+mergeCommon()+kHybNatAccess+mosaicFast();
             if(!std::getenv("SCAM_NO_NAT_CULL"))body="#define NAT_CULL 1\n#define NAT_CULL_TIGHT 1\n"+body;
             // P313: the ultrashort pass reads and writes the merged colour, the effective map and the clip flags (its text alone)
             if(usPass)for(const char* w:{"writeonly buffer Out{","writeonly buffer Eff{","writeonly buffer CFlags{"}){
@@ -8411,6 +8477,7 @@ public:
                 +hybridSpecLine(partialSpec,"#define US_SOFTCLIP ")
                 +(partialSpec.find("US_PIXMARK")!=std::string::npos?"#define US_PIXMARK 1\n":"")
                 +hybridSpecLine(partialSpec,"#define US_AA ")
+                +hybridSpecLine(partialSpec,"#define ADAPTIVE_HIGHLIGHTS ")
                 +(partialSpec.find("US_BOX")!=std::string::npos?"#define US_BOX 1\n":"")
                 +(partialSpec.find("US_CLIP_VOTE")!=std::string::npos?"#define US_CLIP_VOTE 1\n":"")+mergeCommon()+kHybUsBlend; // P310; P392; P441
                 // P364: one program per stage (stage 1's registers kept out of the others); P377: on every GPU, the stages named apart
@@ -8640,7 +8707,7 @@ public:
         } else if(!mosaicProgram){
             compileName="mosaic";
             const auto t0=std::chrono::steady_clock::now();
-            mosaicProgram=compile((std::string(mergeCommon())+kHybNatAccess+kHybMergeMosaic).c_str());
+            mosaicProgram=compile((hybridSpecLine(partialSpec,"#define NAT_ADAPTIVE_HIGHLIGHTS ")+mergeCommon()+kHybNatAccess+kHybMergeMosaic).c_str());
             compileMs+=" mosaic="+std::to_string(int(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count()));
         }
     }
@@ -8937,7 +9004,7 @@ public:
                 if(!mosaicProgram){
                     const auto t0=std::chrono::steady_clock::now();
                     compileName="mosaic";
-                    mosaicProgram=compile((std::string(mergeCommon())+kHybNatAccess+kHybMergeMosaic).c_str());
+                    mosaicProgram=compile((hybridSpecLine(partialSpec,"#define NAT_ADAPTIVE_HIGHLIGHTS ")+mergeCommon()+kHybNatAccess+kHybMergeMosaic).c_str());
                     compileMs+=" mosaic="+std::to_string(int(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count()));
                 }
                 natMerge.push_back(mosaicProgram);
@@ -10755,10 +10822,41 @@ inline BentoResult bentoMask(const Burst& b,int usSlot,const BackwardHomography&
                     us[p]=(a+(bb-a)*ax)+((cc+(d-cc)*ax)-(a+(bb-a)*ax))*ay;
                 }
             }
-            if(!t.bentoScam)continue;
+            if(!t.bentoScam && !t.adaptiveHighlights)continue;
             // canonical RGGB: phase 0 red, 1 and 2 green, 3 blue
             const float base3[3]={b.sample(0,2*cx,2*cy),0.5f*(b.sample(0,2*cx+1,2*cy)+b.sample(0,2*cx,2*cy+1)),b.sample(0,2*cx+1,2*cy+1)};
             const float us3[3]={std::min(us[0]*ratio,1.f),std::min(0.5f*(us[1]+us[2])*ratio,1.f),std::min(us[3]*ratio,1.f)};
+            float localConfidence=1.f;
+            if(t.adaptiveHighlights){
+                if(o.x<0.f||o.x>b.w-2||o.y<0.f||o.y>b.h-2)localConfidence=0.f;
+                else for(int p=0;p<4;++p){
+                    const int px=p&1,py=p>>1;
+                    const float v=b.sample(0,2*cx+px,2*cy+py);
+                    const float own=us[p],u=own*ratio;
+                    const float varB=noise?std::max(0.f,(*noise)[0]*std::max(v,0.f)+(*noise)[1]):0.f;
+                    const float varU=noise?std::max(0.f,(*noise)[2]*std::max(own,0.f)+(*noise)[3])*ratio*ratio:0.f;
+                    const float sigma=std::sqrt(varU);
+                    float sum=u,weights=1.f;
+                    const float band=scam_highlight::transition(v);
+                    if(band>0.f&&own<t.bentoHighlight){
+                        constexpr int dx[4]={-1,1,0,0},dy[4]={0,0,-1,1};
+                        for(int j=0;j<4;++j){
+                            const int nx=std::clamp(ux+dx[j],0,w2-1),ny=std::clamp(uy+dy[j],0,h2-1);
+                            const float tap=b.sample(usSlot,2*nx+px,2*ny+py);
+                            if(tap>=t.bentoHighlight)continue;
+                            const float a=scam_highlight::tapWeight(tap*ratio-u,std::max(sigma,0.018f))*0.5f;
+                            sum+=a*tap*ratio;weights+=a;
+                        }
+                    }
+                    const float s=u+band*(sum/weights-u);
+                    localConfidence=std::min(localConfidence,scam_highlight::confidence(v,s,3.f*std::sqrt(varB+varU),
+                                            v>=t.bentoHighlight));
+                }
+                // Keep the legacy whole-frame motion decision. Apply the extra check to the local donor weight.
+                res.valid[i]=localConfidence;
+                if(inMask)mask[i]*=localConfidence;
+                if(!t.bentoScam)continue;
+            }
             if(zCheck){
                 // P350 bentoValidZ: z = rms of the differences in sigma of both frames' noise (the ultrashort frame's x its gain)
                 // plus the model error bentoValidZFloor x the level; the difference is the distance of the ultrashort cell from
@@ -10806,7 +10904,7 @@ inline BentoResult bentoMask(const Burst& b,int usSlot,const BackwardHomography&
                 const float z=std::sqrt(z2/3.f),e=std::max(0.f,z-t.bentoValidZ),v=std::exp(-e*e);
                 if(!res.zq.empty())res.zq[i]=uint8_t(std::min(255.f,z*16.f+0.5f)); // P392
                 if(v>=0.999f)continue;
-                res.valid[i]=v;
+                res.valid[i]=std::min(res.valid[i],v);
                 if(!inMask)continue;
                 if(v<=0.1f&&counted)++li;
                 mask[i]=std::clamp(v*mask[i],0.f,1.f);
@@ -10828,7 +10926,7 @@ inline BentoResult bentoMask(const Burst& b,int usSlot,const BackwardHomography&
             }
             if(error<t.bentoInvalid)continue;
             if(counted)++li;
-            res.valid[i]=std::clamp(1.f-error,0.f,1.f);
+            res.valid[i]=std::min(res.valid[i],std::clamp(1.f-error,0.f,1.f));
             mask[i]=std::clamp((1.f-error)*mask[i],0.f,1.f);
             const float lo=std::min({base3[0],base3[1],base3[2]}),hi=std::max({base3[0],base3[1],base3[2]});
             const float middle=base3[0]+base3[1]+base3[2]-lo-hi;

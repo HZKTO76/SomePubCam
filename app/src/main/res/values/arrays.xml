@@ -144,6 +144,14 @@
         <item>fast</item>
         <item>quality</item>
     </string-array>
+    <string-array name="scam_hybrid_highlight_merge_entries">
+        <item>Standard</item>
+        <item>Adaptive</item>
+    </string-array>
+    <string-array name="scam_hybrid_highlight_merge_values" translatable="false">
+        <item>classic</item>
+        <item>adaptive</item>
+    </string-array>
     <string-array name="scam_hybrid_fringe_method_entries">
         <item>Neural</item>
         <item>Classic</item>

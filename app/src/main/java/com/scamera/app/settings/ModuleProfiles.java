@@ -38,7 +38,7 @@ public final class ModuleProfiles {
     static final Set<String> GLOBAL_KEYS=Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
             "pref_camera_sounds_key","pref_timer_sound_key","pref_show_grid_key",
             "pref_save_raw_key","pref_ultrahdr_key","pref_show_watermark_key","pref_keep_raw_burst",
-            "pref_root_enabled","pref_camera_package_spoof_enabled","pref_oplus_spoof_package_key","pref_generic_spoof_package_key",
+            "pref_camera_package_spoof_enabled","pref_oplus_spoof_package_key","pref_generic_spoof_package_key",
             "pref_binder_spoof_package_key","pref_face_detect_mode","pref_tracking_af_mode","pref_hide_gallery_icon_key",
             "pref_antibanding_hz_key","pref_file_name_pattern",ScamHybridKeys.ROUTE,MotionMode.PREF,
             com.scamera.app.capture.HiddenFeatures.PREF_LOW_LIGHT_BOOST)));

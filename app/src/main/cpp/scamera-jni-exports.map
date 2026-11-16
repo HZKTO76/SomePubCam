@@ -1,0 +1,7 @@
+{
+    global:
+        JNI_OnLoad;
+        JNI_OnUnload;
+        Java_com_scamera_app_*;
+    local: *;
+};

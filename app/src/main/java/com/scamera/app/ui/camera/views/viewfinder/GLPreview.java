@@ -202,12 +202,29 @@ public class GLPreview extends GLSurfaceView {
         post(this::requestLayout);
     }
 
-    /** The parent's size until an aspect is set, then the aspect's own numbers (the camera's preview size, portrait). */
+    private int heightLimit;
+
+    /** Limits the displayed preview while keeping its aspect and the capture stream unchanged. */
+    public boolean setHeightLimit(int limit) {
+        if (heightLimit == limit) return false;
+        heightLimit = limit;
+        requestLayout();
+        return true;
+    }
+
+    /** Fits the requested preview aspect inside the measured window. */
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-        if (aspectW == 0 || aspectH == 0) setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec));
-        else setMeasuredDimension(aspectW, aspectH);
+        if (aspectW == 0 || aspectH == 0) return;
+        int width = aspectW;
+        int height = heightLimit > 0 ? Math.min(aspectH, heightLimit) : aspectH;
+        if (MeasureSpec.getMode(widthMeasureSpec) != MeasureSpec.UNSPECIFIED)
+            width = Math.min(width, MeasureSpec.getSize(widthMeasureSpec));
+        if (MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED)
+            height = Math.min(height, MeasureSpec.getSize(heightMeasureSpec));
+        double scale = Math.min(width / (double) aspectW, height / (double) aspectH);
+        setMeasuredDimension((int) Math.round(aspectW * scale), (int) Math.round(aspectH * scale));
     }
 
     /** The texture the ISP stream draws into (null before the renderer made one). */

@@ -30,7 +30,7 @@ public final class BottomChrome {
     /** Share of the bottom panel's height the controls are raised by. */
     public static final float RAISE_FRACTION = 0.10f;
     /** Least gap between the HIDDEN handle and the lens strip or the zoom ruler. */
-    static final float CLEARANCE_DP = 8f;
+    public static final float CLEARANCE_DP = 8f;
     /** Gap between the manual palette's bottom and the HIDDEN handle's top (P43 concept: 12dp). */
     public static final float MANUAL_GAP_DP = 8f;   // P583: the concept's Pro panel and LUT tray, 8px over the preview's bottom
     static final long YIELD_MS = 120, RETURN_MS = 220;

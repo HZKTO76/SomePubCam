@@ -15,7 +15,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 # P662: the worker executable ships once, in the template (app/build.gradle buildScamNeuralWorker), as
-# lib/arm64-v8a/libscamera_worker.so: installed into nativeLibraryDir, run by the app process and by the su launcher.
+# lib/arm64-v8a/libscamera_worker.so: installed into nativeLibraryDir, run by a child of the app process.
 # Its former second copy in assets/scam-neural/ must not come back.
 OLD_ASSET_PREFIX = 'assets/scam-neural/'
 # QNN/CRE runtime installed into nativeLibraryDir next to the worker.
@@ -25,7 +25,7 @@ LIB_WORKER = 'libscamera_worker.so'
 
 def pinned_assets(manifest, expected):
     """expected=None skips the entry-count check (manifests that grew after the private bundle)."""
-    source = ROOT / 'app/src/main/java/com/scamera/app/processing/opengl/postpipeline/ScamNeuralWorker.java'
+    source = ROOT / 'app/src/main/java/com/scamera/app/processing/opengl/postpipeline/ScamRuntimeAssets.java'
     block = re.search(r'\b' + re.escape(manifest) + r'\s*=\s*\{(.*?)\n    \};', source.read_text(), re.S)
     if block is None:
         raise ValueError('Missing bundled asset manifest: ' + manifest)

@@ -223,6 +223,7 @@ public class ScalingMatrixTest {
                 System.out.println("SHORT " + at + "the top bar over the viewfinder's top (no room for 3:4 and both bars)");
             }
             assertFalse(at + "lens row / shutter row" + geometry, overlap(lensRow, shutterRow));
+            assertFalse(at + "viewfinder / lens row" + geometry, overlap(viewfinder, lensRow));
             assertFalse(at + "Pro / lens row" + geometry, overlap(pro, lensRow));
             assertFalse(at + "Pro / shutter row" + geometry, overlap(pro, shutterRow));
             assertFalse(at + "Pro / top bar" + geometry, overlap(pro, topBar));

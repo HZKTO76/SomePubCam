@@ -10,22 +10,20 @@ import java.nio.channels.FileChannel;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.zip.ZipFile;
 import com.scamera.app.util.Lang;
 
-/** Bounded one-job worker process (app sandbox, or su when enabled); vendor failures cannot crash the camera PID. */
+/** Bounded one-job worker process (app sandbox); vendor failures cannot crash the camera PID. */
 public final class ScamNeuralClient {
     private ScamNeuralClient() {}
     /** The worker did not finish in time. ScamHybridBurst skips its conservative retry on this type (the text is localized). */
     public static final class WorkerTimeoutException extends IOException {
         WorkerTimeoutException(String message) { super(message); }
     }
-    private static String quote(String s) { return "'"+s.replace("'","'\\''")+"'"; }
     /** The SHDR merge job (P175: the only job; the neural remosaic's captures and checks are gone). */
     static synchronized ByteBuffer processScamBurst(Context context,ScamTransport burst) throws Exception {
         return job(context,burst,line->Log.i("SCAM_HDR",line));
     }
-    /** memfd shared with the root worker through /proc/<pid>/fd/<n>. */
+    /** memfd inherited by the worker. */
     private static final class SharedMemory implements java.io.Closeable {
         final android.os.ParcelFileDescriptor fd;
         private SharedMemory(android.os.ParcelFileDescriptor fd) { this.fd = fd; }
@@ -40,7 +38,6 @@ public final class ScamNeuralClient {
                 return null;
             }
         }
-        String path() { return "/proc/" + android.os.Process.myPid() + "/fd/" + fd.getFd(); }
         long size() throws IOException {
             try { return android.system.Os.fstat(fd.getFileDescriptor()).st_size; }
             catch (android.system.ErrnoException e) { throw new IOException(e); }
@@ -163,19 +160,6 @@ public final class ScamNeuralClient {
         }
         dst.position(start + total);
     }
-    private static File assetCacheDir(Context context) throws IOException {
-        long stamp;
-        try{stamp=context.getPackageManager().getPackageInfo(context.getPackageName(),0).lastUpdateTime;}
-        catch(android.content.pm.PackageManager.NameNotFoundException e){throw new IOException(e);}
-        File root=new File(context.getFilesDir(),"neural-assets");
-        File dir=new File(root,Long.toString(stamp));
-        if(!dir.isDirectory()){
-            File[] old=root.listFiles();
-            if(old!=null)for(File d:old)deleteTree(d);
-            if(!dir.mkdirs()&&!dir.isDirectory())throw new IOException(Lang.t("Не удалось создать кэш ресурсов","Could not create the asset cache"));
-        }
-        return dir;
-    }
     private static void deleteTree(File file) {
         File[] children=file.isDirectory()?file.listFiles():null;
         if(children!=null)for(File child:children)deleteTree(child);
@@ -187,20 +171,6 @@ public final class ScamNeuralClient {
     });
     private static void deleteTreeLater(File dir){
         try{CLEANUP.execute(()->deleteTree(dir));}catch(RuntimeException e){deleteTree(dir);}
-    }
-    /**
-     * W1.5: the APK opened once per process (its central directory was read again for every shot); a new install starts a new
-     * process. Only the job thread uses it (job runs inside the class's synchronized entry points).
-     */
-    private static ZipFile apkFile;
-    private static String apkPath;
-    private static synchronized ZipFile apk(Context context) throws IOException {
-        final String path=context.getApplicationInfo().sourceDir;
-        if(apkFile==null||!path.equals(apkPath)){
-            if(apkFile!=null)try{apkFile.close();}catch(IOException ignored){}
-            apkFile=new ZipFile(path);apkPath=path;
-        }
-        return apkFile;
     }
     // P35 / P33: GPU programs of a module's merge route built in the worker's program cache when the module opens (one worker
     // run per colour block and tuning per process; off the shutter path, on a low-priority thread).
@@ -297,46 +267,6 @@ public final class ScamNeuralClient {
                 +" ctor="+(ctorAll>=0&&mosaic>=0?ctorAll-mosaic:-1)+" header="+header+" total="+total
                 +com.scamera.app.processing.ShotTimeline.prepParts(); // P625: meta's parts
     }
-    private static File cachedAsset(Context context,ZipFile apk,java.util.zip.ZipEntry entry,String prefix,String name) throws IOException {
-        File dir=new File(assetCacheDir(context),prefix.replace('/','_'));
-        if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException(Lang.t("Не удалось создать кэш ресурсов","Could not create the asset cache"));
-        File file=new File(dir,name);
-        if(file.isFile()&&file.length()==entry.getSize())return file;
-        File tmp=new File(dir,name+".tmp");
-        tmp.delete();
-        try(InputStream in=apk.getInputStream(entry);FileOutputStream out=new FileOutputStream(tmp)){
-            byte[] buf=new byte[65536];int n;long total=0;
-            while((n=in.read(buf))!=-1){total+=n;if(total>128L*1024*1024)throw new IOException(Lang.t("Слишком большой ресурс","Asset too large"));out.write(buf,0,n);}
-        }
-        if(!tmp.setReadOnly())throw new IOException(Lang.t("Не удалось защитить ","Could not protect ")+name);
-        if(name.equals("scam-neural-worker")&&!tmp.setExecutable(true,true))throw new IOException(Lang.t("Не удалось разрешить запуск нейромодуля","Could not make the neural module executable"));
-        file.delete();
-        if(!tmp.renameTo(file))throw new IOException(Lang.t("Не удалось сохранить ","Could not save ")+name);
-        return file;
-    }
-    /** P662: the worker's one copy in the APK (the asset copy in assets/scam-neural is gone). */
-    static final String LIB_WORKER_ENTRY="lib/arm64-v8a/"+com.scamera.app.util.WorkerSpawn.WORKER;
-    /**
-     * P662: the executable the su launcher runs: the installed worker (nativeLibraryDir), else - an install without an executable
-     * copy there - the APK's lib/arm64-v8a entry unpacked once per installed APK (was the asset copy, ~0.2 s per shot before W1.5).
-     * The root worker still verifies the runtime's hashes. The line WORKER BINARY names the path that ran.
-     */
-    static File suWorker(Context context,Consumer<String> log) throws IOException {
-        // (the ApplicationInfo's folder: WorkerSpawn.nativeDir would load its JNI library first)
-        final File installed=new File(context.getApplicationInfo().nativeLibraryDir,com.scamera.app.util.WorkerSpawn.WORKER);
-        if(installed.isFile()&&installed.canExecute()){
-            log.accept("WORKER BINARY: "+installed+" (nativeLibraryDir, su)");
-            return installed;
-        }
-        final ZipFile apk=apk(context);
-        final java.util.zip.ZipEntry entry=apk.getEntry(LIB_WORKER_ENTRY);
-        if(entry==null)throw new IOException(Lang.t("Неполный APK: отсутствует ","Incomplete APK: missing ")+LIB_WORKER_ENTRY+Lang.t(". Установите сборку Bundled.",". Install the Bundled build."));
-        final long t0=android.os.SystemClock.elapsedRealtime();
-        final File cached=cachedAsset(context,apk,entry,"lib/arm64-v8a/","scam-neural-worker");
-        log.accept("WORKER BINARY: "+cached+" (unpacked from the APK's "+LIB_WORKER_ENTRY+", su; "+(installed.isFile()?"installed copy not executable":"no installed copy")
-                +", "+(android.os.SystemClock.elapsedRealtime()-t0)+" ms)");
-        return cached;
-    }
     private static ByteBuffer job(Context context,ScamTransport scamBurst,Consumer<String> observer) throws Exception {
         // P206: the merge worker runs only in the original (SCAMERA-signed) APK
         if(!com.scamera.app.util.OriginalBuild.check(context))
@@ -351,11 +281,8 @@ public final class ScamNeuralClient {
         com.scamera.app.util.WorkerSpawn.Child process=adopted!=null?adopted.child:null;
         boolean handedOff=false; // P371 (ok_read): the result taken at the completion line, the worker still exiting
         SharedMemory scamIn=null,scamOut=null;
+        android.os.ParcelFileDescriptor[] goPipe=null;
         AhbRoute ahb=null;boolean ahbWanted=false; // P482: the RGB in the app's hardware buffer (closed in the finally block)
-        // Without root: the worker and its QNN/CRE runtime are installed as native
-        // libraries and run as the app's own child process (sandboxed, same NPU/GPU).
-        // su remains the optional fallback for builds without them.
-        final boolean direct=com.scamera.app.util.WorkerSpawn.available(context);
         final long startMs=android.os.SystemClock.elapsedRealtime();
         com.scamera.app.processing.ShotTimeline.mark("job");
         SharedPreferences prefs=context.getSharedPreferences("scam_capture_report",Context.MODE_PRIVATE);
@@ -391,19 +318,11 @@ public final class ScamNeuralClient {
             observer.accept(line);
         };
         try {
-            // Extract only the assets in this APK. Missing bundles fail before
-            // requesting root; no fallback to Vivo firmware model files.
-            if(!direct && !com.scamera.app.settings.PreferenceKeys.isRootEnabled())
-                throw new IOException(Lang.t("Обработчик не установлен в этой сборке; включите «Root-доступ» в «Настройки → Система»","The processor is not installed in this build; turn on “Root access” in Settings → System"));
-            if(adopted==null){ // (P371: a worker spawned at the shutter has its folder and its markers before the go)
+            if(adopted==null){
+                if(!com.scamera.app.util.WorkerSpawn.available(context))
+                    throw new IOException(Lang.t("Обработчик не установлен в этой сборке","The processor is not installed in this build"));
                 linkRuntime(context,dir);
-                // P662: the su launcher runs the installed worker too (suWorker: nativeLibraryDir, else unpacked from the APK's lib entry)
-                if(!direct){
-                    final String name="scam-neural-worker";
-                    final File worker=suWorker(context,log);
-                    try{android.system.Os.symlink(worker.getAbsolutePath(),new File(dir,name).getAbsolutePath());}
-                    catch(android.system.ErrnoException e){throw new IOException(Lang.t("Не удалось подготовить ","Could not prepare ")+name+": "+e.getMessage());}
-                }else log.accept("WORKER BINARY: "+com.scamera.app.util.WorkerSpawn.nativeDir(context)+"/"+com.scamera.app.util.WorkerSpawn.WORKER
+                log.accept("WORKER BINARY: "+com.scamera.app.util.WorkerSpawn.nativeDir(context)+"/"+com.scamera.app.util.WorkerSpawn.WORKER
                         +" (nativeLibraryDir, app process)");
             }
             // "Bundled" CRE source: the worker skips /vendor and loads the APK copy with
@@ -460,15 +379,13 @@ public final class ScamNeuralClient {
                 if(!tuning.isEmpty())try(java.io.FileWriter tw=new java.io.FileWriter(new File(dir,"hybrid_tuning.txt"))){tw.write(tuning);}
                 log.accept("CLIENT: SCAM Hybrid merge requested"+(tuning.isEmpty()?"":" tuning="+tuning.replace('\n',' ')));
                 // P482 (ahb_transport): the RGB in a hardware buffer of the app (AhbRoute), the worker's fast merge writes it there
-                ahbWanted=direct&&AhbRoute.wanted(true,rgbHalf,(long)scamBurst.outputWidth()*scamBurst.outputHeight(),scamBurst.mergedDng(),tuning)
+                ahbWanted=AhbRoute.wanted(true,rgbHalf,(long)scamBurst.outputWidth()*scamBurst.outputHeight(),scamBurst.mergedDng(),tuning)
                         // P679: a LOFIC shot's result is scaled in place after the merge: never the read-only hardware buffer
                         &&!(scamBurst instanceof ScamHybridBurst&&((ScamHybridBurst)scamBurst).loficLog2()>0);
             }
             final long assetsDone=android.os.SystemClock.elapsedRealtime();
             File input=new File(dir,"input.f32"),output=new File(dir,"output.f32");
-            // SCAM: burst and result through shared memory (memfd) instead of ~0.6 GB
-            // written to and read back from flash per shot; the root worker opens
-            // them as /proc/<pid>/fd/<n>. Files remain the fallback.
+            // The worker inherits the burst and result memfds. Files remain the fallback.
             // P30: with the app-process worker and shared memory the worker starts first and the burst is written while it
             // starts (spawn, CRE and GPU driver), then a byte on a pipe (job file "wait-go") lets it map the burst.
             boolean deferredWrite=false;
@@ -490,21 +407,17 @@ public final class ScamNeuralClient {
                 scamIn=SharedMemory.create("scamera-scam-in");
                 scamOut=scamIn==null?null:SharedMemory.create("scamera-scam-out");
                 if(scamOut!=null){
-                    deferredWrite=direct;
-                    if(!deferredWrite)try(FileChannel channel=scamIn.writeChannel()){scamBurst.write(channel);}
+                    deferredWrite=true;
                 } else {
                     if(scamIn!=null){scamIn.close();scamIn=null;}
                     scamBurst.write(input);
                 }
             }
-            android.os.ParcelFileDescriptor[] goPipe=null;
             if(deferredWrite){
                 goPipe=android.os.ParcelFileDescriptor.createPipe();
                 try(java.io.FileWriter marker=new java.io.FileWriter(new File(dir,"wait-go"))){marker.write("5");}
             }
             if(scamOut==null){
-                // Create as app UID before root truncates/writes it: no chmod,
-                // chown, shared-storage input, or globally readable temp files.
                 if(!output.createNewFile())throw new IOException(Lang.t("Не удалось создать файл результата","Could not create the result file"));
             }
             final long inputDone=android.os.SystemClock.elapsedRealtime();
@@ -540,9 +453,7 @@ public final class ScamNeuralClient {
                     if(!new File(dir,"wait-go").delete())log.accept("CLIENT: wait-go marker left");
                 }
             }
-            if(adopted!=null&&!standbyGone){
-                // (its go byte went above)
-            } else if(direct){
+            if(adopted==null||standbyGone){
                 String dirPath=dir.getAbsolutePath();
                 java.util.ArrayList<String> args=new java.util.ArrayList<>();
                 android.os.ParcelFileDescriptor[] fds=new android.os.ParcelFileDescriptor[0];
@@ -573,22 +484,15 @@ public final class ScamNeuralClient {
                 if(ahb!=null){ahb.spawned();ahb.start((long)scamBurst.outputWidth()*scamBurst.outputHeight()*6);}
                 if(goPipe!=null){
                     goPipe[0].close();
+                    goPipe[0]=null;
                     final long writeStarted=android.os.SystemClock.elapsedRealtime();
                     try(java.io.OutputStream go=new android.os.ParcelFileDescriptor.AutoCloseOutputStream(goPipe[1])){
+                        goPipe[1]=null;
                         try(FileChannel channel=scamIn.writeChannel()){scamBurst.write(channel);}
                         go.write(1); // closing the pipe without this byte stops the worker
                     }
                     log.accept("HEX CLIENT PREP ms: burst written while the worker started in "+(android.os.SystemClock.elapsedRealtime()-writeStarted));
                 }
-            } else {
-            String command="export CLASSPATH="+quote(context.getApplicationInfo().sourceDir)+
-                    "; export LD_LIBRARY_PATH="+quote("/system/lib64:/system_ext/lib64:"+dir.getAbsolutePath()+":/vendor/lib64")+
-                    "; export ADSP_LIBRARY_PATH="+quote(dir.getAbsolutePath()+";/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/vendor/dsp;/system/lib/rfsa/adsp")+
-                    "; exec /system/bin/app_process64 /system/bin "+ScamNeuralWorker.class.getName()+" "+quote(dir.getAbsolutePath());
-            command+=" --scam-capture "+quote(scamIn!=null?scamIn.path():input.getAbsolutePath())
-                    +" "+quote(scamOut!=null?scamOut.path():output.getAbsolutePath());
-            log.accept(Lang.t("ROOT: запуск отдельного процесса; разрешите запрос root","ROOT: starting a separate process; allow the root request"));
-            process=com.scamera.app.util.WorkerSpawn.Child.of(new ProcessBuilder("su","-c",command).redirectErrorStream(true).start());
             }
             final com.scamera.app.util.WorkerSpawn.Child child=process;
             final boolean[] completed={false};
@@ -853,6 +757,9 @@ public final class ScamNeuralClient {
             com.scamera.app.processing.MergeProgress.end(); // P220
             final boolean reap=handedOff&&process!=null; // P371: the worker past its completion line exits on its own (reaped below)
             if(adopted!=null)adopted.closeGo(); // P371: a standby that never got its go byte stops ("burst was not delivered")
+            if(goPipe!=null)for(android.os.ParcelFileDescriptor end:goPipe){
+                if(end!=null)try{end.close();}catch(IOException ignored){}
+            }
             if(process!=null && process.isAlive() && !reap)process.destroy();
             if(scamIn!=null)scamIn.close();
             if(scamOut!=null)scamOut.close();
@@ -883,12 +790,12 @@ public final class ScamNeuralClient {
 
     /**
      * The QNN/CRE runtime (SCAM_FILES and HEX_FILES, all native libraries) linked into the job folder: it ships once, as native
-     * libraries (the sandbox can map executable code only from nativeLibraryDir, and the su launcher reads the same files).
+     * libraries in nativeLibraryDir.
      */
     private static void linkRuntime(Context context,File dir) throws IOException {
         java.util.ArrayList<String> libraries=new java.util.ArrayList<>();
-        for(String[] item:ScamNeuralWorker.SCAM_FILES)libraries.add(item[0]);
-        for(String[] item:ScamNeuralWorker.HEX_FILES)libraries.add(item[0]);
+        for(String[] item:ScamRuntimeAssets.SCAM_FILES)libraries.add(item[0]);
+        for(String[] item:ScamRuntimeAssets.HEX_FILES)libraries.add(item[0]);
         for(String name:libraries){
             File installed=com.scamera.app.util.WorkerSpawn.library(context,name);
             if(installed==null)throw new IOException(Lang.t("Неполная установка: нет ","Incomplete install: missing ")+name);

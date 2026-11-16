@@ -184,7 +184,6 @@ public class HybridSettingsTest {
         assertEquals(1f,PreferenceKeys.routeInternalValue("noise_photon",1f),0f);
         assertEquals(20,PreferenceKeys.getScamZslFrames());assertEquals(20,PreferenceKeys.getHybridZslFrames());
         assertTrue(PreferenceKeys.isHybridDenoiseEnabled());
-        assertFalse(PreferenceKeys.useStockBracketPlanner());
         assertEquals("auto",PreferenceKeys.getScamCreSource());
         manager.set("default_scope","pref_scam_hybrid_noise_photon","2,5");
         manager.set("default_scope","pref_scam_hybrid_zsl_frames","99");

@@ -129,6 +129,7 @@ public class ImageFrame {
         public ByteBuffer shortPacked;
         public int rows;
         public double k;
+        public boolean verifyShort;
     }
 
     /** ... and, as a frame of the burst, names that main frame: its metadata is the main frame's (one exposure, one result). */

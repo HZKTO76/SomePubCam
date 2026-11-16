@@ -4,6 +4,10 @@
         <item>Быстрый</item>
         <item>Качество</item>
     </string-array>
+    <string-array name="scam_hybrid_highlight_merge_entries">
+        <item>Обычное</item>
+        <item>Адаптивное</item>
+    </string-array>
     <string-array name="scam_hybrid_fringe_method_entries">
         <item>Нейросеть</item>
         <item>Классическое</item>

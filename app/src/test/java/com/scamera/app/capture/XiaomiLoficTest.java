@@ -5,6 +5,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -284,7 +285,7 @@ public class XiaomiLoficTest {
         assertFalse(p.usable()); // no result yet
         p.exposureCount = 1;
         p.result = org.mockito.Mockito.mock(android.hardware.camera2.TotalCaptureResult.class);
-        assertFalse(p.usable()); // a single exposure: the Short read is not usable
+        assertFalse(p.usable()); // the Short read still needs verification
         p.exposureCount = 2;
         assertTrue(p.usable());
         // NONE never enters; the ring keeps its newest pairs
@@ -313,6 +314,29 @@ public class XiaomiLoficTest {
         assertEquals(16_625_000L * 3, taken.get(1).timestamp()); // pair 4 skipped
         assertEquals(16_625_000L * 2, taken.get(2).timestamp());
         assertEquals(0, ring.size()); // the ring is emptied for the next press
+    }
+
+    @Test
+    public void confirmedPairAfterTheShutterDoesNotDiscardEarlierShortReads() {
+        final XiaomiLofic.Ring ring = new XiaomiLofic.Ring(3);
+        final ByteBuffer l = ByteBuffer.allocateDirect(4 * XiaomiLofic.LONG_ROW);
+        final ByteBuffer s = ByteBuffer.allocateDirect(4 * XiaomiLofic.SHORT_ROW);
+        final android.hardware.camera2.TotalCaptureResult r = org.mockito.Mockito.mock(android.hardware.camera2.TotalCaptureResult.class);
+        final long cutoff = 33_000_000L;
+        ring.store(XiaomiLofic.Stream.LONG, cutoff, l, l.capacity());
+        final XiaomiLofic.Pair candidate = ring.store(XiaomiLofic.Stream.SHORT, cutoff, s, s.capacity());
+        candidate.result = r;
+        candidate.exposureCount = 1;
+        ring.store(XiaomiLofic.Stream.LONG, cutoff * 2, l, l.capacity());
+        final XiaomiLofic.Pair confirmed = ring.store(XiaomiLofic.Stream.SHORT, cutoff * 2, s, s.capacity());
+        confirmed.result = r;
+        confirmed.exposureCount = 2;
+
+        final List<XiaomiLofic.Pair> taken = ring.take(3, cutoff);
+        assertEquals(1, taken.size());
+        assertSame(candidate, taken.get(0));
+        assertTrue(candidate.sameGrid());
+        assertFalse(candidate.usable());
     }
 
     // ---------------------------------------------------------------- the checks and the fallback

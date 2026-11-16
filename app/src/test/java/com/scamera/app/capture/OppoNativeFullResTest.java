@@ -677,9 +677,8 @@ public class OppoNativeFullResTest {
         assertSame("no such row: the same offer", base, OppoNativeFullRes.ispVariants(base, 8192, 6144, 31));
         assertEquals("the tele's single row gets them too only when asked", 3,
                 OppoNativeFullRes.ispVariants(OppoNativeFullRes.rows(OppoNativeFullRes.PYB110_TELE, 4096, 3072, null), 8192, 6144, 9).small.length);
-        // the owner's phone: module_oppo_fullres_fail_2=4, why=1025:died,2025:died,1009:died,25:died (no new ROW_TRIALS needed)
+        // the owner's phone: module_oppo_fullres_fail_2=4, why=1025:died,2025:died,1009:died,25:died
         java.util.Set<Integer> failed = new java.util.HashSet<>(FullResTrials.reasons("1025:died,2025:died,1009:died,25:died").keySet());
-        assertEquals(1, OppoNativeFullRes.ROW_TRIALS);
         final int[] order = {3025, 4025, 3009, 4009, 9};
         for (int i = 0; i < order.length; i++) {
             final int[] live = OppoNativeFullRes.liveRow(o.small, 4 + i, failed);

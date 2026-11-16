@@ -1785,7 +1785,7 @@ public class SettingsMenuTest {
         // «Лаборатория» (P277: a row that opens ScamLabFragment, no page of its own), «Логи», «О приложении»
         assertEquals(Arrays.asList("scam_lab_screen"),keys(screen.findPreference("root_lab")));
         assertEquals(0,((PreferenceScreen)screen.findPreference("scam_lab_screen")).getPreferenceCount());
-        assertEquals(Arrays.asList("scam_diagnostics_screen","camera_package_spoof_screen","developer_settings_screen","pref_root_enabled"),
+        assertEquals(Arrays.asList("scam_diagnostics_screen","camera_package_spoof_screen","developer_settings_screen"),
                 keys(screen.findPreference("root_logs")));
         // rows removed: the module hub (P384), the LUT link, empty containers; P406: the SHDR wrapper, «Другие тонкие настройки» and the
         // groups the reference app does not have

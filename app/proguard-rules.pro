@@ -1,7 +1,4 @@
-# SCAMERA shrinking (R8). Only what reflection, JNI, GSON, an external launch or a theme reaches by name is listed here; layouts,
-# the manifest, navigation graphs and preference XML get their rules from aapt2. P662: the shipped (debug) variant is shrunk with
-# these rules, without renaming (-dontobfuscate: stack traces, logs, the settings keys made of class names and the JNI names stay).
--dontobfuscate
+# SCAMERA R8 shrinking and obfuscation. Keep the names used by reflection, JNI and saved data.
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod,SourceFile,LineNumberTable
 
 # The settings annotations and the classes that read them by reflection. A class with fields annotated @Tunable / @SensorConfig
@@ -27,6 +24,10 @@
 -keep class com.scamera.app.ui.settings.custompreferences.TunableSeekBarPreference,
             com.scamera.app.ui.settings.custompreferences.TunableKeyPreference,
             com.scamera.app.ui.settings.custompreferences.TunableKeyDialog { *; }
+# PreferenceInflater loads custom preference tags from XML.
+-keep class com.scamera.app.ui.settings.custompreferences.** extends androidx.preference.Preference {
+    public <init>(android.content.Context, android.util.AttributeSet);
+}
 
 # GSON models (fields by name or @SerializedName, made without a constructor call): vendor tag lists and the lens table.
 -keep class com.scamera.app.api.VendorTagUtils,
@@ -41,6 +42,7 @@
 -keepclassmembers class com.scamera.app.processing.render.Parameters { <fields>; }
 
 # Serializable (SettingsSearchFragment.Entry in a Bundle): the standard members.
+-keepnames class com.scamera.app.ui.settings.SettingsSearchFragment$Entry
 -keepclassmembers class * implements java.io.Serializable {
     static final long serialVersionUID;
     private static final java.io.ObjectStreamField[] serialPersistentFields;
@@ -56,8 +58,11 @@
 -keep class * implements com.davemorrissey.labs.subscaleview.decoder.ImageRegionDecoder { <init>(...); *; }
 -keep class * implements com.davemorrissey.labs.subscaleview.decoder.ImageDecoder { <init>(...); *; }
 
-# The su launcher starts the merge job as "app_process64 /system/bin <ScamNeuralWorker> ..." (ScamNeuralClient): its main.
--keep class com.scamera.app.processing.opengl.postpipeline.ScamNeuralWorker { *; }
+# Navigation instantiates destinations by the names stored in gallery_nav_graph.xml.
+-keep class com.scamera.app.gallery.ui.fragments.ImageViewerFragment,
+            com.scamera.app.gallery.ui.fragments.ImageLibraryFragment,
+            com.scamera.app.gallery.ui.fragments.ImageCompareFragment,
+            com.scamera.app.gallery.editor.PhotoEditorFragment { public <init>(); }
 
 # JNI: every class with native methods keeps its name and those methods (the C++ side is bound by Java_<class>_<method>).
 -keepclasseswithmembers,includedescriptorclasses class * {
@@ -68,9 +73,8 @@
 -keep class com.googlecode.tesseract.android.** { *; }
 -keep class com.googlecode.leptonica.android.** { *; }
 
-# The lab activity is kept whole; the stock AE keeps its JNI-bound natives.
+# The lab activity is kept whole.
 -keep class com.scamera.app.ui.settings.ScamActivity { *; }
--keep class com.scamera.app.capture.ScamStockAe { native <methods>; }
 
 # P582: the base theme names it in viewInflaterClass; AppCompat makes it by reflection.
 -keep class com.scamera.app.ui.style.ConceptViewInflater { <init>(); }

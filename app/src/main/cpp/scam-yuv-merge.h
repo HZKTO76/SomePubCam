@@ -13,6 +13,8 @@
 // Everything here is plain C++17 (no Android): the JNI (scam-yuv-jni.cpp) and the host checks include it alike.
 #pragma once
 
+#include "scam-highlight-merge.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -946,6 +948,7 @@ struct Settings {
     bool sharpestBase = true;
     bool guidedChroma = true;
     bool bracket = true;
+    bool adaptiveHighlights = false;
     float deghost = 3.f;                   // the bracket frames' agreement: |frame - base| <= deghost x sigma of the base
     int threads = 4;
 };
@@ -1529,6 +1532,7 @@ Report mergeBurst(const std::vector<Frame420<S>>& frames, const std::vector<Fram
             const float sigma = std::sqrt(std::max(1e-10f, (rep.linS * std::max(0.f, lb) + rep.linO) / baseFrames));
             float esSum[3] = {0, 0, 0};
             int esCount = 0;
+            float esWeight = 0.f, esConfidence = 0.f;
             float accum[3] = {B[0] * baseFrames, B[1] * baseFrames, B[2] * baseFrames};
             float weight = baseFrames;
             for (int i : usable) {
@@ -1546,6 +1550,40 @@ Report mergeBurst(const std::vector<Frame420<S>>& frames, const std::vector<Fram
                 const float tol = set.deghost * std::sqrt(sigma * sigma + sf * sf);
                 if (r < 1.f) {
                     if (clipW <= 0.f || fmax > 0.97f) continue;
+                    if (set.adaptiveHighlights) {
+                        float confidence = 1.f;
+                        for (int k = 0; k < 3; ++k) {
+                            const float b = B[k] / outScale;
+                            confidence = std::min(confidence, scam_highlight::confidence(
+                                    b, c[k] / outScale, tol / outScale, b >= 0.97f));
+                        }
+                        if (confidence <= 0.f) continue;
+                        const float band = scam_highlight::transition(bmax);
+                        if (band > 0.f) {
+                            constexpr int dx[4] = {-1, 1, 0, 0}, dy[4] = {0, 0, -1, 1};
+                            float sum[3] = {c[0], c[1], c[2]}, den = 1.f;
+                            for (int j = 0; j < 4; ++j) {
+                                const int tx = fx + dx[j], ty = fy + dy[j];
+                                if (tx < 0 || tx >= w || ty < 0 || ty >= h) continue;
+                                float tap[3];
+                                if (frameLinear(i, tx, ty, tap) > 0.97f) continue;
+                                float delta = 0.f;
+                                for (int k = 0; k < 3; ++k) {
+                                    tap[k] /= r;
+                                    delta = std::max(delta, std::abs(tap[k] - c[k]));
+                                }
+                                const float a = 0.5f * scam_highlight::tapWeight(delta, std::max(sf, 0.018f * outScale));
+                                for (int k = 0; k < 3; ++k) sum[k] += tap[k] * a;
+                                den += a;
+                            }
+                            for (int k = 0; k < 3; ++k) c[k] += band * (sum[k] / den - c[k]);
+                        }
+                        for (int k = 0; k < 3; ++k) esSum[k] += c[k] * confidence;
+                        esWeight += confidence;
+                        esConfidence = std::max(esConfidence, confidence);
+                        ++esCount;
+                        continue;
+                    }
                     // where the base still holds detail the frame must agree with it; where the base is clipped it must be
                     // at least as bright as the clip (an object that came into the highlight would be darker)
                     const bool agrees = clipW < 1.f ? std::fabs(lf - lb) <= tol + 0.05f * lb : lf >= lb * 0.9f;
@@ -1569,9 +1607,11 @@ Report mergeBurst(const std::vector<Frame420<S>>& frames, const std::vector<Fram
             for (int k = 0; k < 3; ++k) res[k] = accum[k] / weight;
             if (esCount > 0) {
                 ++es;
+                const float shortShare = set.adaptiveHighlights ? clipW * esConfidence : clipW;
+                const float shortWeight = set.adaptiveHighlights ? esWeight : float(esCount);
                 for (int k = 0; k < 3; ++k) {
-                    const float e = esSum[k] / float(esCount);
-                    res[k] = (1.f - clipW) * res[k] + clipW * std::max(e, clipW >= 1.f ? B[k] : 0.f);
+                    const float e = esSum[k] / shortWeight;
+                    res[k] = (1.f - shortShare) * res[k] + shortShare * std::max(e, clipW >= 1.f ? B[k] : 0.f);
                 }
             }
             o[0] = res[0];

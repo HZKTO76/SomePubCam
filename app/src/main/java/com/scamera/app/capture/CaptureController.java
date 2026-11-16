@@ -519,7 +519,6 @@ public class CaptureController {
     // The stock-AE observer attaches to the camera provider after the session
     // starts; a queue flush while it attaches hung the HAL once (no bracket for
     // 65 s, provider restarted). Flush only once the observer has delivered a plan.
-    private volatile boolean mStockObserverReady;
 
     /** The still reader beside the RAW one: its frames go straight to the saver. */
     private final ImageReader.OnImageAvailableListener mStillReaderListener = reader -> mImageSaver.initProcess(reader);
@@ -661,7 +660,6 @@ public class CaptureController {
     private volatile CameraCaptureSession mCaptureSession;
     private final Object mPreviewStateLock = new Object();
     private final java.util.concurrent.atomic.AtomicInteger mSessionGeneration = new java.util.concurrent.atomic.AtomicInteger();
-    private volatile ScamStockAe mStockAe;
     private int mConfiguredSessionGeneration = -1;
     /** The lens's last focus distance (diopters) the viewfinder reported. */
     public float focusDiopters;
@@ -930,16 +928,6 @@ public class CaptureController {
                 }
                 maybeRunPendingRearm(session, request, result);
                 maybeReapplyAutoOis(session); // P316: «Оптическая стабилизация» Авто follows the tripod during the session
-                // P680: the constant first (useStockBracketPlanner is false since P129): no settings read per frame for it
-                if(PreferenceKeys.useStockBracketPlanner() && PreferenceKeys.isScamEnabled() && isCurrentPreviewSession(session)) {
-                    ScamStockAe stock=mStockAe;
-                    if(stock==null || stock.generation!=mSessionGeneration.get()) {
-                        if(stock!=null)stock.close();
-                        stock=new ScamStockAe(ScameraApp.getAppContext(),mSessionGeneration.get(),physicalID);
-                        mStockAe=stock;
-                    }
-                    stock.offer(result);
-                }
                 feedThreeA(result);
                 final com.scamera.app.control.subject.SubjectFocus subject = mSubjectFocus;
                 if (subject != null) subject.onPreviewResult(result);
@@ -2282,7 +2270,6 @@ public class CaptureController {
         mPreviewSessionStartMs = 0;
         if (mBackgroundHandler != null) mBackgroundHandler.removeCallbacks(mStallCheck);
         mScamQueuedShots = 0;
-        ScamStockAe stock=mStockAe;mStockAe=null;if(stock!=null)stock.close();
         mScamRingFrozen=false;
         clearFlashShot(); // P590
         // Invalidate callbacks before releasing their resources. onConfigured and
@@ -3479,10 +3466,6 @@ public class CaptureController {
             cameraEventsListener.processingFailed(failure.getMessage());
             return;
         }
-        // Attaching the stock AE observer takes seconds; start it with the
-        // camera instead of on the first SCAM preview frame.
-        if (mVivoSdkRawSession == null && PreferenceKeys.isScamEnabled() && PreferenceKeys.useStockBracketPlanner())
-            ScamStockAe.warmUp(ScameraApp.getAppContext());
         try {
             cameraEventsListener.cameraOpening(mCameraManager);
             // The package spoof first: a module only the spoof lists has no characteristics without it.
@@ -4578,13 +4561,13 @@ public class CaptureController {
                     configuration.setSessionParameters(loficSession.build());
                 } else if (sdkFullRes) {
                     CaptureRequest.Builder sdkSession = sessionDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-                    if (nativeVivoFullRes()) applyVivoSdkPreview(sdkSession);
+                    final boolean nativeFullRes = nativeVivoFullRes();
+                    if (nativeFullRes) applyVivoSdkPreview(sdkSession);
                     if (fullSizeRecipe()) { // P684: the stock full-size recipe's session keys
                         final List<String> unknown = X300FullSize.applySession(sdkSession);
                         Log.i("SCAM_CAPTURE", "200 MP full-size session keys on camera " + physicalID
                                 + (unknown.isEmpty() ? ": all set" : ": unknown to this firmware (skipped) " + unknown) + " (P684)");
-                    }
-                    else {
+                    } else if (!nativeFullRes) {
                         mVivoSdkRawSession.apply(sdkSession, false, 0);
                         mVivoSdkRawSession.applyStreamUsage(sdkSession);
                     }
@@ -11114,7 +11097,7 @@ public class CaptureController {
             // first bracket exposure ~0.25 s closer to the press; the preview is
             // restarted right behind the burst.
             final boolean flushWanted = mScamRouted && scamSequence != null && PreferenceKeys.isScamFastCapture()
-                    && !mShotRequests.isEmpty() && (mStockObserverReady || !PreferenceKeys.useStockBracketPlanner());
+                    && !mShotRequests.isEmpty();
             // P27 (M6): a camera whose HAL lost the first requests after the flush twice in a row is not flushed any more.
             // P54b: nor a camera under the forced stabilisation (the flush restarts the HAL pipeline; the stock app never flushes).
             final boolean forcedNoFlush = mForcedStab && ForcedStabilization.noFlush();

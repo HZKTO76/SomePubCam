@@ -68,7 +68,8 @@ public final class SettingsLevel {
         CODE_ROWS.addAll(Arrays.asList(MODE_ROW, CUSTOM_ROW, WIZARD_ROW, BANNER_ROW));
         simple("pref_scam_hybrid_processing", "tone_settings_screen", "root_lenses", "root_photo", "root_shoot", "root_colour",
                 "root_about");
-        advanced("scam_hybrid_dnmerge_screen", "pref_scam_hybrid_fringe_method", "fringe_net_screen", "pref_scam_hybrid_tone_version",
+        advanced("scam_hybrid_dnmerge_screen", "pref_scam_hybrid_highlight_merge",
+                "pref_scam_hybrid_fringe_method", "fringe_net_screen", "pref_scam_hybrid_tone_version",
                 "oldstyle_tone_screen", "root_lab", "root_logs");
         // ── «Настройки тона»: the three everyday sliders (brightness, contrast, saturation); the tone's own pages stay the experts'
         simple("pref_scam_hybrid_why_ae_target", "pref_scam_hybrid_why_macro_contrast", "pref_scam_hybrid_why_agx_sat");

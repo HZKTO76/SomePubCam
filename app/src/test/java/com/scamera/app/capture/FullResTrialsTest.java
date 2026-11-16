@@ -98,6 +98,16 @@ public class FullResTrialsTest {
         assertEquals("35:noframe", OppoNativeFullRes.reasons(prefs, "2", B));
     }
 
+    @Test
+    public void findX7UltraRetriesModesRefusedBeforeNativeSessionKeysWereRestored() {
+        final String oldStamp = FullResTrials.stamp(1, android.os.Build.FINGERPRINT);
+        OppoNativeFullRes.note(prefs, "2", 1, 35, "session refused", oldStamp);
+        OppoNativeFullRes.note(prefs, "2", 2, 37, "session refused", oldStamp);
+
+        assertEquals(2, OppoNativeFullRes.failures(prefs, "2", oldStamp));
+        assertEquals(0, OppoNativeFullRes.failures(prefs, "2", OppoNativeFullRes.stamp()));
+    }
+
     /** The trials of a build before P214h (no stamp, the keys P210 wrote) count and get this firmware's stamp. */
     @Test
     public void theTrialsOfABuildBeforeTheStampAreKept() {

@@ -326,21 +326,6 @@ public class PreferenceKeys {
         return settings.getBoolean(SCOPE_GLOBAL, "pref_scamhdr_diagnostics", false);
     }
 
-    /**
-     * Optional root features (off by default; everything works without root):
-     * the vivo stock-AE observer for the SCAM bracket, and su as the fallback
-     * launcher when the worker is not installed as a native library.
-     */
-    public static boolean isRootEnabled() { return settings.getBoolean(SCOPE_GLOBAL, "pref_root_enabled", false); }
-    /**
-     * true: the vivo stock AE solver through the root observer («Стоковый AE vivo»: Root on, vivo X200 Ultra only); false: the
-     * SCAMERA planner (no root, any device; the default since 8 October 2026).
-     */
-    public static boolean useStockBracketPlanner() {
-        // P129: the stock AE observer (root + Frida) planned SCAM HDR's bracket only; SHDR's N frames are the ZSL ring at the
-        // preview exposure, always the SCAMERA plan of that exposure. Its native library and assets are gone.
-        return false;
-    }
     /** SCAM: build L from the ZSL N frames instead of capturing it after the shutter. */
     public static boolean isScamZslLong() {
         if (isHybridShot()) return false; // the hybrid takes no L frame (Shasta brackets after the press instead)
@@ -745,6 +730,7 @@ public class PreferenceKeys {
     public static boolean mergeTuningKey(String key) {
         if (key == null || !key.startsWith(HYBRID_PREFIX)) return false;
         final String suffix = key.substring(HYBRID_PREFIX.length());
+        if ("highlight_merge".equals(suffix)) return true;
         for (String[] k : TUNING_KEYS) if (k[1].equals(suffix)) return true;
         return false;
     }
@@ -759,6 +745,7 @@ public class PreferenceKeys {
     /** "key value" lines for the worker's hybrid_tuning.txt, from the pref_scam_hybrid_* preferences (scam_dev.txt "hybrid_<key>"). */
     public static String hybridTuningText() {
         StringBuilder out = new StringBuilder();
+        if (adaptiveHighlightMerge()) out.append("adaptiveHighlights 1\n");
         final boolean motion = isMotionMode(), noHdr = noHdrFrames();
         for (String[] k : TUNING_KEYS) {
             Float dev = scamDevValue("hybrid_" + k[1]);
@@ -1070,6 +1057,7 @@ public class PreferenceKeys {
     }
     /** P474: «Быстрый». */
     public static boolean fastProcessing() { return "fast".equals(processingMode()); }
+    public static boolean adaptiveHighlightMerge() { return "adaptive".equals(hybridString("highlight_merge", "classic")); }
     /**
      * P195 (owner, 2026-10-17: «добавь так же возможность отключать наш 2х2 и 4х4 ремозаик чтобы получать фото без него»):
      * pref_scam_hybrid_mosaic_remosaic, the top row of «Мозаика без ремозаика»; on (default) = our remosaic of Quad / Tetra streams

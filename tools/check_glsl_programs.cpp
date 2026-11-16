@@ -100,6 +100,8 @@ int main(int argc,char** argv){
     const Variant variants[]={
         {"plain",false,false,true,true,false,"",false,"",false,false},
         {"local align, US box + cache, options",true,false,false,true,false,rejAll,true,partialBox,false,false},
+        {"adaptive highlights, US box + cache",true,false,false,true,false,rejAll,true,partialBox+"#define ADAPTIVE_HIGHLIGHTS 1\n",false,false},
+        {"adaptive highlights, Quad and Tetra",true,false,true,false,false,rejAll,false,"#define NAT_ADAPTIVE_HIGHLIGHTS 1\n",false,false},
         {"local align, US AA, DCG, native",true,false,true,true,true,rejAll,true,partialAa,false,false},
         {"defaults, Bento colour pass, DCG",false,true,false,false,true,rejDefault,false,hybridPartialSpec(t),false,false},
         {"defaults",true,false,false,true,false,rejDefault,hybridBlendOptions(t),hybridPartialSpec(t),false,false},
@@ -113,6 +115,11 @@ int main(int argc,char** argv){
                     if(line.find("REFUSED")!=std::string::npos||line.find("not built")!=std::string::npos||line.find("reference blend")!=std::string::npos)
                         std::printf("  %s\n",line.c_str());
                 },false,v.nat,true,v.blend,v.dcg,v.rej,v.blendOpts,v.partial);
+            if(v.partial.find("NAT_ADAPTIVE_HIGHLIGHTS")!=std::string::npos){
+                gpu.prewarmNative(2,3,true,true,false,true);
+                gpu.prewarmNative(4,6,true,true,false,true);
+                gpu.prewarmNative(2,3,true,false,true,false);
+            }
             std::printf("ok   %s (%s)\n",v.name,gpu.compileMs.c_str());
         }catch(const std::exception& e){
             std::printf("FAIL %s: %s\n",v.name,e.what());++failed;

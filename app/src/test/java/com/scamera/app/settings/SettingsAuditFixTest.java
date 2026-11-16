@@ -297,7 +297,7 @@ public class SettingsAuditFixTest {
                 "pref_watermark_show_text","pref_watermark_show_device","pref_watermark_show_lens","pref_watermark_show_aperture",
                 "pref_watermark_show_shutter","pref_watermark_show_iso","pref_watermark_show_time","pref_watermark_date_format",
                 "pref_watermark_layout","pref_watermark_position","pref_watermark_color","pref_watermark_font","pref_watermark_margin",
-                "pref_watermark_logo","pref_watermark_size","pref_watermark_opacity","pref_root_enabled",
+                "pref_watermark_logo","pref_watermark_size","pref_watermark_opacity",
                 "pref_camera_package_spoof_enabled","pref_oplus_spoof_package_key","pref_generic_spoof_package_key",
                 "pref_binder_spoof_package_key","pref_face_detect_mode","pref_tracking_af_mode","pref_hide_gallery_icon_key",
                 "pref_theme_key","pref_antibanding_hz_key"};
@@ -431,13 +431,13 @@ public class SettingsAuditFixTest {
                 assertNull(key,page.findPreference(key));
             assertTrue(page.findPreference("shdr_capture_report").isVisible());
             assertTrue(page.findPreference("scam_diagnostics_screen").isVisible());
-            assertTrue(page.findPreference("pref_root_enabled").isVisible());
+            assertNull(page.findPreference("pref_root_enabled"));
         }
     }
 
     /** The settings screen and the shade see the same device facts (DeviceAvailability). */
     @Test public void deviceFactsReachTheAvailability() {
-        Map<String,Object> values=new HashMap<>();values.put("pref_root_enabled",true);
+        Map<String,Object> values=new HashMap<>();
         // Robolectric is no vivo / OPPO: no tuned or ISP matrix replaces the colour method, the OPPO saturation row is hidden
         assertNull(DeviceAvailability.of(values).reason("pref_color_method_key"));
         assertTrue(DeviceAvailability.of(values).hidden("pref_scam_hybrid_why_ccm_sat"));

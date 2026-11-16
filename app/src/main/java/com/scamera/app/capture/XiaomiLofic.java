@@ -60,8 +60,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Any check that fails closes the session and opens the next setup; with none left the session is the normal one, with a log
  * line and a message. The frames: packed MIPI, rows back to back, the buffers' rowStride means nothing; which of A / B is Long
  * changes, so each buffer is classified by its used length. Long: black 1024, white 16383; Short: black 64, white 1023 (the
- * metadata says otherwise). A pair is the Long and the Short image of one timestamp; only pairs whose result reports
- * com.qti.stats_control.ExposureCount 2 carry a usable Short read.
+ * metadata says otherwise). A pair is the Long and the Short image of one timestamp; pairs whose result reports
+ * com.qti.stats_control.ExposureCount 2 are preferred. Other pairs need a Short read verified from its RAW data.
  * <p>
  * scam_dev: {@code xiaomi17_lofic} -1 follows the switch, 1 forces the route on the main camera, 0 turns it off (the switch's
  * «DCG+LOFIC» then runs P641's ladder); {@code xiaomi17_lofic_setup} 0 = the 4:3 variants first, 1 = 16:10 only; {@code lofic_pairs} the pairs
@@ -812,9 +812,13 @@ public final class XiaomiLofic {
             return longImage != null && shortImage != null;
         }
 
-        /** Usable for a shot: both images and a result reporting ExposureCount 2. */
+        public boolean sameGrid() {
+            return complete() && longImage.rows > 0 && longImage.rows == shortImage.rows;
+        }
+
+        /** Both reads on the same grid and a result confirming ExposureCount 2. */
         public boolean usable() {
-            return complete() && result != null && exposureCount != null && exposureCount == 2;
+            return sameGrid() && result != null && exposureCount != null && exposureCount == 2;
         }
     }
 
@@ -928,32 +932,24 @@ public final class XiaomiLofic {
         }
 
         /**
-         * A shot's pairs: up to {@code count} of the newest usable ones taken at or before {@code cutoff} (0: any), newest first,
-         * taken out of the ring (their buffers belong to the caller); the ring is emptied and released.
+         * The newest pairs at or before the shutter (0: any). If none is confirmed by metadata, keep the Long frames and
+         * their candidate Short reads for verification. The returned buffers belong to the caller.
          */
         public synchronized List<Pair> take(int count, long cutoff) {
-            final List<Pair> out = new ArrayList<>();
-            final java.util.Iterator<Pair> it = pairs.descendingIterator();
-            while (it.hasNext()) {
-                final Pair p = it.next();
-                if (out.size() < count && p.usable() && (cutoff <= 0 || p.timestamp() <= cutoff)) {
-                    out.add(p);
-                    it.remove();
+            boolean confirmed = false;
+            for (Pair p : pairs) {
+                if (p.usable() && (cutoff <= 0 || p.timestamp() <= cutoff)) {
+                    confirmed = true;
+                    break;
                 }
             }
-            for (Pair p : pairs) release(p);
-            pairs.clear();
-            frozen = false;
-            return out;
-        }
 
-        /** Pairs whose Long image is here but no usable Short read (ExposureCount 1 or none): a shot of the Long frames alone. */
-        public synchronized List<Pair> takeLongOnly(int count, long cutoff) {
             final List<Pair> out = new ArrayList<>();
             final java.util.Iterator<Pair> it = pairs.descendingIterator();
             while (it.hasNext()) {
                 final Pair p = it.next();
-                if (out.size() < count && p.longImage != null && p.result != null && (cutoff <= 0 || p.timestamp() <= cutoff)) {
+                if (out.size() < count && (cutoff <= 0 || p.timestamp() <= cutoff)
+                        && (confirmed ? p.usable() : p.longImage != null && p.result != null)) {
                     out.add(p);
                     it.remove();
                 }

@@ -799,7 +799,7 @@ static void checkGuidedChroma() {
     CHECK(err[1] > err[0] + 1.0);
 }
 
-static void checkBracket() {
+static void checkBracket(bool adaptive = false) {
     const int w = 320, h = 256;
     Scene s(w, h, true, 21);
     std::vector<float> in, out;
@@ -839,13 +839,14 @@ static void checkBracket() {
     Settings set;
     set.sharpestBase = false;
     set.threads = 3;
+    set.adaptiveHighlights = adaptive;
     std::vector<float> on(std::size_t(w) * h * 3), off(on.size());
     const NoiseFallback camera{shot, read};  // the camera's NOISE_PROFILE of this synthetic sensor
     const Report rep = mergeBurst(views, info, set, t, Decoder{}, camera, on.data());
     Settings noBracket = set;
     noBracket.bracket = false;
     mergeBurst(views, info, noBracket, t, Decoder{}, camera, off.data());
-    std::printf("bracket: %s\n", rep.text().c_str());
+    std::printf("%s bracket: %s\n", adaptive ? "adaptive" : "standard", rep.text().c_str());
     CHECK(rep.bracketUsed);
     // 1. highlights: the window (base clipped, ES not, no object) back within 10 % of the truth
     std::vector<float> errs;
@@ -1309,6 +1310,7 @@ int main() {
     checkSharpestBase();
     checkGuidedChroma();
     checkBracket();
+    checkBracket(true);
     checkCaptureCurve();
     checkCurveOverSrgb();
     checkTenBitHlg();

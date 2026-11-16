@@ -218,6 +218,24 @@ public class GpuPaceTest {
     }
 
     @Test
+    public void legacyAdrenoDoesNotSplitFullSizePassesIntoTinyBands() {
+        GpuPace.forgetBands();
+        final int minimum = GpuPace.minBandRowsFor("Adreno (TM) 640", Float.NaN);
+        assertEquals(128, minimum);
+        assertEquals(16, GpuPace.minBandRowsFor("Adreno (TM) 650", Float.NaN));
+        assertEquals(16, GpuPace.minBandRowsFor("Adreno (TM) 640", 10f));
+        final FakeGpu gpu = new FakeGpu(0L);
+        final GpuPace.Pacer pacer = new GpuPace.Pacer(gpu, 2, 10f, () -> false, minimum);
+        final List<Integer> rows = pass(gpu, pacer, "why/sharp_rl", 4032, 3024, 100, 0, new long[1]);
+        assertEquals(3024, rows.stream().mapToInt(Integer::intValue).sum());
+        assertTrue(rows.subList(0, rows.size() - 1).stream().allMatch(r -> r >= 128));
+        assertTrue(pacer.fences <= 24);
+        assertEquals(64, pacer.bandRows("why/sharp_rl", 4032, 64));
+        pacer.close();
+        GpuPace.forgetBands();
+    }
+
+    @Test
     public void theMeasurementIsNeverMoreThanTheBandsGpuTime() {
         GpuPace.forgetBands();
         final FakeGpu gpu = new FakeGpu(0L);
