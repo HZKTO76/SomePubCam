@@ -54,7 +54,7 @@ public class CropUpscaleTest {
                 && end > reference && pipeline > end);
         String h = src("src/main/java/com/scamera/app/processing/opengl/postpipeline/ScamHybridBurst.java");
         assertTrue(h.contains("burst.mergedDng = mergedDng || burst.dngMosaic > 1;"));
-        assertTrue(h.contains("safe.mergedDng = safe.dngMosaic > 1;"));
+        assertTrue(h.contains("safe.mergedDng = mergedDng || safe.dngMosaic > 1;"));
         String w = src("src/main/cpp/scam-hybrid.h");
         assertTrue(w.contains("||set(\"dngMosaic\",nullptr,&t.dngMosaic)"));
         int at = w.indexOf("const int dngBlock=tune.dngMosaic!=0&&(block==2||block==4)?block:1;");

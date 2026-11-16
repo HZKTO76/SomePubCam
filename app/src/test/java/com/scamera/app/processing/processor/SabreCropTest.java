@@ -345,7 +345,10 @@ public class SabreCropTest {
         String h = new String(Files.readAllBytes(src("src/main/java/com/scamera/app/processing/opengl/postpipeline/ScamHybridBurst.java").toPath()),
                 StandardCharsets.UTF_8);
         assertTrue("the window's grid is the plan's", h.contains("final android.graphics.Point sabre = window != null ? new android.graphics.Point(window.outWidth, window.outHeight)"));
-        assertTrue("no output resize of a window before its crop", h.contains("finalWidth = window != null ? outWidth : fin.x;"));
+        assertTrue("the window keeps its merge size before the remaining crop",
+                h.contains("final boolean keepsOutputSize = window != null || dngMosaic > 1;")
+                        && h.contains("finalWidth = keepsOutputSize ? outWidth : fin.x;")
+                        && h.contains("finalHeight = keepsOutputSize ? outHeight : fin.y;"));
     }
 
     private static File src(String path) {

@@ -1747,8 +1747,10 @@ public final class ScamHybridBurst implements ScamTransport {
             lastNormals = burst.normalCount();
             return merged;
         } catch (Exception first) {
-            if (burst.strictTwoX || burst.sabreDng()) throw new IOException(Lang.t("SHDR: склейка Sabre не завершена, размер ",
-                    "SHDR: Sabre merge failed at ") + burst.outWidth + "x" + burst.outHeight, first);
+            if (burst.strictTwoX || burst.sabreDng()) throw new IOException(Lang.t(
+                    "SHDR: склейка не завершена; замена на 1× или увеличение отключена",
+                    "SHDR: merge failed; no sensor-grid or upscale fallback")
+                    + " (" + burst.outWidth + "x" + burst.outHeight + ")", first);
             final String report = ScamNeuralClient.lastJobReport;
             final String why = String.valueOf(first.getMessage());
             final boolean retry = conservativeRetry(first);
