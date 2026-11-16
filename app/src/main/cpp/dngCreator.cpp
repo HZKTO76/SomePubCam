@@ -419,10 +419,8 @@ static inline float linearHalf(uint16_t bits) {
 #endif
 }
 
-template <typename Sample> static inline float linearSample(Sample value) {
-    if constexpr (sizeof(Sample) == 2) return linearHalf(value);
-    else return value;
-}
+static inline float linearSample(uint16_t value) { return linearHalf(value); }
+static inline float linearSample(float value) { return value; }
 
 template <typename Sample> static float linearHeadroom(const Sample *rgb, size_t count) {
     float peak = 1.f;
@@ -437,7 +435,7 @@ template <typename Sample> static void packLinearStrip(const Sample *rgb, uint16
     const float scale = 65535.f / headroom;
     for (size_t i = 0; i < count; ++i) {
         const float value = linearSample(rgb[i]);
-        dst[i] = std::isfinite(value) ? uint16_t(std::clamp(value * scale, 0.f, 65535.f) + .5f) : 0;
+        dst[i] = std::isfinite(value) ? uint16_t(std::min(65535.f, std::max(0.f, value * scale)) + .5f) : 0;
     }
 }
 
