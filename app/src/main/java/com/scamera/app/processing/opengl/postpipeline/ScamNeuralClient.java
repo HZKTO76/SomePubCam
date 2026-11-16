@@ -660,8 +660,9 @@ public final class ScamNeuralClient {
             final long outputBytes=scamOut!=null?scamOut.size():output.length();
             // The trailers after the RGB (merged RAW, effective-frame map, clip flags; see trailers)
             final boolean map=scamBurst.effectiveMap();
+            final boolean mosaicDng=scamBurst.mergedDng()&&!scamBurst.linearDng();
             if(!map)log.accept("CLIENT: no effective-frame map asked for ("+ow+"x"+oh+": no denoise reads it)");
-            long[] layout=trailers(outputBytes,expected,scamBurst.mergedRawPixels()*2,(long)ow*oh,scamBurst.mergedDng(),map,scamBurst.clipFlags(),
+            long[] layout=trailers(outputBytes,expected,scamBurst.mergedRawPixels()*2,(long)ow*oh,mosaicDng,map,scamBurst.clipFlags(),
                     scamBurst.highlightMask()?highlightMaskBytes(scamBurst.width(),scamBurst.height()):0L); // P501: HALF of the sensor grid
             ScamHybridBurst.lastHlMask=null;
             // P480: the base highlight mask (the last trailer) first: its header decides the layout (without it: the one without the mask)
@@ -680,7 +681,7 @@ public final class ScamNeuralClient {
                 if(hlMask==null||!highlightMaskOk(hlMask,scamBurst.width(),scamBurst.height())){
                     if(hlMask!=null)log.accept("CLIENT: the bytes after the trailers are no highlight mask (header): layout without it");
                     hlMask=null;
-                    final long[] l=trailers(outputBytes,expected,scamBurst.mergedRawPixels()*2,(long)ow*oh,scamBurst.mergedDng(),map,scamBurst.clipFlags());
+                    final long[] l=trailers(outputBytes,expected,scamBurst.mergedRawPixels()*2,(long)ow*oh,mosaicDng,map,scamBurst.clipFlags());
                     layout=l==null?null:new long[]{l[0],l[1],l[2],0};
                 }
             }
@@ -698,7 +699,9 @@ public final class ScamNeuralClient {
                 ScamHybridBurst.lastBentoApplied=rep.indexOf("HYBRID BENTO: applied")>=0;
                 ScamHybridBurst.lastReport=rep; // MergeStamp
                 ScamHybridBurst.lastBentoFactor=reportNumber(rep,"HYBRID BENTO: applied","factor=",1f);
-                ScamHybridBurst.lastMergedDngHeadroom=Math.max(1f,reportNumber(rep,"HYBRID DNG:","headroom=",1f));
+                // Linear RGB is scanned by the app before export. Until then this is the usable highlight ceiling.
+                ScamHybridBurst.lastMergedDngHeadroom=Math.max(1f,reportNumber(rep,"HYBRID DNG:",
+                        scamBurst.linearDng()?"ceiling=":"headroom=",1f));
                 ScamHybridBurst.lastMergeFrames=com.scamera.app.processing.DngMetadata.mergeFrames(rep); // P214c
                 ScamHybridBurst.lastBentoUsClipped=reportNumber(rep,"HYBRID BENTO: applied","usClippedRatio=",0f);
                 final float noiseK=reportNumber(rep,"HYBRID NOISE CHECK:","-> model x",1f);

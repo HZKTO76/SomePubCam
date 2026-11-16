@@ -45,7 +45,7 @@ public class CropUpscaleTest {
         int wanted = s.indexOf("final boolean dngWanted = !yuvShot && (mosaicDngOnly || ((rawSaving >= 1) && alignMode != 2));", flag);
         int dng = wanted < 0 ? -1 : s.indexOf("if (dngWanted) {", wanted);
         int check = s.indexOf("final boolean mosaicDng = mosaicDngOnly;", dng);
-        int merged = s.indexOf("if (scamMergedDng != null) {", check);
+        int merged = s.indexOf("if (scamMergedDng != null || linearDng) {", check);
         int stacked = s.indexOf("imageSaved = mosaicDng ? ImageSaver.Util.saveStackedRaw(dngPath, scamMergedDng, processingParameters, true)", merged);
         int reference = s.indexOf("imageSaved = mosaicDng ? ImageSaver.Util.saveSingleRaw(dngPath, output, processingParameters, true)", stacked);
         int end = s.indexOf("if (rawSaving == 2 || mosaicDngOnly) {", reference);

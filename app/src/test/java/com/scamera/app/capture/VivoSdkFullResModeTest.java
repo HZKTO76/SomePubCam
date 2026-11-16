@@ -295,14 +295,31 @@ public class VivoSdkFullResModeTest {
         final long mib = 1L << 20;
         final long px = 8160L * 6128, raw = px * 2;
         final long withRing = 2228 * mib + 4 * raw;
-        assertEquals("the SCAM merge's sizing (as before)", 4, VivoSdkFullRes.seriesCount(10, px, 8160, raw, 2, 1, false, withRing, 0, false));
+        assertEquals("Quality uses the mosaic working set", 8, VivoSdkFullRes.seriesCount(10, px, 8160, raw, 2, 1, false, withRing, 0, false));
         assertEquals("«Быстрый»: every frame", 10, VivoSdkFullRes.seriesCount(10, px, 8160, raw, 2, 1, false, withRing, 0, true));
         assertEquals("the PSL series at 2739 MB", 7, VivoSdkFullRes.seriesCount(7, px, 8160, raw, 2, 1, false, 2739 * mib, 0, true));
         assertTrue("the RAW guard still binds", VivoSdkFullRes.seriesCount(65, px, 8160, raw, 2, 1, false, 2739 * mib, 0, true)
                 <= VivoSdkFullRes.frameCount(65, raw, 2739 * mib));
-        assertEquals("200 MP keeps its own sizing", VivoSdkFullRes.seriesCount(4, 16320L * 12288, 16320, 16320L * 12288 * 2, 4, 1, true, 2390 * mib),
-                VivoSdkFullRes.seriesCount(4, 16320L * 12288, 16320, 16320L * 12288 * 2, 4, 1, true, 2390 * mib, 4L * 16320 * 12288 * 2, true));
-        assertEquals("nothing beyond the bands' reserve", 0, VivoSdkFullRes.fastSeriesFit(px, raw, 1, 1000 * mib, 0));
+        assertEquals("nothing beyond the bands' reserve", 0, VivoSdkFullRes.fastSeriesFit(px, raw, 1000 * mib, 0));
+    }
+
+    @Test public void quadAndTetraUseTheSelectedMergesBudget() {
+        final long mib = 1L << 20;
+        final long px200 = 16320L * 12288, raw200 = 2 * px200, hal = 4 * raw200;
+        assertEquals(8, VivoSdkFullRes.seriesCount(20, px200, 16320, raw200, 4, 1, true, 6200 * mib, hal, true));
+        assertEquals(7, VivoSdkFullRes.seriesCount(20, px200, 16320, raw200, 4, 1, true, 6200 * mib, hal, false));
+        for (boolean fast : new boolean[]{false, true}) {
+            assertEquals(3, VivoSdkFullRes.seriesCount(20, px200, 16320, raw200, 4, 1, true, 2390 * mib, hal, fast));
+        }
+
+        final long pixels = 4096L * 3072, raw = 2 * pixels, output = 6144L * 4608;
+        final long available = 1536 * mib;
+        for (int block : new int[]{2, 4}) {
+            assertEquals(24, VivoSdkFullRes.seriesCount(24, pixels, 4096, raw, block, 2, output, false, available, 0, true));
+            assertEquals(20, VivoSdkFullRes.seriesCount(24, pixels, 4096, raw, block, 2, false, available, 0, true));
+            assertEquals(block == 2 ? 6 : 7, VivoSdkFullRes.seriesCount(24, pixels, 4096, raw, block, 2,
+                    output, false, available, 0, false));
+        }
     }
 
     @Test public void aBinned50MpSeriesCountsTheHalsTetraBuffersAsFree() {
@@ -337,11 +354,11 @@ public class VivoSdkFullResModeTest {
                 assertEquals("200 MP up to 4 frames: as before P190", VivoSdkFullRes.frameCount(requested, raw200, avail),
                         VivoSdkFullRes.seriesCount(requested, px200, 16320, raw200, 4, 1, true, avail));
         final long px50 = 8160L * 6144, raw50 = px50 * 2;
-        assertEquals(14, VivoSdkFullRes.seriesCount(64, px50, 8160, raw50, 2, 1, false, 4 * gib));
-        assertEquals(27, VivoSdkFullRes.seriesCount(64, px50, 8160, raw50, 2, 1, false, 6 * gib));
-        assertEquals(41, VivoSdkFullRes.seriesCount(64, px50, 8160, raw50, 2, 1, false, 8 * gib));
+        assertEquals(18, VivoSdkFullRes.seriesCount(64, px50, 8160, raw50, 2, 1, false, 4 * gib));
+        assertEquals(32, VivoSdkFullRes.seriesCount(64, px50, 8160, raw50, 2, 1, false, 6 * gib));
+        assertEquals(42, VivoSdkFullRes.seriesCount(64, px50, 8160, raw50, 2, 1, false, 8 * gib));
         assertEquals(20, VivoSdkFullRes.seriesCount(20, px50, 8160, raw50, 2, 1, false, 8 * gib));
-        assertEquals("the 2x output: the floor of 2", 2, VivoSdkFullRes.seriesCount(20, px50, 8160, raw50, 2, 2, false, 6 * gib));
+        assertEquals("the 2x output accounts for the larger grid", 8, VivoSdkFullRes.seriesCount(20, px50, 8160, raw50, 2, 2, false, 6 * gib));
         assertEquals(1, VivoSdkFullRes.seriesCount(1, px50, 8160, raw50, 2, 1, false, 8 * gib));
         assertEquals("unknown memory: as asked", 30, VivoSdkFullRes.seriesCount(30, px50, 8160, raw50, 2, 1, false, -1));
         assertEquals("no RAW room: none", 0, VivoSdkFullRes.seriesCount(30, px50, 8160, raw50, 2, 1, false, raw50));

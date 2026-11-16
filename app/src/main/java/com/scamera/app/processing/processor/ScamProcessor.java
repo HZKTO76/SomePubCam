@@ -796,10 +796,12 @@ public class ScamProcessor extends ProcessorBase {
             Allocator.free(unused);
         }
         ByteBuffer scamMergedDng = mergedDng;
+        final boolean linearDng = dngWanted && hybridShot && !mosaicDngOnly && scamOwnedOutput != null
+                && com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergeTier.startsWith("gpu");
         // P681: above 16 MP the reference RAW is copied out of the shot arena only when something reads it after the frames go (the
         // reference frame's DNG, a post_ab run, a non-hybrid pipeline): a hybrid shot with its merged DNG (or none wanted) never
         // did - 96 MB copied at 50 MP, 384 MB at 200 MP, freed unread. Its view goes now (the arena, a ZSL ring slot, unpinned).
-        if ((long) width * height > 16_000_000L && !referenceRawNeeded(dngWanted && scamMergedDng == null, hybridShot,
+        if ((long) width * height > 16_000_000L && !referenceRawNeeded(dngWanted && !linearDng && scamMergedDng == null, hybridShot,
                 processingParameters.scamRgbOwned, com.scamera.app.processing.opengl.postpipeline.PostAb.wanted(processingParameters,
                         lookAtPress != null ? lookAtPress.film : com.scamera.app.processing.color.FilmSim.current()))) {
             referenceRaw = null;
@@ -845,22 +847,26 @@ public class ScamProcessor extends ProcessorBase {
             final boolean mosaicDng = mosaicDngOnly;
             final Point sensorSize = processingParameters.rawSize;
             final Point dngSize = hybridOut != null ? hybridOut : sensorSize;
-            if (scamMergedDng == null && !dngSize.equals(sensorSize))
-                throw new IllegalStateException("The scaled Sabre DNG buffer is unavailable");
+            if (scamMergedDng == null && !linearDng && !dngSize.equals(sensorSize))
+                throw new IllegalStateException("The merged DNG buffer is unavailable at the selected resolution");
             if (mosaicDng) Log.i("SCAM_HDR", "DNG: " + (scamMergedDng != null ? "the merged" : "the reference frame's (no merged RAW)")
                     + " mosaic " + dngSize.x + "x" + dngSize.y
                     + " (no remosaic: the DNG alone, for the neural remosaic of Scam Remosaic)");
-            if (scamMergedDng != null) {
+            if (scamMergedDng != null || linearDng) {
                 // The whole burst's merge (the N frames, the bracketed and the ultrashort ones; nothing else, no denoise),
                 // P165: 16 bit over its headroom, BaselineExposure log2(headroom) keeps its brightness.
                 float[] black = processingParameters.cfaBlack.clone();
                 int white = processingParameters.whiteLevel;
                 boolean handedOff = false;
                 float k = 65535f / white;
-                final float headroom = Math.max(1f, com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom);
+                final boolean half = com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastRgbHalf;
+                final float bound = Math.max(1f, com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom);
+                final float headroom = linearDng && bound > 1f
+                        ? Math.min(bound, com.scamera.app.processing.DngCreator.linearHeadroom(scamOwnedOutput, half)) : bound;
                 for (int i = 0; i < 4; i++) processingParameters.cfaBlack[i] = Math.round(black[i] * k);
                 processingParameters.whiteLevel = 65535;
-                processingParameters.dngBaselineExposure = headroom > 1.0001f ? (float) (Math.log(headroom) / Math.log(2)) : 0f;
+                processingParameters.dngBaselineExposure = headroom > (linearDng ? 1f : 1.0001f)
+                        ? (float) (Math.log(headroom) / Math.log(2)) : 0f;
                 try {
                     // P214c: NoiseProfile of what the file holds - the merge's level over the headroom, averaged over the frames
                     // the worker merged (DngMetadata.noiseProfile); without the worker's frames the legacy computeModel stands
@@ -884,11 +890,13 @@ public class ScamProcessor extends ProcessorBase {
                     processingParameters.dngMosaicBlock = mergedDngBlock;
                     processingParameters.dngMerged = true; // P618: its ImageDescription
                     processingParameters.rawSize = dngSize;
-                    if (scamMergedDng.remaining() != 2L * dngSize.x * dngSize.y)
+                    if (!linearDng && scamMergedDng.remaining() != 2L * dngSize.x * dngSize.y)
                         throw new IllegalStateException("Merged DNG size does not match the RAW buffer");
                     // P681: beside the post pipeline when memory allows (DngReport.offPostPath); the writer takes every value of
                     // the file now, so the restore below is safe at once, and frees the merged DNG on its thread when it is done
-                    if (DngReport.offPostPath(PreferenceKeys.scamDevSwitch("dng_async", true), dngReport.photoFollows,
+                    if (linearDng) {
+                        imageSaved = ImageSaver.Util.saveLinearRaw(dngPath, scamOwnedOutput, processingParameters, half, headroom);
+                    } else if (DngReport.offPostPath(PreferenceKeys.scamDevSwitch("dng_async", true), dngReport.photoFollows,
                             (long) processingParameters.rawSize.x * processingParameters.rawSize.y, totalMemory())) {
                         final ByteBuffer merged = scamMergedDng;
                         dngJob = ImageSaver.Util.saveSingleRawAsync(dngPath, merged, processingParameters, mosaicDng,
@@ -903,6 +911,7 @@ public class ScamProcessor extends ProcessorBase {
                     }
                     mergedDngWritten = imageSaved && !mosaicDng; // P665
                     if (mergedDngWritten) {
+                        com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom = headroom;
                         developDngW = dngSize.x;
                         developDngH = dngSize.y;
                     }
@@ -922,7 +931,7 @@ public class ScamProcessor extends ProcessorBase {
                     processingParameters.dngMosaicBlock = 1;
                     processingParameters.dngMerged = false;
                     processingParameters.rawSize = sensorSize;
-                    if (!handedOff) {
+                    if (!handedOff && scamMergedDng != null) {
                         mergedDng = null;
                         Allocator.free(scamMergedDng);
                     }
@@ -964,7 +973,7 @@ public class ScamProcessor extends ProcessorBase {
             }
             // P620: a DNG with a photo (not the mosaic DNG alone, not RAW only); the front camera's photo is mirrored, its DNG not
             if (imageSaved && !mosaicDngOnly && rawSaving != 2 && !processingParameters.mirrored) dngPreviewTarget = dngPath;
-            // P665: a merged Bayer DNG beside a processed photo carries the developer's record (the reference frame's DNG does not:
+            // P665: a merged DNG beside a processed photo carries the developer's record (the reference frame's DNG does not:
             // it is not the RGB the pipeline took)
             if (mergedDngWritten && !mosaicDngOnly && rawSaving != 2 && hybridShot) {
                 developTarget = dngPath;

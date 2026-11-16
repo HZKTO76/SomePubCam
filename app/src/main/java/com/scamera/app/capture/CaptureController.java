@@ -9645,9 +9645,10 @@ public class CaptureController {
             }
             // P219: every ultrashort frame of the plan, one long frame (HybridPlan.fullResLongFrames); the N take the slots freed
             plan = plan.withLongFrames(HybridPlan.fullResLongFrames(true, block, PreferenceKeys.isHybridMosaicRemosaic())).withNote(ettrNote()); // P377
-            final int extras = plan.requests.size();
-            final int frames = budget.applyAsInt(Math.max(1, requested) + extras);
-            plan = plan.withLeadingNormals(Math.max(1, frames - extras));
+            final int frames = budget.applyAsInt(Math.max(1, requested) + plan.requests.size());
+            if (frames < 1) return null;
+            plan = plan.limitedTo(frames - 1, "memory");
+            plan = plan.withLeadingNormals(frames - plan.requests.size());
             Log.i("SCAM_CAPTURE", "50 MP PSL: " + plan.requests.size() + " frames after the shutter (" + requested + " N asked, "
                     + frames + " by the memory); " + plan.description);
             return plan;
@@ -9655,6 +9656,40 @@ public class CaptureController {
             Log.w("SCAM_CAPTURE", "50 MP PSL: no hybrid plan (" + noPlan.getMessage() + "): N frames only");
             return null;
         }
+    }
+
+    private static java.util.function.IntUnaryOperator mosaicSeriesBudget(int width, int height, int block,
+            long frameBytes, boolean huge, long availableBytes, long halFreeBytes, boolean fast) {
+        final boolean mosaicDng = block > 1 && !PreferenceKeys.isHybridMosaicRemosaic();
+        final boolean keepSensorGrid = huge || (!mosaicDng && !PreferenceKeys.cropUpscale() && PreferenceKeys.cropShot());
+        final String mode = keepSensorGrid ? "sensor" : PreferenceKeys.hybridOutputMode();
+        final int grid = "sensor".equals(mode) ? 1 : 2;
+        final android.graphics.Point output = ScamHybridBurst.sabreSize(width, height, mode, mosaicDng ? block : 1);
+        final long pixels = (long) width * height, outputPixels = (long) output.x * output.y;
+        return count -> VivoSdkFullRes.seriesCount(count, pixels, width, frameBytes, block, grid, outputPixels,
+                huge, availableBytes, halFreeBytes, fast);
+    }
+
+    private HybridPlan fitMosaicShot(HybridPlan plan, int block) {
+        final ImageReader reader = mImageReaderRaw;
+        if (reader == null) return plan;
+        final int width = reader.getWidth(), height = reader.getHeight();
+        final long pixels = (long) width * height, frameBytes = 2 * pixels;
+        final int held = mPendingZslNormalFrames.size(), stills = plan.requests.size();
+        final long free = ScamHybridBurst.memoryAvailableNow();
+        if (free <= 0) return plan;
+        final int frames = mosaicSeriesBudget(width, height, block, frameBytes, pixels > HUGE_SHOT_PIXELS,
+                free + held * frameBytes, 0, PreferenceKeys.fastProcessing()).applyAsInt(held + stills);
+        if (frames >= held + stills) return plan;
+        // Keep the newest ring frame and make room for the planned bracket before trimming the bracket itself.
+        final int keep = held == 0 ? 0 : Math.max(1, Math.min(held, frames - stills));
+        final int drop = held - keep;
+        for (int i = 0; i < drop; i++) mPendingZslNormalFrames.remove(0).close();
+        if (burstShake.size() == held) burstShake.subList(0, drop).clear();
+        final HybridPlan fitted = plan.limitedTo(Math.max(held == 0 ? 1 : 0, frames - keep), "memory");
+        Log.i("SCAM_CAPTURE", "RAW merge memory: " + (keep + fitted.requests.size()) + " of " + (held + stills)
+                + " frames (block " + block + ", " + (free >> 20) + " MB free)");
+        return fitted;
     }
 
     private void captureVivoSdkFullResChecked() {
@@ -9701,14 +9736,17 @@ public class CaptureController {
         final boolean seriesMode = hugeSeries || fifty > 0;
         final int requested = hugeSeries ? PreferenceKeys.getFullRes200Frames() : fifty > 0 ? fifty : PreferenceKeys.getHybridZslFrames();
         final long availableBytes = manager == null ? -1 : memory.availMem;
-        final int grid = !hugeSeries && !"sensor".equals(PreferenceKeys.hybridOutputMode()) ? 2 : 1;
         // P194: the native route's own colour block (Quad 2, the X100 / X300 Ultra's hardware-remosaic Bayer 1); the SDK route 1
         // P586: a 200 MP row its frames proved a Quad (the OnePlus 16) merges as one; the vivo 200 MP profiles are block 4 as before
-        final int block = nativeVivoFullRes() ? Math.max(1, VivoSdkFullRes.profile(mVivoSdkCameraId).mergeBlock()) : hugeSeries ? 4 : 1; // P609
+        final int block = shotProfile != null && nativeVivoFullRes() ? Math.max(1, shotProfile.mergeBlock()) : 1; // P609
         final int guarded = VivoSdkFullRes.frameCount(requested, frameBytes, availableBytes);
-        final boolean fastMerge = PreferenceKeys.fastProcessing(); // P721: «Быстрый» sizes its series by its own memory (row bands)
-        final int frames = seriesMode ? VivoSdkFullRes.seriesCount(requested, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid,
-                hugeSeries, availableBytes, hugeSeries ? 4L * frameBytes : halFree, fastMerge) : guarded;
+        final boolean fastMerge = PreferenceKeys.fastProcessing();
+        final boolean estimateMerge = seriesMode || block > 1;
+        final java.util.function.IntUnaryOperator budget = estimateMerge
+                ? mosaicSeriesBudget(rawWidth, rawHeight, block, frameBytes, hugeSeries, availableBytes,
+                        hugeSeries ? 4L * readerBytes : halFree, fastMerge)
+                : all -> VivoSdkFullRes.frameCount(all, frameBytes, availableBytes);
+        final int frames = budget.applyAsInt(requested);
         if (hugeSeries) {
             if (frames < 3) {
                 failPendingShutter(new IllegalStateException(Lang.t("Недостаточно памяти для серии 200 Мп", "Not enough memory for a 200 MP series")));
@@ -9734,14 +9772,15 @@ public class CaptureController {
             // P232 (speed-ux A2): the budget first, then the split - the ring frames stay (the zero-lag ones, P198's point), the N
             // taken after the press shrink; before P232 the top-up was fixed first and the budget removed the oldest ring frames
             // (owner's X7U 20:20:35: «5 ring frames + 7 N after the shutter» -> «N 1 from the ring + 13 after the shutter»)
-            final int[] split = VivoSdkFullResCapture.zslSplit(ring, extras, requested, all -> seriesMode
-                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, withRing, 0, fastMerge)
-                    : VivoSdkFullRes.frameCount(all, frameBytes, withRing));
+            final java.util.function.IntUnaryOperator ringBudget = estimateMerge
+                    ? mosaicSeriesBudget(rawWidth, rawHeight, block, frameBytes, false, withRing, 0, fastMerge)
+                    : all -> VivoSdkFullRes.frameCount(all, frameBytes, withRing);
+            final int[] split = VivoSdkFullResCapture.zslSplit(ring, extras, requested, ringBudget);
             final int keep = split[0];
             zslTopUp = split[1];
             zslTrimmed = split[2] < Math.max(ring, requested) + extras; // the memory, not the ring, held the N back
             while (zsl.frames.size() > keep) zsl.frames.remove(0).close(); // the oldest go, the moment of the press stays
-            zsl.plan = zsl.plan.withLeadingNormals(zslTopUp);
+            zsl.plan = zsl.plan.limitedTo(Math.max(1, split[2] - keep - zslTopUp), "memory").withLeadingNormals(zslTopUp);
             Log.i("SCAM_CAPTURE", "50 MP ZSL: " + keep + " of " + ring + " ring frames + " + zslTopUp + " N after the shutter (asked "
                     + requested + ", budget " + split[2] + " frames); " + zsl.plan.description);
             count = zsl.plan.requests.size();
@@ -9749,9 +9788,7 @@ public class CaptureController {
         } else {
             // P202 (owner, 2026-10-17: «В PSL у нас тоже должны быть брекет кадры»): a native 50 MP series after the shutter is N
             // and the 12 MP Hybrid plan's bracketed / ultrashort frames, as a ZSL shot's frames after the shutter
-            pslPlanBuilt = hugeSeries || !nativeVivoFullRes() ? null : pslPlan(requested, all -> seriesMode
-                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, availableBytes, halFree, fastMerge)
-                    : VivoSdkFullRes.frameCount(all, frameBytes, availableBytes), manualPslNs, block);
+            pslPlanBuilt = hugeSeries || !nativeVivoFullRes() ? null : pslPlan(requested, budget, manualPslNs, block);
             count = pslPlanBuilt != null ? pslPlanBuilt.requests.size() : frames;
             shotN = 0;
         }
@@ -9769,7 +9806,7 @@ public class CaptureController {
         // 12 кадров» while the worker merged 8 N); the worker's own count follows after the merge (ScamHybridBurst.notice)
         final int taken = zsl != null ? VivoSdkFullResCapture.zslTaken(shotN, zslTopUp) : count;
         final String cut = zsl != null ? (taken >= requested ? "" : zslTrimmed ? "memory" : "ring")
-                : count >= requested ? "" : count < guarded && grid == 2 ? "2x" : "memory";
+                : count >= requested ? "" : count < guarded && !hugeSeries && !"sensor".equals(PreferenceKeys.hybridOutputMode()) ? "scale" : "memory";
         if (tetraBin) Log.i("SCAM_CAPTURE", "50 MP from the 200 MP mode " + shotProfile.sensorMode + " " + shotProfile.size
                 + ", 2x2 binned per Tetra cell -> " + shotSize + " Quad (block 2, P609): " + count + " stills after the shutter, "
                 + (frameBytes >> 20) + " MB a frame (" + (readerBytes >> 20) + " MB unbinned), the HAL's " + (halFree >> 20)
@@ -9780,8 +9817,8 @@ public class CaptureController {
                 + " availableMB=" + (memory.availMem >> 20) + (seriesMode ? " series" : "") + (cut.isEmpty() ? "" : " cut=" + cut));
         if (!cut.isEmpty() && !"ring".equals(cut))
             showToast(Lang.t("Снято " + taken + " из " + requested + " кадров: свободно " + (memory.availMem >> 20) + " МБ"
-                        + ("2x".equals(cut) ? ", вывод 2×" : ""),
-                "Took " + taken + " of " + requested + " frames: " + (memory.availMem >> 20) + " MB free" + ("2x".equals(cut) ? ", 2× output" : "")));
+                        + ("scale".equals(cut) ? ", разрешение склейки" : ""),
+                "Took " + taken + " of " + requested + " frames: " + (memory.availMem >> 20) + " MB free" + ("scale".equals(cut) ? ", merge resolution" : "")));
         final ImageSaver saver = new ImageSaver(cameraEventsListener);
         saver.iszAspect4x3 = mShutterIszAspect4x3 || nativeVivoFullRes();
         saver.tetraBin = tetraBin; // P609
@@ -10269,6 +10306,17 @@ public class CaptureController {
             // (PreferenceKeys.noHdrFrames) and its own frame count when the row is set (getHybridZslFrames).
             // The capture route of this shot (P27: a SCAM HDR shot without an S/ES plan is captured and merged by the Hybrid).
             final boolean scamHybridShot=scamHybridSelected;
+            // P35: the stream key of this shot (its stored colour block skips the detector in the processing).
+            // P635: a recipe shot's block is measured on its own frames every time (no stored block: a real frame and a doubled one
+            // taken back to the binned frame are different mosaics under one stream key)
+            final String shotMosaicKey=recipePlan!=null?"off":com.scamera.app.processing.MosaicStream.key();
+            // P214i: by the X300 Ultra's list; 0 once the module's frames proved a plain Bayer (the stored 1 merges then)
+            // P276: a picked full-size row of the SensorModeTable declares the sensor's own mosaic
+            final int iszBlock=VivoQcomIsz.declaredBlockOf(com.scamera.app.settings.ModuleRegistry.active());
+            // P631: a picked Xiaomi row whose frames proved a plain Bayer (the HAL's remosaic) merges as the Bayer it is
+            final int shotDeclaredBlock=XiaomiSensorRow.shotBlock(iszBlock>0?iszBlock:SensorModePick.sessionBlock(mCameraCharacteristics),
+                    SensorModePick.session()!=null&&XiaomiSensorRow.device(),
+                    com.scamera.app.processing.MosaicBlockStore.get().stored(shotMosaicKey));
             final HybridPlan[] hybridPlanHolder={null};
             final float[] normalBackLongRatio={0f};
             final boolean scamZslRequested = hybridZslRequested && scamCapture;
@@ -10555,6 +10603,10 @@ public class CaptureController {
                 if(mFullResSession && !com.scamera.app.settings.MotionMode.on())
                     plan=plan.withLongFrames(HybridPlan.fullResLongFrames(true,0,PreferenceKeys.isHybridMosaicRemosaic()));
                 if(recipePlan!=null) plan=plan.limitedTo(recipePlan.recipe.frames); // P635: the profile's frames a shot
+                if (flash == null && !yuvAfter && !yuvRing && !mLoficShot && mLoficOverflow.reader == null) {
+                    final int block = com.scamera.app.processing.MosaicBlockStore.blockForModule(shotMosaicKey, shotDeclaredBlock);
+                    if (block > 1 || mShutterIszAspect4x3) plan = fitMosaicShot(plan, Math.max(1, block));
+                }
                 if(flash==null) plan=plan.withNote(ettrNote()); // P377: the shot's ETTR (the stamp's line, the log); P590: none on a flash frame
                 hybridPlanHolder[0]=plan;
                 Log.i("SCAM_CAPTURE",plan.description);
@@ -10733,17 +10785,6 @@ public class CaptureController {
             final boolean shotHybridRoute=scamHybridShot;
             // P590: the flash frame came back without the flash (FLASH_STATE not FIRED): it is left out, the normal shot follows
             final boolean[] flashMissed={false};
-            // P35: the stream key of this shot (its stored colour block skips the detector in the processing).
-            // P635: a recipe shot's block is measured on its own frames every time (no stored block: a real frame and a doubled one
-            // taken back to the binned frame are different mosaics under one stream key)
-            final String shotMosaicKey=recipePlan!=null?"off":com.scamera.app.processing.MosaicStream.key();
-            // P214i: by the X300 Ultra's list; 0 once the module's frames proved a plain Bayer (the stored 1 merges then)
-            // P276: a picked full-size row of the SensorModeTable declares the sensor's own mosaic
-            final int iszBlock=VivoQcomIsz.declaredBlockOf(com.scamera.app.settings.ModuleRegistry.active());
-            // P631: a picked Xiaomi row whose frames proved a plain Bayer (the HAL's remosaic) merges as the Bayer it is
-            final int shotDeclaredBlock=XiaomiSensorRow.shotBlock(iszBlock>0?iszBlock:SensorModePick.sessionBlock(mCameraCharacteristics),
-                    SensorModePick.session()!=null&&XiaomiSensorRow.device(),
-                    com.scamera.app.processing.MosaicBlockStore.get().stored(shotMosaicKey));
             final TotalCaptureResult[] nativeBaseResult={hybridZsl?mNativeZslBase:null};
             // W1.9: the vendor-key scan of every bracket result (10-15 ms on the camera callback thread) only with diagnostics.
             final boolean vendorScan=scamCapture&&PreferenceKeys.isScamDiagnosticsEnabled();

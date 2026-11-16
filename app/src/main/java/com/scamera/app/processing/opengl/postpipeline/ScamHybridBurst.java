@@ -724,7 +724,7 @@ public final class ScamHybridBurst implements ScamTransport {
         return sabreSize(w, h, mode, 1);
     }
 
-    static android.graphics.Point sabreSize(int w, int h, String mode, int dngBlock) {
+    public static android.graphics.Point sabreSize(int w, int h, String mode, int dngBlock) {
         if ("2x".equals(mode)) return new android.graphics.Point(2 * w, 2 * h);
         if ("1.5x".equals(mode)) {
             final int period = 2 * dngBlock;
@@ -929,6 +929,7 @@ public final class ScamHybridBurst implements ScamTransport {
 
     @Override public int cfa() { return cfa; }
     @Override public boolean mergedDng() { return mergedDng; }
+    @Override public boolean linearDng() { return mergedDng && dngMosaic == 1; }
     @Override public boolean diagnostics() { return diagnostics; }
     @Override public boolean clipFlags() { return clipFlags; }
     /**
@@ -1035,7 +1036,7 @@ public final class ScamHybridBurst implements ScamTransport {
         h.putInt(0x3143484e).putInt(pages != null ? 12 : 11).putInt(width).putInt(height).putInt(cfa).putInt(frames.size()).putFloat(white);
         for (float b : black) h.putFloat(b);
         h.putInt((diagnostics ? 1 : 0) | (mergedDng ? 2 : 0) | (clipFlags ? 4 : 0) | (strictTwoX || sabreDng() ? 8 : 0) | (effectiveMap() ? 0 : 16)
-                | (dcg ? 32 : 0) | (sabreDng() ? 64 : 0)).putInt(0)
+                | (dcg ? 32 : 0) | (sabreDng() && !linearDng() ? 64 : 0) | (linearDng() ? 128 : 0)).putInt(0)
          .putInt(outWidth == width && outHeight == height ? 1 : 2).putInt(mosaicBlock)
          // P501 (words 15 / 16): the result's size when it is no whole grid (the 1.5x Sabre scale), else 0
          .putInt(sabreWords(width, height, outWidth, outHeight)[0]).putInt(sabreWords(width, height, outWidth, outHeight)[1]);

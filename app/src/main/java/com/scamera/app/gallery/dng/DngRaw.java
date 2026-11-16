@@ -1,5 +1,6 @@
 package com.scamera.app.gallery.dng;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -124,6 +125,8 @@ public final class DngRaw {
     /** P665: decode into {@link #fout} (floats, 1 = white) instead of {@link #out}. */
     private boolean linearOut;
     private float[] fout;
+    private RgbSink rgbSink;
+    private long rgbSamples;
     private float finv;
 
     private DngRaw(DngPreview p, DngPreview.Ifd f) {
@@ -160,12 +163,38 @@ public final class DngRaw {
      */
     public static Image decodeForDevelop(ByteBuffer buffer, int bin, boolean fromRecord) throws IOException {
         DngRaw r = open(buffer);
-        if (fromRecord || r.info.shadingMap != null) {
-            r.gainMaps.removeAll(r.list2Maps);
-            r.info.gainMap = !r.gainMaps.isEmpty();
-        }
+        r.usePipelineShading(fromRecord);
         r.linearOut = true;
         return r.run(Math.max(1, bin));
+    }
+
+    @FunctionalInterface
+    public interface RgbSink {
+        void put(int index, float value);
+    }
+
+    /** Full-size linear RGB directly into the caller's final buffer, including on large RAW files. */
+    public static void decodeRgbForDevelop(ByteBuffer buffer, int width, int height, boolean fromRecord,
+                                           RgbSink sink) throws IOException {
+        final DngRaw r = open(buffer);
+        if (r.info.kind != KIND_RGB || r.info.cropWidth != width || r.info.cropHeight != height
+                || (long) width * height > Integer.MAX_VALUE / 3)
+            throw new IOException("DNG: wrong linear RGB size");
+        r.usePipelineShading(fromRecord);
+        r.bin = 1;
+        r.outW = width;
+        r.outH = height;
+        r.rgbSink = sink;
+        r.readSamples();
+        if (r.rgbSamples != 3L * width * height)
+            throw new EOFException("DNG: incomplete linear RGB");
+    }
+
+    private void usePipelineShading(boolean fromRecord) {
+        if (fromRecord || info.shadingMap != null) {
+            gainMaps.removeAll(list2Maps);
+            info.gainMap = !gainMaps.isEmpty();
+        }
     }
 
     private static DngRaw open(ByteBuffer buffer) throws IOException {
@@ -187,7 +216,8 @@ public final class DngRaw {
         info.colour = DngColor.of(p);
         info.compression = f.compression;
         info.bits = f.bps.length > 0 ? f.bps[0] : 16;
-        if (f.compression != 1 && f.compression != 7) throw new IOException("DNG: raw compression " + f.compression);
+        if (f.compression != 1 && f.compression != 7)
+            throw new IOException("DNG: raw compression " + f.compression);
         if (info.bits < 8 || info.bits > 16) throw new IOException("DNG: raw of " + info.bits + " bits");
         if (f.planar != 1) throw new IOException("DNG: planar raw");
         if (f.photometric == 34892) {
@@ -419,8 +449,7 @@ public final class DngRaw {
             out = ByteBuffer.allocateDirect((int) n * 2).order(ByteOrder.nativeOrder()).asShortBuffer();
         }
         inv = FIXED_ONE / perOut;
-        if (f.compression == 1) uncompressed();
-        else lossless();
+        readSamples();
         Image img = new Image();
         img.info = info;
         img.width = outW;
@@ -463,14 +492,24 @@ public final class DngRaw {
                 s *= g.at((ay + 0.5) / aaH, (ax + 0.5) / aaW, plane - g.plane);
             }
         }
-        if (s <= 0) return;
         int i = (oy * outW + ox) * (info.kind == KIND_RGB ? 3 : 1) + (info.kind == KIND_RGB ? ch : 0);
+        if (rgbSink != null) {
+            rgbSink.put(i, s > 0 ? (float) s : 0f);
+            rgbSamples++;
+            return;
+        }
+        if (s <= 0) return;
         if (fout != null) {
             fout[i] += (float) s * finv;
             return;
         }
         int acc = (out.get(i) & 0xFFFF) + (int) Math.round(s * inv);
         out.put(i, (short) Math.min(65535, acc));
+    }
+
+    private void readSamples() throws IOException {
+        if (f.compression == 1) uncompressed();
+        else lossless();
     }
 
     private void uncompressed() throws IOException {

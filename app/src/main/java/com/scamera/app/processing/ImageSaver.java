@@ -382,6 +382,18 @@ public class ImageSaver {
             return saveSingleRaw(dngFilePath, buffer, parameters, uncompressed);
         }
 
+        public static boolean saveLinearRaw(Path path, ByteBuffer rgb, Parameters p, boolean half, float headroom) {
+            final DngCreator creator = new DngCreator(true);
+            try {
+                creator.setParameters(p);
+                final int w = p.rawSize.x, h = p.rawSize.y;
+                final boolean compress = PreferenceKeys.isDngLossless();
+                return writeDng(path, out -> creator.writeLinearBuffer(out, rgb, w, h, half, headroom, compress), "Linear DNG");
+            } finally {
+                creator.close();
+            }
+        }
+
         /**
          * One DNG of {@code buffer} at rawSize; {@code uncompressed}: no «DNG без потерь» compression whatever the setting (P258:
          * the mosaic DNG for Scam Remosaic, which reads uncompressed 16-bit CFA without a LinearizationTable only). P27: a DNG

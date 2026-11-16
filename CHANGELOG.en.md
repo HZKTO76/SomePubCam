@@ -2,9 +2,11 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
-## 2026-11-16 — Sabre in DNG
+## 2026-11-16 — RAW (DNG)
 
-- DNG supports Sabre 1×, 1.5× and 2×, including 50 MP and ISZ with remosaic off.
+- RAW (DNG) saves the full-color burst merge at 1×, 1.5× and 2× resolution.
+- Mosaic DNG supports 1×, 1.5× and 2× at 50 MP and ISZ with remosaic off.
+- Quad and Tetra, including 200 MP and ISZ, size the burst for the selected merge mode’s memory use.
 
 ## 2026-11-15 (day, 2) — realme 2×
 

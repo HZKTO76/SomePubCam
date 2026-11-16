@@ -88,6 +88,7 @@ struct HybridInput {
     std::array<float,4> black{};
     std::vector<HybridFrame> frames; // frames[0] = base (normal)
     bool diagnostics=false,mergedDng=false;
+    bool linearDng=false;
     float* sabreDngCeiling=nullptr; // export after the final output resize, using the merge's measured exposure ratios
     bool clipFlags=false; // header flag 4: append the per-pixel clip flags (uint8 per output pixel) after the effective map
     bool strict2x=false; // header flag 8: native 2x samples; no coarse-grid resize or sensor-grid fallback
@@ -1346,10 +1347,8 @@ inline float hybridDngCeiling(const HybridInput& input){
     return std::min(ceiling,16.f);
 }
 inline bool hybridWriteSensorDng(const HybridInput& input,const std::vector<uint16_t>* dng){
-    if(!dng||!input.mergedDng)return false;
-    if(!input.sabreDngCeiling)return true;
-    *input.sabreDngCeiling=hybridDngCeiling(input);
-    return false;
+    if(input.sabreDngCeiling)*input.sabreDngCeiling=hybridDngCeiling(input);
+    return dng&&input.mergedDng&&!input.sabreDngCeiling;
 }
 /** P215: triangular dither in (-1, 1) code, a fixed function of the site (the same DNG for the same merge). */
 inline float hybridDngDither(int x,int y){
@@ -18984,6 +18983,8 @@ struct MappedHybridBurst {
             input.noEffMap=flags&16;
             input.dcg=flags&32; // P320
             sabreDng=input.mergedDng&&(flags&64);
+            input.linearDng=input.mergedDng&&(flags&128);
+            if(sabreDng&&input.linearDng)throw std::runtime_error("Conflicting DNG output formats");
             if(h[1]>=11){ // v11: h[12] = base index (0), h[13] = output grid 1|2, h[14] = colour block 0 (unknown) | 1 | 2 | 4
                 if(h[13]!=0&&h[13]!=1&&h[13]!=2)throw std::runtime_error("Unsupported hybrid output grid");
                 input.grid=h[13]==0?1:int(h[13]);

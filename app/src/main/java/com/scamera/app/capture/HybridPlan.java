@@ -526,7 +526,11 @@ public final class HybridPlan {
      * first, then the others in their order while there is room.
      */
     public HybridPlan limitedTo(int total) {
-        if (total <= 0 || requests.size() <= total) return this;
+        return total <= 0 ? this : limitedTo(total, "recipe");
+    }
+
+    HybridPlan limitedTo(int total, String reason) {
+        if (total < 0 || requests.size() <= total) return this;
         final boolean[] keep = new boolean[requests.size()];
         int kept = 0;
         for (int i = 0; i < keep.length && kept < total; i++)
@@ -535,7 +539,7 @@ public final class HybridPlan {
             if (!keep[i]) { keep[i] = true; kept++; }
         final List<Request> out = new ArrayList<>();
         for (int i = 0; i < keep.length; i++) if (keep[i]) out.add(requests.get(i));
-        return new HybridPlan(out, nShutterNs, nIso, description + " | recipe: " + total + " of " + requests.size() + " frames");
+        return new HybridPlan(out, nShutterNs, nIso, description + " | " + reason + ": " + total + " of " + requests.size() + " frames");
     }
 
     /** P377: this plan with {@code note} after its description (null: this plan). */

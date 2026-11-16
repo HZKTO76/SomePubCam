@@ -252,7 +252,8 @@ int main(int argc,char** argv) {
             scam::HybridInput hin=hybridBurst.input;
             if(std::getenv("SCAM_MERGED_DNG"))hin.mergedDng=true;
             float sabreDngCeiling=0.f;
-            if(hybridBurst.sabreDng)hin.sabreDngCeiling=&sabreDngCeiling;
+            if(hybridBurst.sabreDng||hin.linearDng)hin.sabreDngCeiling=&sabreDngCeiling;
+            if(hin.linearDng)hin.mergedDng=false; // camera RGB already goes to the app, with no CFA trailer
             sensorPixels=size_t(hin.w)*hin.h;
             // P320: a DCG burst (header flag 32): the two-zone noise check runs on it; the app's DCG tuning lines (bento 1,
             // shastaEnable 0, mochi 0) come last in the job's hybrid_tuning.txt, the values in effect are reported here
@@ -301,7 +302,7 @@ int main(int argc,char** argv) {
                 const size_t px=result.size()/3;int g=0;
                 for(int k=1;k<=2;++k)if(px==size_t(hin.w)*k*size_t(hin.h)*k)g=k;
                 if(!g)throw std::runtime_error("Hybrid: a result of "+std::to_string(px)+" px is no grid of "+std::to_string(hin.w)+"x"+std::to_string(hin.h));
-                if(hybridBurst.sabreDng&&g!=2)throw std::runtime_error("Sabre DNG: the merge returned the sensor grid");
+                if((hybridBurst.sabreDng||hin.linearDng)&&g!=2)throw std::runtime_error("DNG: the merge returned the sensor grid");
                 const auto t0=std::chrono::steady_clock::now();
                 scam::hybridResampleResult(result,hin.w*g,hin.h*g,hin.outW,hin.outH,effMap.empty()?nullptr:&effMap,clipFlags.empty()?nullptr:&clipFlags);
                 resultFloats=result.size();
@@ -309,7 +310,10 @@ int main(int argc,char** argv) {
                     +std::to_string(hin.outH)+" (Catmull-Rom; effective map nearest, clip flags OR) in "
                     +std::to_string(int(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count()))+" ms");
             }
-            if(hybridBurst.sabreDng){
+            if(hin.linearDng){
+                const float ceiling=sabreDngCeiling>0.f?sabreDngCeiling:scam::hybridDngCeiling(hin);
+                report("HYBRID DNG: linear RGB, ceiling="+std::to_string(ceiling));
+            }else if(hybridBurst.sabreDng){
                 const int w=hin.outW>0?hin.outW:hin.w*2,h=hin.outH>0?hin.outH:hin.h*2;
                 const float ceiling=sabreDngCeiling>0.f?sabreDngCeiling:scam::hybridDngCeiling(hin);
                 const int block=tuning.dngMosaic!=0&&(hin.mosaic==2||hin.mosaic==4)?hin.mosaic:1;

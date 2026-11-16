@@ -51,13 +51,17 @@ bool writable(const std::array<double, 9> &m) {
 
 class DngFile {
 public:
-    DngFile() : image_(new tdw::DNGImage()) {
+    explicit DngFile(bool linear = false) : image_(new tdw::DNGImage()), linear_(linear) {
         image_->SetSubfileType(false, false, false);
         image_->SetBigEndian(false);
-        image_->SetSamplesPerPixel(1);
-        image_->SetPhotometric(tdw::PHOTOMETRIC_CFA);
+        image_->SetSamplesPerPixel(linear ? 3 : 1);
+        image_->SetPhotometric(linear ? tdw::PHOTOMETRIC_LINEARRAW : tdw::PHOTOMETRIC_CFA);
         image_->SetPlanarConfig(tdw::PLANARCONFIG_CONTIG);
         image_->SetDNGVersion(1, 3, 0, 0);
+        if (linear) {
+            const unsigned char backward[] = {1, 3, 0, 0};
+            setTag(0, tdw::TIFFTAG_DNG_BACKWARD_VERSION, tdw::TIFF_BYTE, 4, backward);
+        }
         // P618: ExifVersion 2.31 (the version with OffsetTime*) in the Exif IFD, where it belongs
         image_->SetTag(1, tdw::EXIFTAG_EXIFVERSION, tdw::TIFF_UNDEFINED, 4, "0231");
     }
@@ -130,6 +134,19 @@ public:
         const bool known = arrangement_ >= 0 && arrangement_ < 4;
         std::vector<float> plane(points);
         std::vector<tdw::GainMap> maps;
+        if (linear_) {
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                for (size_t p = 0; p < points; ++p)
+                    plane[p] = channel == 1 ? (interleaved[4 * p + 1] + interleaved[4 * p + 2]) * .5f
+                                            : interleaved[4 * p + (channel == 0 ? 0 : 3)];
+                tdw::GainMap map(plane.data(), w, h, xmin, ymin, xmax, ymax, 1);
+                map.plane = channel;
+                maps.push_back(std::move(map));
+            }
+            image_->SetGainMap(maps);
+            gainMapPlaced_ = true;
+            return;
+        }
         for (int channel = 0; channel < 4; ++channel) {
             for (size_t p = 0; p < points; ++p) plane[p] = interleaved[4 * p + channel];
             tdw::GainMap map(plane.data(), w, h, xmin, ymin, xmax, ymax);
@@ -196,31 +213,68 @@ public:
     size_t stripBytes() const { return stripBytes_; }
     bool lossless() const { return encoded_ != nullptr; }
 
+    bool layoutLinear(int w, int h, int rows, bool compressed) {
+        if (!linear_ || w <= 0 || w > 65520 || h <= 0 || rows <= 0 || (!compressed && rows > h)) return false;
+        prepareTags(w, h, compressed ? 0 : rows);
+        image_->SetCompression(compressed ? tdw::COMPRESSION_NEW_JPEG : tdw::COMPRESSION_NONE);
+
+        // A row of tiles spans the image. Several readers only handle multiple LJ92 sections as tiles.
+        constexpr unsigned short tileWidth = 322, tileLength = 323, tileOffsets = 324, tileByteCounts = 325;
+        if (compressed) {
+            const unsigned int tileColumns = w, tileRows = rows;
+            if ((w & 15) != 0 || (rows & 15) != 0 || !setTag(0, tileWidth, tdw::TIFF_LONG, 1, &tileColumns) ||
+                !setTag(0, tileLength, tdw::TIFF_LONG, 1, &tileRows)) return false;
+        }
+        // The caller fills these tables after streaming the pixels, then writes the header at offset zero.
+        const std::vector<unsigned int> zeros((h - 1) / rows + 1);
+        const auto count = static_cast<unsigned int>(zeros.size());
+        if (!setTag(0, compressed ? tileOffsets : tdw::TIFFTAG_STRIP_OFFSET, tdw::TIFF_LONG, count, zeros.data()) ||
+            !setTag(0, compressed ? tileByteCounts : tdw::TIFFTAG_STRIP_BYTE_COUNTS, tdw::TIFF_LONG, count, zeros.data())) return false;
+        std::string metadata = image_->DataPrefix();
+        if (metadata.size() & 1u) metadata.push_back(char(0));
+        const uint32_t ifdOffset = 8u + static_cast<uint32_t>(metadata.size());
+        std::ostringstream ifd;
+        if (!image_->WriteIFDToStream(0, 0, &ifd, false)) return false;
+        head_.assign("II*\0", 4);
+        for (int byte = 0; byte < 4; ++byte) head_.push_back(char(ifdOffset >> (8 * byte)));
+        head_ += metadata;
+        head_ += ifd.str();
+        head_.append(4, char(0)); // No next IFD; a preview may be appended by the app.
+        return true;
+    }
+
 private:
-    /** Every tag of the file and its strip: copied into the data area, or (P681 `reference`) referenced in place. */
-    bool prepare(void *mosaic, int w, int h, bool reference) {
-        const unsigned short bitsPerSample = 16;
+    void prepareTags(int w, int h, int rows) {
+        const unsigned short bitsPerSample[] = {16, 16, 16};
         const unsigned int width = static_cast<unsigned>(w), height = static_cast<unsigned>(h);
-        image_->SetBitsPerSample(1, &bitsPerSample);
+        image_->SetBitsPerSample(linear_ ? 3 : 1, bitsPerSample);
         image_->SetOrientation(static_cast<unsigned short>(orientation_));
         image_->SetImageWidth(width);
         image_->SetImageLength(height);
-        image_->SetRowsPerStrip(height);
+        if (rows > 0) image_->SetRowsPerStrip(static_cast<unsigned int>(rows));
         const unsigned int active[4] = {0, 0, height, width};
         image_->SetActiveArea(active);
         image_->SetResolutionUnit(tdw::RESUNIT_INCH);
         image_->SetXResolution(72.f);
         image_->SetYResolution(72.f);
 
-        // P318: the 2x2 order repeated over the colour blocks (2x2 Bayer, 4x4 Quad, 8x8 Tetra)
-        const int period = 2 * block_;
-        unsigned char cfa[64];
-        for (int y = 0; y < period; ++y)
-            for (int x = 0; x < period; ++x) cfa[y * period + x] = siteColour_[siteOf(x, y, block_)];
-        image_->SetCFARepeatPatternDim(static_cast<unsigned short>(period), static_cast<unsigned short>(period));
-        image_->SetCFAPattern(static_cast<unsigned int>(period * period), cfa);
-        writeBlack(period);
-        image_->SetWhiteLevelRational(1, &white_);
+        if (linear_) {
+            const unsigned short black[] = {0, 0, 0};
+            const double white[] = {65535., 65535., 65535.};
+            image_->SetBlackLevelRepeatDim(1, 1);
+            image_->SetBlackLevel(3, black);
+            image_->SetWhiteLevelRational(3, white);
+        } else {
+            // P318: the 2x2 order repeated over the colour blocks (2x2 Bayer, 4x4 Quad, 8x8 Tetra)
+            const int period = 2 * block_;
+            unsigned char cfa[64];
+            for (int y = 0; y < period; ++y)
+                for (int x = 0; x < period; ++x) cfa[y * period + x] = siteColour_[siteOf(x, y, block_)];
+            image_->SetCFARepeatPatternDim(static_cast<unsigned short>(period), static_cast<unsigned short>(period));
+            image_->SetCFAPattern(static_cast<unsigned int>(period * period), cfa);
+            writeBlack(period);
+            image_->SetWhiteLevelRational(1, &white_);
+        }
 
         writeColour();
 
@@ -233,11 +287,15 @@ private:
             }
         }
         if (!image_->WriteExifIFD()) DNG_FAIL("Exif IFD not written: %s", image_->Error().c_str());
+    }
 
+    /** Every tag of the mosaic and its strip, copied or referenced in place. */
+    bool prepare(void *mosaic, int w, int h, bool reference) {
+        prepareTags(w, h, h);
         if (!(lossless_ && writeLosslessJpeg(mosaic, w, h, reference))) {
             image_->SetCompression(tdw::COMPRESSION_NONE);
             const auto *samples = static_cast<const unsigned char *>(mosaic);
-            const size_t bytes = static_cast<size_t>(width) * height * 2;
+            const size_t bytes = static_cast<size_t>(w) * h * 2;
             if (!(reference ? image_->SetImageDataRef(samples, bytes) : image_->SetImageData(samples, bytes))) {
                 DNG_FAIL("strip of %zu bytes not set: %s", bytes, image_->Error().c_str());
                 return false;
@@ -282,7 +340,15 @@ private:
         if (first && usable(kCalibration1)) image_->SetCameraCalibration1(3, matrix_[kCalibration1].data());
         if (second && usable(kCalibration2)) image_->SetCameraCalibration2(3, matrix_[kCalibration2].data());
         if (neutralSet_ && neutral_[0] > 0 && neutral_[1] > 0 && neutral_[2] > 0) image_->SetAsShotNeutral(3, neutral_.data());
-        if (baselineEv_ != 0.0) image_->SetBaselineExposure(baselineEv_);
+        if (baselineEv_ != 0.0) {
+            if (linear_) {
+                // Use an SRATIONAL with both values fitting in int32, including very small positive EV.
+                const int ev[] = {static_cast<int>(std::lround(baselineEv_ * 1000000)), 1000000};
+                setTag(0, tdw::TIFFTAG_BASELINE_EXPOSURE, tdw::TIFF_SRATIONAL, 1, ev);
+            } else {
+                image_->SetBaselineExposure(baselineEv_);
+            }
+        }
         if (first) image_->SetCalibrationIlluminant1(illuminant_[0]);
         if (second) image_->SetCalibrationIlluminant2(illuminant_[1]);
     }
@@ -321,6 +387,7 @@ private:
     double white_ = 1023.0;
     std::array<unsigned short, 4> black_{};
     bool lossless_ = false;
+    bool linear_ = false;
     double baselineEv_ = 0.0;
     unsigned short illuminant_[2] = {0, 0};
     std::array<std::array<double, 9>, kMatrixCount> matrix_{};
@@ -338,6 +405,41 @@ private:
     size_t stripBytes_ = 0;
     uint8_t *encoded_ = nullptr;
 };
+
+static inline float linearHalf(uint16_t bits) {
+#if defined(__aarch64__)
+    __fp16 sample;
+    memcpy(&sample, &bits, sizeof(bits));
+    return sample;
+#else
+    const int exponent = (bits >> 10) & 31, mantissa = bits & 1023;
+    const float value = exponent == 31 ? NAN : exponent == 0 ? std::ldexp(float(mantissa), -24)
+                                                              : std::ldexp(float(mantissa + 1024), exponent - 25);
+    return bits & 0x8000 ? -value : value;
+#endif
+}
+
+template <typename Sample> static inline float linearSample(Sample value) {
+    if constexpr (sizeof(Sample) == 2) return linearHalf(value);
+    else return value;
+}
+
+template <typename Sample> static float linearHeadroom(const Sample *rgb, size_t count) {
+    float peak = 1.f;
+    for (size_t i = 0; i < count; ++i) {
+        const float value = linearSample(rgb[i]);
+        if (std::isfinite(value)) peak = std::max(peak, value);
+    }
+    return peak;
+}
+
+template <typename Sample> static void packLinearStrip(const Sample *rgb, uint16_t *dst, size_t count, float headroom) {
+    const float scale = 65535.f / headroom;
+    for (size_t i = 0; i < count; ++i) {
+        const float value = linearSample(rgb[i]);
+        dst[i] = std::isfinite(value) ? uint16_t(std::clamp(value * scale, 0.f, 65535.f) + .5f) : 0;
+    }
+}
 
 }  // namespace scamdng
 
@@ -379,8 +481,12 @@ bool tagWords(const std::vector<jlong> &values, jlong max, bool rational, std::v
 
 extern "C" {
 
-JNIEXPORT jlong JNICALL Java_com_scamera_app_processing_DngCreator_nOpen(JNIEnv *, jclass) {
-    return reinterpret_cast<jlong>(new DngCreator());
+JNIEXPORT jlong JNICALL Java_com_scamera_app_processing_DngCreator_nOpen(JNIEnv *, jclass, jboolean linear) {
+    try {
+        return reinterpret_cast<jlong>(new DngCreator(linear));
+    } catch (const std::bad_alloc &) {
+        return 0;
+    }
 }
 
 JNIEXPORT void JNICALL Java_com_scamera_app_processing_DngCreator_nClose(JNIEnv *, jclass, jlong handle) {
@@ -544,6 +650,62 @@ jbyteArray bytesOf(JNIEnv *env, const std::string &s) {
     return out;
 }
 }  // namespace
+
+JNIEXPORT jfloat JNICALL Java_com_scamera_app_processing_DngCreator_nLinearHeadroom(
+        JNIEnv *env, jclass, jobject source, jboolean half) {
+    const auto *src = env->GetDirectBufferAddress(source);
+    const jlong bytes = env->GetDirectBufferCapacity(source);
+    if (!src || bytes <= 0) return 1.f;
+    if (half) return scamdng::linearHeadroom(static_cast<const uint16_t *>(src), bytes / 2);
+    return scamdng::linearHeadroom(static_cast<const float *>(src), bytes / 4);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_com_scamera_app_processing_DngCreator_nLinearLayout(
+        JNIEnv *env, jclass, jlong handle, jint w, jint h, jint rows, jboolean compressed) {
+    DngCreator *f = file(handle);
+    try {
+        return f && f->layoutLinear(w, h, rows, compressed) ? bytesOf(env, f->head()) : nullptr;
+    } catch (const std::bad_alloc &) {
+        return nullptr;
+    }
+}
+
+JNIEXPORT jboolean JNICALL Java_com_scamera_app_processing_DngCreator_nLinearStrip(
+        JNIEnv *env, jclass, jobject source, jboolean half, jint width, jint firstRow, jint rows,
+        jfloat headroom, jobject strip, jint storedRows) {
+    if (!source || !strip || width <= 0 || firstRow < 0 || rows <= 0 || firstRow > INT32_MAX - rows ||
+        storedRows < rows || !std::isfinite(headroom) || headroom < 1.f) return JNI_FALSE;
+    const jlong rowSamples = 3LL * width;
+    const jlong sourceCapacity = env->GetDirectBufferCapacity(source);
+    const jlong stripCapacity = env->GetDirectBufferCapacity(strip);
+    if (sourceCapacity < 0 || stripCapacity < 0 ||
+        firstRow + rows > sourceCapacity / (half ? 2 : 4) / rowSamples ||
+        storedRows > stripCapacity / 2 / rowSamples) return JNI_FALSE;
+    const jlong from = rowSamples * firstRow;
+    const auto *src = env->GetDirectBufferAddress(source);
+    auto *dst = static_cast<uint16_t *>(env->GetDirectBufferAddress(strip));
+    if (!src || !dst) return JNI_FALSE;
+    if (half) scamdng::packLinearStrip(static_cast<const uint16_t *>(src) + from, dst, rows * rowSamples, headroom);
+    else scamdng::packLinearStrip(static_cast<const float *>(src) + from, dst, rows * rowSamples, headroom);
+    const auto *last = dst + (rows - 1) * rowSamples;
+    for (int y = rows; y < storedRows; ++y) std::copy_n(last, rowSamples, dst + y * rowSamples);
+    return JNI_TRUE;
+}
+
+JNIEXPORT jint JNICALL Java_com_scamera_app_processing_DngCreator_nLinearCompress(
+        JNIEnv *env, jclass, jobject strip, jint width, jint rows, jbyteArray output) {
+    if (!strip || !output || width <= 0 || width > 65535 || rows <= 0 || rows > 65535) return -1;
+    const jlong count = 3LL * width * rows;
+    auto *words = static_cast<uint16_t *>(env->GetDirectBufferAddress(strip));
+    if (!words || count > INT32_MAX || count > env->GetDirectBufferCapacity(strip) / 2) return -1;
+    uint8_t *bytes = nullptr;
+    int size = 0;
+    const auto rc = tinydngwriter::detail::lj92_encode(words, width, rows, 16, int(count), 0, nullptr, 0, &bytes, &size, 3);
+    const std::unique_ptr<uint8_t, decltype(&free)> owned(bytes, &free);
+    if (rc != tinydngwriter::detail::LJ92_ERROR_NONE || !bytes || size <= 0 || size > env->GetArrayLength(output)) return -1;
+    env->SetByteArrayRegion(output, 0, size, reinterpret_cast<const jbyte *>(bytes));
+    return size;
+}
 
 /** P681: the TIFF header and the metadata in front of the strip (nLayout's). */
 JNIEXPORT jbyteArray JNICALL Java_com_scamera_app_processing_DngCreator_nHead(JNIEnv *env, jclass, jlong handle) {

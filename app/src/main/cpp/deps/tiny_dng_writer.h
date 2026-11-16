@@ -427,7 +427,7 @@ class DNGImage {
   /// TODO(syoyo): Support multiple strips
   ///
   bool WriteIFDToStream(const unsigned int data_base_offset,
-                        const unsigned int strip_offset, std::ostream *ofs) const;
+                        const unsigned int strip_offset, std::ostream *ofs, bool automatic_strip = true) const;
 
   std::string Error() const { return err_; }
 
@@ -593,7 +593,7 @@ enum LJ92_ERRORS {
  */
 int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
                 int readLength, int skipLength, uint16_t *delinearize,
-                int delinearizeLength, uint8_t **encoded, int *encodedLength);
+                int delinearizeLength, uint8_t **encoded, int *encodedLength, int components = 1);
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -630,6 +630,7 @@ typedef struct _lje {
   int width;
   int height;
   int bitdepth;
+  int components;
   int readLength;
   int skipLength;
   uint16_t *delinearize;
@@ -908,16 +909,18 @@ void writeHeader(lje *self) {
   e[w++] = 0xc3;  // SOF3
   // Write SOF
   e[w++] = 0x0;
-  e[w++] = 11;  // Lf, frame header length
+  e[w++] = 8 + 3 * self->components;  // Lf, frame header length
   e[w++] = self->bitdepth;
   e[w++] = self->height >> 8;
   e[w++] = self->height & 0xFF;
   e[w++] = self->width >> 8;
   e[w++] = self->width & 0xFF;
-  e[w++] = 1;     // Components
-  e[w++] = 0;     // Component ID
-  e[w++] = 0x11;  // Component X/Y
-  e[w++] = 0;     // Unused (Quantisation)
+  e[w++] = self->components;
+  for (int c = 0; c < self->components; ++c) {
+    e[w++] = c;     // Component ID
+    e[w++] = 0x11;  // Component X/Y
+    e[w++] = 0;     // Unused (Quantisation)
+  }
   e[w++] = 0xff;
   e[w++] = 0xc4;  // HUFF
   // Write HUFF
@@ -938,10 +941,12 @@ void writeHeader(lje *self) {
   e[w++] = 0xda;  // SCAN
   // Write SCAN
   e[w++] = 0x0;
-  e[w++] = 8;  // Ls, scan header length
-  e[w++] = 1;  // Components
-  e[w++] = 0;  //
-  e[w++] = 0;  //
+  e[w++] = 6 + 2 * self->components;  // Ls, scan header length
+  e[w++] = self->components;
+  for (int c = 0; c < self->components; ++c) {
+    e[w++] = c;
+    e[w++] = 0;  // DC table
+  }
   e[w++] = 6;  // Predictor
   e[w++] = 0;  //
   e[w++] = 0;  //
@@ -1090,19 +1095,19 @@ static inline int lj92Ssss(int diff, int bitdepth) {
   diff = (int)(((unsigned)diff + (unsigned)half) & full_mask) - half;
   return diff == 0 ? 0 : (32 - __builtin_clz((unsigned)abs(diff)));
 }
-static inline int lj92Predict(const uint16_t *cur, const uint16_t *prev, int col, int bitdepth) {
-  if (!prev) return col == 0 ? 1 << (bitdepth - 1) : cur[col - 1];
-  if (col == 0) return prev[0];
-  return prev[col] + ((cur[col - 1] - prev[col - 1]) >> 1);
+static inline int lj92Predict(const uint16_t *cur, const uint16_t *prev, int col, int bitdepth, int components) {
+  if (!prev) return col < components ? 1 << (bitdepth - 1) : cur[col - components];
+  if (col < components) return prev[col];
+  return prev[col] + ((cur[col - components] - prev[col - components]) >> 1);
 }
 static int frequencyScanRows(const lje *self, int row0, int row1, int *hist) {
-  const int width = self->width, bitdepth = self->bitdepth, maxval = 1 << bitdepth;
+  const int width = self->width * self->components, bitdepth = self->bitdepth, maxval = 1 << bitdepth;
   for (int row = row0; row < row1; ++row) {
     const uint16_t *cur = self->image + (size_t)row * width;
     const uint16_t *prev = row > 0 ? cur - width : nullptr;
     for (int col = 0; col < width; ++col) {
       if (cur[col] >= maxval) return LJ92_ERROR_TOO_WIDE;
-      hist[lj92Ssss(cur[col] - lj92Predict(cur, prev, col, bitdepth), bitdepth)]++;
+      hist[lj92Ssss(cur[col] - lj92Predict(cur, prev, col, bitdepth, self->components), bitdepth)]++;
     }
   }
   return LJ92_ERROR_NONE;
@@ -1132,7 +1137,8 @@ static int frequencyScanFast(lje *self) {
   return LJ92_ERROR_NONE;
 }
 static bool writeBodyFast(lje *self) {
-  const int width = self->width, height = self->height, bitdepth = self->bitdepth;
+  const int components = self->components;
+  const int width = self->width * components, height = self->height, bitdepth = self->bitdepth;
   uint32_t code[17];
   int length[17];
   for (int ssss = 0; ssss < 17; ++ssss) {
@@ -1174,8 +1180,9 @@ static bool writeBodyFast(lje *self) {
       const int ssss = diff == 0 ? 0 : (32 - __builtin_clz((unsigned)abs(diff)));
       const int vt = ssss > 0 ? (1 << (ssss - 1)) : 0;
       if (diff < vt) diff += (1 << ssss) - 1;
-      const int len = length[ssss] + ssss;
-      acc = (acc << len) | ((uint64_t)code[ssss] << ssss) | ((uint64_t)(unsigned)diff & ((1ull << ssss) - 1));
+      const int extra = ssss == 16 && components > 1 ? 0 : ssss;
+      const int len = length[ssss] + extra;
+      acc = (acc << len) | ((uint64_t)code[ssss] << extra) | ((uint64_t)(unsigned)diff & ((1ull << extra) - 1));
       nacc += len;
       if (nacc >= 32) { // four whole bytes: stored at once unless one of them is 0xFF (stuffed one by one)
         nacc -= 32;
@@ -1194,11 +1201,12 @@ static bool writeBodyFast(lje *self) {
         }
       }
     };
-    put(0, prev ? prev[0] : 1 << (bitdepth - 1));
+    for (int c = 0; c < components; ++c) put(c, prev ? prev[c] : 1 << (bitdepth - 1));
     if (prev) {
-      for (int col = 1; col < width; ++col) put(col, prev[col] + ((cur[col - 1] - prev[col - 1]) >> 1));
+      for (int col = components; col < width; ++col)
+        put(col, prev[col] + ((cur[col - components] - prev[col - components]) >> 1));
     } else {
-      for (int col = 1; col < width; ++col) put(col, cur[col - 1]);
+      for (int col = components; col < width; ++col) put(col, cur[col - components]);
     }
   }
   while (nacc >= 8) { // the whole bytes left
@@ -1223,8 +1231,9 @@ static bool writeBodyFast(lje *self) {
  */
 int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
                 int readLength, int skipLength, uint16_t *delinearize,
-                int delinearizeLength, uint8_t **encoded, int *encodedLength) {
+                int delinearizeLength, uint8_t **encoded, int *encodedLength, int components) {
   int ret = LJ92_ERROR_NONE;
+  if (components != 1 && components != 3) return LJ92_ERROR_TOO_WIDE;
 
   lje *self = (lje *)calloc(sizeof(lje), 1);
   if (self == NULL) return LJ92_ERROR_NO_MEMORY;
@@ -1232,6 +1241,7 @@ int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
   self->width = width;
   self->height = height;
   self->bitdepth = bitdepth;
+  self->components = components;
   self->readLength = readLength;
   self->skipLength = skipLength;
   self->delinearize = delinearize;
@@ -1239,7 +1249,11 @@ int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
   // P704: the common call (no delinearize table, one contiguous tile) takes the fast passes above; its buffer starts at the
   // header's size and is sized from the histogram (no 3 bytes per sample reserved up front)
   const bool fast = delinearize == NULL && skipLength == 0 && width > 0 && height > 0 && bitdepth >= 2 && bitdepth <= 16
-                    && getenv("SCAM_LJ92_REFERENCE") == NULL;
+                    && (components > 1 || getenv("SCAM_LJ92_REFERENCE") == NULL);
+  if (components > 1 && !fast) {
+    free(self);
+    return LJ92_ERROR_TOO_WIDE;
+  }
   self->encodedLength = fast ? 4096 : width * height * 3 + 200;
   self->encoded = (uint8_t*)malloc(self->encodedLength);
   if (self->encoded == NULL) {
@@ -1247,7 +1261,11 @@ int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
     return LJ92_ERROR_NO_MEMORY;
   }
   // Scan through data to gather frequencies of ssss prefixes
-  ret = fast ? frequencyScanFast(self) : frequencyScan(self);
+  try {
+    ret = fast ? frequencyScanFast(self) : frequencyScan(self);
+  } catch (const std::bad_alloc &) {
+    ret = LJ92_ERROR_NO_MEMORY;
+  }
   if (ret != LJ92_ERROR_NONE) {
     free(self->encoded);
     free(self);
@@ -1272,7 +1290,9 @@ int lj92_encode(uint16_t *image, int width, int height, int bitdepth,
 #ifdef DEBUG
   printf("written:%d\n", self->encodedWritten);
 #endif
-  self->encoded = (uint8_t*)realloc(self->encoded, self->encodedWritten);
+  if (auto *trimmed = static_cast<uint8_t *>(realloc(self->encoded, self->encodedWritten))) {
+    self->encoded = trimmed;
+  }
   self->encodedLength = self->encodedWritten;
   *encoded = self->encoded;
   *encodedLength = self->encodedLength;
@@ -3310,7 +3330,7 @@ bool DNGImage::WriteDataTo(unsigned char *dst) const {
 
 bool DNGImage::WriteIFDToStream(const unsigned int data_base_offset,
                                 const unsigned int strip_offset,
-                                std::ostream *ofs) const {
+                                std::ostream *ofs, bool automatic_strip) const {
   if ((num_fields_ == 0) || (ifd_tags_.size() < 1)) {
     err_ += "No TIFF Tags.\n";
     return false;
@@ -3318,7 +3338,7 @@ bool DNGImage::WriteIFDToStream(const unsigned int data_base_offset,
 
   // add STRIP_OFFSET tag and sort IFD tags.
   std::vector<IFDTag> tags = ifd_tags_;
-  {
+  if (automatic_strip) {
     // For STRIP_OFFSET we need the actual offset value to data(image),
     // thus write STRIP_OFFSET here.
     unsigned int offset = strip_offset + kHeaderSize;
