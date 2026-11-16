@@ -37,7 +37,7 @@ public final class PostAb {
 
     /** post_ab is on and this shot can take it ({@code film}: the shot's film snapshot, whose photo builds no gain map). */
     public static boolean wanted(Parameters p, @androidx.annotation.Nullable com.scamera.app.processing.color.FilmSim.Settings film) {
-        if (!PreferenceKeys.scamDevSwitch("post_ab", false)) return false;
+        if (PreferenceKeys.scamDevNumber("post_ab", 0f) <= 0f) return false; // negative: the laboratory's performance A/B
         final boolean fits = p != null && p.scamRgb != null && p.scamRgbOwned && p.rawSize != null
                 && (long) p.rawSize.x * p.rawSize.y <= 16_000_000L && !PostPipeline.gainMapWanted(ScameraApp.getSettings().gainMapPass(), film);
         if (!fits) Log.i("SCAM_PIPELINE", "POST AB skipped: needs the owned worker RGB of 16 MP or less without Ultra HDR");

@@ -522,7 +522,15 @@ public class CaptureController {
 
     /** The still reader beside the RAW one: its frames go straight to the saver. */
     private final ImageReader.OnImageAvailableListener mStillReaderListener = reader -> mImageSaver.initProcess(reader);
-    private final ImageReader.OnImageAvailableListener mRawReaderListener = this::onRawImage;
+    private final ImageReader.OnImageAvailableListener mRawReaderListener = reader -> {
+        final boolean traced = android.os.Build.VERSION.SDK_INT >= 29 && android.os.Trace.isEnabled();
+        if (traced) android.os.Trace.beginSection("SCAMERA RAW callback");
+        try {
+            onRawImage(reader);
+        } finally {
+            if (traced) android.os.Trace.endSection();
+        }
+    };
 
     /** Closes the newest frame of a reader nobody reads any more (a closed session's, a paused screen's). */
     private static void discardStale(ImageReader reader) {

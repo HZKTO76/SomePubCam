@@ -833,9 +833,9 @@ public class PreferenceKeys {
         if (hybridValue("fm_keep_context", 1f) == 0f) out.append("fmKeepContext 0\n");
         if (hybridValue("fm_chroma_fused", 1f) == 0f) out.append("fmChromaFused 0\n");
         // P712: where the fast merge's readback (bit 1) and RAW upload ring (bit 2) live: hardware buffers (3, the default) or the
-        // driver's own storage - an A/B of the output pass's / the unpack's GPU time ("hybrid_fm_ahb 0..3")
+        // driver's own storage. Bit 4 additionally tests submitting unpack before the next upload's fence wait.
         final float ahb = hybridValue("fm_ahb", 3f);
-        if (ahb != 3f) out.append("fmAhb ").append(Math.round(Math.max(0f, Math.min(3f, ahb)))).append('\n');
+        if (ahb != 3f) out.append("fmAhb ").append(Math.round(Math.max(0f, Math.min(7f, ahb)))).append('\n');
         // P607 «Качество»: an ultrashort frame the GPU homography refused for too few inliers starts its registration from that
         // homography (worker usWeakHom 1), and the Bento blend flags a colour at the ultrashort clip where the frames holding half
         // its weight are clipped (usClipVote 1); "hybrid_us_weak_hom 0" / "hybrid_us_clip_vote 0" = before

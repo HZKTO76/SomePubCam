@@ -95,12 +95,14 @@ public class CameraActivity extends BaseActivity {
         }
         showScreen();
 
+        final long settingsStarted = System.nanoTime();
         PreferenceManager.setDefaultValues(this, R.xml.preferences, MigrationManager.readAgain);
         PreferenceKeys.setDefaults(this);
         // P156: a fresh start of the app opens on the back 1x module, not on the module used last
         String home = com.scamera.app.settings.ModuleRegistry.openHomeOnce(saved == null);
         if (home != null) Log.d(TAG, "fresh start: module " + home + " (1x)");
         ScameraApp.getSettings().loadCache();
+        Log.i("PERF", "camera activity settings ms=" + (System.nanoTime() - settingsStarted) / 1_000_000);
 
         permissionPlan = PermissionPlan.restore(SDK_INT,
                 saved == null ? null : saved.getIntArray(STATE_PERMISSION_PLAN));

@@ -324,6 +324,8 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
     static final class OutputTiming {
         final boolean sync;
         long pending, render, readback, copy;
+        long submit, map, encode;
+        int pboSlots;
         int tiles;
         private long last = System.nanoTime();
         private final long start = last;
@@ -356,6 +358,8 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
         /** A failed pixel-pack buffer attempt: its time stays in the total only. */
         void reset() {
             render = readback = copy = 0;
+            submit = map = encode = 0;
+            pboSlots = 0;
             tiles = 0;
             lap();
         }
@@ -370,6 +374,9 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
 
         void log(String path, int w, int h) {
             Log.i("SCAM_PIPELINE", line(path, w, h));
+            if (pboSlots != 0) Log.i("PERF", "post output slots=" + pboSlots + " tiles=" + tiles
+                    + " submit_ms=" + submit / 1_000_000 + " map_ms=" + map / 1_000_000
+                    + " copy_ms=" + copy / 1_000_000 + " encoder_tail_ms=" + encode / 1_000_000);
         }
     }
 
@@ -656,6 +663,13 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
     /** P713: the largest frame streamed into the encoder (a 50 MP one: its 200 MB frame buffer instead of the ring's bitmap). */
     static final long STREAM_MAX_PIXELS = 64_000_000L;
 
+    /** post_pbo_ring 2..4 can select a larger ring on an ordinary 8-bit shot. */
+    static int streamedPboSlots(boolean deferred, int tiles, long pixels, float setting) {
+        final int slots = pixels <= PBO_MAX_PIXELS && setting >= 2f && setting <= 4f
+                ? Math.round(setting) : deferred ? 2 : 3;
+        return Math.min(slots, Math.max(1, tiles));
+    }
+
     /**
      * P713: {@link #streamedWanted}'s path. The deferred last pass ({@code deferred}, may be null) draws the lines each tile reads
      * right before the tile; the tile goes into buffer k % ring of the ring and is copied into the frame once the next ring - 1
@@ -684,7 +698,9 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
         final GLBlockDivider divider = new GLBlockDivider(outH, GLDrawParams.TILE_ROWS);
         for (int[] t = new int[2]; divider.nextBlock(t); ) tileList.add(t.clone());
         // a tile is copied once the next one is queued (the GPU busy with it meanwhile); 3 without a deferred pass, as the ring path
-        final int ring = Math.min(deferred != null ? 2 : 3, Math.max(1, tileList.size()));
+        final int ring = streamedPboSlots(deferred != null, tileList.size(), (long) outW * outH,
+                PreferenceKeys.scamDevNumber("post_pbo_ring", 1f));
+        timing.pboSlots = ring;
         final int[] pbo = new int[ring];
         boolean mapped = false;
         boolean done = false;
@@ -719,6 +735,7 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
                 final int[] tile = tileList.get(step[0]);
                 final int bytes = outW * tile[1] * 4;
                 if (step[1] == 0) {
+                    final long submitAt = System.nanoTime();
                     if (deferred != null && mapping != null) {
                         final int[] lines = GLDeferredDraw.sourceLines(mapping[0], mapping[1] != 0, tile[0], tile[0] + tile[1],
                                 mapping[2], mapping[3], mapping[4]);
@@ -732,12 +749,15 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
                     timing.rendered();
                     GLES30.glReadPixels(0, 0, outW, tile[1], outFormat.getGLFormatExternal(), outFormat.getGLType(), 0);
                     GpuPace.block(); // P668: a submission per tile on the paced post
+                    timing.submit += System.nanoTime() - submitAt;
                     timing.readBack();
                     timing.tiles++;
                     continue;
                 }
                 GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pbo[step[0] % ring]);
+                final long mapAt = System.nanoTime();
                 final Buffer view = GLES30.glMapBufferRange(GLES30.GL_PIXEL_PACK_BUFFER, 0, bytes, GLES30.GL_MAP_READ_BIT);
+                timing.map += System.nanoTime() - mapAt;
                 mapped = view != null;
                 if (!(view instanceof ByteBuffer) || view.capacity() < bytes || glGetError() != GL_NO_ERROR) return failStreamed(deferred);
                 timing.readBack(); // the map waits for the GPU's copy of this tile
@@ -767,7 +787,10 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
             done = true;
             final RowStream finishing = stream;
             stream = null;
-            if (finishing.finish()) {
+            final long encodeAt = System.nanoTime();
+            final boolean encoded = finishing.finish();
+            timing.encode = System.nanoTime() - encodeAt;
+            if (encoded) {
                 sinkTook = true;
                 tileBuffer = null;
                 timing.log("pbo ring -> jpeg streamed", outW, outH);

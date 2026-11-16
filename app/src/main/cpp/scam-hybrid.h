@@ -1291,7 +1291,7 @@ struct HybridTuning {
     int fmChromaFused=1;
     // fmAhb: hardware buffers for the readback (bit 1) and the RAW upload ring (bit 2); 3 = as before. An A/B of their GPU side on the
     // phone (the output pass and the unpack); the same photo either way.
-    int fmAhb=3;
+    int fmAhb=3; // bit 4 submits unpack before waiting for the next upload slot (A/B)
     // P488 (owner, 2026-11-03: the reference's Sport merge in our «Спорт»): fastMergeSport bit 1 = the reference Sport's rejection
     // overrides in the fast merge (extra_motion_robustness_boost 10 for 6, u_pixel_difference_threshold 0.35 for 0.5), bit 2 = its
     // Sport frame selector's donor gate (translation <= 15 thumbnail px for 35, sharpness >= 0.75 x the base's for 0.6; the base

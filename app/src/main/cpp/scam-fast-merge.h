@@ -718,7 +718,9 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     }} releaseGuard{held};
     if(std::getenv("SCAM_FM_FAIL"))throw std::runtime_error("SCAM_FM_FAIL (replay check of the fallback)");
     g.selectRejFilter(tune.fmFilterGather!=0); // P484
-    g.ahbUse=std::clamp(tune.fmAhb,0,3); // P712
+    const int bufferMode=std::clamp(tune.fmAhb,0,7);
+    g.ahbUse=bufferMode&3; // hardware readback/upload bits
+    const bool enqueueBeforeStaging=(bufferMode&4)!=0;
     // P675 fastNightMotion (owner, 2026-11-13: moving leaves and a passing car came out wrong in night merges): the night motion
     // test of the rejection (kFastRejection with NIGHT_MOTION) at that strength on a Bayer stream, whole at SNR keys 5 .. 10, gone at 3 and below
     // (beyond the phones' darkest: there the statistic's tail trips on noise) and at 20 and above (by day the rejection as before,
@@ -1178,12 +1180,17 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
             if(!g.unmapWrite(ring[slot]))throw std::runtime_error("FAST MERGE GPU: upload buffer lost");
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER,3,ring[slot]);
             unpackProg=A::pUnpackBuf;
-            stage(next); // the next frame's bytes while this one's passes are submitted
+            if(!enqueueBeforeStaging)stage(next);
             uploadMs+=ms(u0,Clock::now());
             glBindImageTexture(1,unpackTarget,0,GL_FALSE,0,GL_WRITE_ONLY,GL_RGBA16F);
             if(siteTex)g.tex(unpackProg,"u_site_gains",2,siteTex);
             g.dispatch(unpackProg,(w2+15)/16,(h2+15)/16);
             ringFence[slot]=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0); // the slot is free again once this unpack ran
+            if(enqueueBeforeStaging){
+                const auto beforeStage=Clock::now();
+                stage(next); // submit this unpack before waiting for the next writable upload slot
+                uploadMs+=ms(beforeStage,Clock::now());
+            }
         } else {
             const GLuint rt=raw[rawSlot];rawSlot^=1; // two byte-stream textures: the next upload never waits for the previous unpack
             glPixelStorei(GL_UNPACK_ALIGNMENT,1);
@@ -2060,6 +2067,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         g.renderer.c_str(),(g.gpuPrio+", filter "+(g.rejFilterGather?"gather":"fetch")+", merge batch "+std::to_string(mergeBatch)+(outTiled?", output tiled":"")+(guideCells?", guide cells":"")).c_str(),prewarmed?"prewarmed":kept?"kept from the band before":"made",prewarmWhy.empty()?"":(" ("+prewarmWhy+")").c_str(),prewarmed?g.initMs:ms(gpuStarted,gpuReady),g.cacheNote().c_str(),
         ms(gpuReady,submitted),waitMs,ms(submitted,readDone),outNote.c_str(),ahbAny?"cached hardware buffers":g.ahbFailed?"default storage (hardware buffer refused)":"default storage",g.mapMs,g.useMs,g.unmapMs);
     report(line);
+    report("PERF fast merge buffers: ahb="+std::to_string(g.ahbUse)
+        +", enqueue_before_staging="+std::to_string(enqueueBeforeStaging));
     if(profile){
         std::snprintf(line,sizeof(line),"HYBRID FAST MERGE GPU ms (timestamps, sums over %d donors; a compute pass may count in the next draw's stage): unpack=%.1f guide=%.1f pyr=%.1f "
             "homography=%.1f lk=%.1f sparse=%.1f rejection=%.1f filter=%.1f dilate+cyclops+blendEq=%.1f accW=%.1f merge=%.1f base=%.1f out=%.1f"

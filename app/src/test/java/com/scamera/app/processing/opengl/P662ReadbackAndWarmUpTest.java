@@ -12,6 +12,15 @@ import static org.junit.Assert.*;
  * warm-up's key -> source of the programs it links into the shared context (the source useShader looks them up by).
  */
 public class P662ReadbackAndWarmUpTest {
+    @Test
+    public void extraPboSlotsOnlyApplyToAnExplicitSmallFrameTrial() {
+        assertEquals(2, GLCoreBlockProcessing.streamedPboSlots(true, 16, 12_192_768, 1f));
+        assertEquals(3, GLCoreBlockProcessing.streamedPboSlots(false, 16, 12_192_768, 1f));
+        assertEquals(4, GLCoreBlockProcessing.streamedPboSlots(true, 16, 12_192_768, 4f));
+        assertEquals(2, GLCoreBlockProcessing.streamedPboSlots(true, 2, 12_192_768, 4f));
+        assertEquals(2, GLCoreBlockProcessing.streamedPboSlots(true, 32, 50_000_000, 4f));
+        assertEquals(2, GLCoreBlockProcessing.streamedPboSlots(true, 16, 12_192_768, Float.NaN));
+    }
     @Test public void theRingDrawsAndCopiesEveryTileOnceAndNeverOverwritesABufferBeforeItsCopy() {
         for (int ring = 1; ring <= 3; ring++) {
             for (int tiles = 1; tiles <= 50; tiles++) {

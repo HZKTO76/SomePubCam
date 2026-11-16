@@ -322,6 +322,7 @@ public final class ScamLabRun {
         public List<String> devMasked = new ArrayList<>();
         /** The shot kept no scam_dev.txt lines (taken before): both sides read the file as it is now. */
         public boolean devNow;
+        public boolean performanceReplay;
     }
 
     public interface Progress { void stage(String text); }
@@ -419,6 +420,11 @@ public final class ScamLabRun {
             throw new IOException(Lang.t("Идёт обработка снимка. Повторите, когда она закончится.", "A shot is being processed. Try again when it is done."));
         PreferenceKeys.beginShotProfile(true);
         try {
+            if (crop == null && PreferenceKeys.scamDevNumber("post_ab", 0f) < 0f) {
+                final Map<String, Float> now = PreferenceKeys.scamDevLines();
+                final float trial = now.getOrDefault("post_ab", 0f);
+                if (trial < 0f) return performanceReplay(context, shot, now, progress, trial <= -2f);
+            }
             final Result r = new Result();
             final java.util.TreeMap<String, Object> none = new java.util.TreeMap<>();
             final Map<String, Float> lines = devLines(shot);
@@ -450,6 +456,45 @@ public final class ScamLabRun {
         }
     }
 
+    /** The same saved RAW series with only the selected scheduling and transport overrides changed. */
+    private static Result performanceReplay(Context context, Shot shot, Map<String, Float> now, Progress progress,
+                                            boolean candidateFirst) throws Exception {
+        if ((long) shot.width * shot.height * shot.grid * shot.grid > 16_000_000L) {
+            Log.w("PERF_VERIFY", "skipped: replay exceeds 16 MP");
+            throw new IOException(Lang.t("Замер поддерживает серии до 16 Мп", "Performance replay supports up to 16 MP"));
+        }
+        final Map<String, Float> reference = new HashMap<>(devLines(shot));
+        final Map<String, Float> candidate = new HashMap<>(reference);
+        for (String key : new String[]{"post_gpu_timer", "post_gpu_pace", "post_band_ms", "post_pbo_ring", "hybrid_fm_ahb"}) {
+            reference.remove(key);
+            candidate.remove(key);
+            if (now.containsKey(key)) candidate.put(key, now.get(key));
+        }
+        reference.put("post_sync", 0f);
+        candidate.put("post_sync", 0f);
+        final Map<String, Object> values = basePrefs(shot);
+        final SharedPreferences prefs = ScameraApp.getSettingsManagerStatic().getDefaultPreferences();
+        final Result r = new Result();
+        r.performanceReplay = true;
+        final PerfReplay a = new PerfReplay(), b = new PerfReplay();
+        com.scamera.app.processing.opengl.GpuPace.replayPacing(true);
+        try {
+            if (candidateFirst) r.b = side(context, shot, null, values, candidate, prefs, progress, "B", null, null, b);
+            r.a = side(context, shot, null, values, reference, prefs, progress, "A", null, null, a);
+            if (!candidateFirst) r.b = side(context, shot, null, values, candidate, prefs, progress, "B", null, null, b);
+            r.mergedAgain = !r.a.tuning.equals(r.b.tuning);
+            r.same = PerfReplay.report(shot.dir.getName(), a, b, r.a, r.b);
+            return r;
+        } catch (Exception | OutOfMemoryError failure) {
+            if (r.a != null) PerfReplay.recycle(r.a);
+            if (r.b != null) PerfReplay.recycle(r.b);
+            Log.w("PERF_VERIFY", "replay failed: " + failure);
+            throw failure;
+        } finally {
+            com.scamera.app.processing.opengl.GpuPace.replayPacing(false);
+        }
+    }
+
     /** The shot's preferences as the lab renders them: never the diagnostics, the kept bursts or the lab's own switch. */
     static Map<String, Object> basePrefs(Shot shot) throws org.json.JSONException {
         final Map<String, Object> m = ScamLabParams.prefs(shot.meta.getJSONObject("prefs"));
@@ -463,10 +508,18 @@ public final class ScamLabRun {
     /** One side: the merge and the post pipeline under {@code values} and the scam_dev.txt lines {@code dev}. */
     private static Side side(Context context, Shot shot, @Nullable int[] crop, Map<String, Object> values, Map<String, Float> dev,
                              SharedPreferences prefs, Progress progress, String name, @Nullable LabFrame frozen, @Nullable LabFrame record) throws Exception {
+        return side(context, shot, crop, values, dev, prefs, progress, name, frozen, record, null);
+    }
+
+    private static Side side(Context context, Shot shot, @Nullable int[] crop, Map<String, Object> values, Map<String, Float> dev,
+                             SharedPreferences prefs, Progress progress, String name, @Nullable LabFrame frozen, @Nullable LabFrame record,
+                             @Nullable PerfReplay check) throws Exception {
         PreferenceValue.overlay(prefs, values);
         PreferenceKeys.labDevOverlay(dev);
         ByteBuffer rgb = null;
         Parameters p = null;
+        Bitmap map = null, photo = null;
+        boolean returned = false;
         try {
             ScamHybridBurst.loadLearned(context); // P377: the same-result variants this driver died on, before the burst's tuning
             final ScamLabBurst burst = new ScamLabBurst(ScamLab.burstOf(shot.dir), crop, shot.meta.optString("tuningBurst", ""));
@@ -478,7 +531,8 @@ public final class ScamLabRun {
             final long t0 = System.nanoTime();
             rgb = ScamNeuralClient.processScamBurst(context, burst);
             final long t1 = System.nanoTime();
-            final Bitmap map = frameMap(ScamHybridBurst.lastEffectiveFrames, burst.outputWidth(), burst.outputHeight(), shot.orient);
+            if (check != null) check.merge(rgb, ScamHybridBurst.lastEffectiveFrames, ScamHybridBurst.lastMergeFrames);
+            map = frameMap(ScamHybridBurst.lastEffectiveFrames, burst.outputWidth(), burst.outputHeight(), shot.orient);
             final ScamMergeStages stages = ScamNeuralClient.lastStages;
             ScamNeuralClient.lastStages = null;
             if (stages != null) stages.orient = shot.orient;
@@ -492,17 +546,25 @@ public final class ScamLabRun {
             // P277: a fragment's exposure, tone and highlights from the whole frame's statistics (LabFrame)
             pipeline.frozen = frozen;
             pipeline.record = record;
-            Bitmap photo;
+            final long postStart = check == null ? t1 : System.nanoTime();
             try {
+                if (check != null) pipeline.streamJpeg(PreferenceKeys.getJpegQuality());
                 photo = pipeline.develop(null, p);
             } finally {
                 pipeline.close();
             }
             final long t2 = System.nanoTime();
+            if (check != null && photo == null) photo = check.jpeg(pipeline.streamedJpeg);
             final Bitmap screen = ScamLab.scaled(photo, SCREEN_SIDE);
             if (screen != photo) photo.recycle();
-            return new Side(screen, map, stages, (t1 - t0) / 1_000_000, (t2 - t1) / 1_000_000, tuning);
+            photo = screen;
+            returned = true;
+            return new Side(screen, map, stages, (t1 - t0) / 1_000_000, (t2 - postStart) / 1_000_000, tuning);
         } finally {
+            if (!returned) {
+                if (map != null) map.recycle();
+                if (photo != null) photo.recycle();
+            }
             PreferenceValue.overlay(null, null);
             PreferenceKeys.labDevOverlay(null);
             // ScamRgb frees the worker RGB after its upload and leaves a small copy (ScamProcessor's rule)

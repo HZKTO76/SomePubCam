@@ -256,8 +256,15 @@ public final class GpuPace {
     }
 
     private static final ThreadLocal<Pacer> CURRENT = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> REPLAY = new ThreadLocal<>();
 
     private GpuPace() {}
+
+    /** Exercise the capture queue policy in the laboratory, where the viewfinder is hidden. */
+    public static void replayPacing(boolean enabled) {
+        if (enabled) REPLAY.set(true);
+        else REPLAY.remove();
+    }
 
     /**
      * The blocks in flight for the scam_dev value {@code setting} (NaN: absent) on a GPU named {@code renderer}: 0 = no pacing.
@@ -330,7 +337,8 @@ public final class GpuPace {
             n = 0;
             bandMs = 0f;
         }
-        if (n > 0) CURRENT.set(new Pacer(GL, n, bandMs, com.scamera.app.ui.camera.views.viewfinder.VfDrawMeter::hiddenNow, minBandRows));
+        if (n > 0) CURRENT.set(new Pacer(GL, n, bandMs, Boolean.TRUE.equals(REPLAY.get()) ? () -> false
+                : com.scamera.app.ui.camera.views.viewfinder.VfDrawMeter::hiddenNow, minBandRows));
         // P683: the first shot of a process starts from the first-run calibration's ns per pixel (GpuProfile), not from 256 rows
         if (n > 0 && bandMs > 0f && SEEDED.compareAndSet(false, true)) {
             try {
