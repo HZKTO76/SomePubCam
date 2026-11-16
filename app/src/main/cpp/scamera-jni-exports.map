@@ -1,7 +1,6 @@
 {
     global:
-        JNI_OnLoad;
-        JNI_OnUnload;
+        JNI_On*;
         Java_com_scamera_app_*;
     local: *;
 };
