@@ -84,7 +84,8 @@ public class CameraLayout extends ConstraintLayout {
             controls += Math.round(com.scamera.app.ui.camera.views.BottomChrome.CLEARANCE_DP * getResources().getDisplayMetrics().density);
         }
         int limit = compactPreviewHeight(width, stage.getMeasuredHeight(), controls, anchor.dimensionRatio);
-        boolean remeasure = preview.setHeightLimit(limit);
+        // The wide preview extends under the bottom bar. Reserve room for the controls via the anchor.
+        boolean remeasure = preview.setHeightLimit(preview.usesWideAspect() ? 0 : limit);
         if (anchor.height != limit) {
             anchor.height = limit;
             frame.requestLayout();

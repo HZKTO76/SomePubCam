@@ -1771,7 +1771,7 @@ public class SettingsMenuTest {
                 keys(screen.findPreference("scam_hybrid_merge_frames_category")));
         // P629: «Шумоподавление и склейка» - the denoise groups of the former «Шумоподавление», then the merge groups of the former
         // «Склейка», each in its order (P644: «Статика»'s group after the frames is gone with the route)
-        assertEquals(Arrays.asList("scam_hybrid_nr_merge_category","scam_hybrid_resolve_optics_category",
+        assertEquals(Arrays.asList("pref_scam_hybrid_highlight_merge","scam_hybrid_nr_merge_category","scam_hybrid_resolve_optics_category",
                 "scam_hybrid_ms_general_category","scam_hybrid_ms_luma_category","scam_hybrid_ms_chroma_category",
                 "scam_hybrid_merge_frames_category","scam_hybrid_yuv_category","scam_hybrid_merge_align_category","scam_hybrid_merge_reject_category",
                 "scam_hybrid_merge_kernel_category","scam_hybrid_merge_quad_category","scam_hybrid_merge_final_category"),

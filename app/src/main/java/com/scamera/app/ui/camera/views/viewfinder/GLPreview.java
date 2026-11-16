@@ -204,6 +204,11 @@ public class GLPreview extends GLSurfaceView {
 
     private int heightLimit;
 
+    /** Whether the preview uses an aspect wider than the regular 4:3 photo. */
+    public boolean usesWideAspect() {
+        return aspectW > 0 && 3L * aspectH > 4L * aspectW;
+    }
+
     /** Limits the displayed preview while keeping its aspect and the capture stream unchanged. */
     public boolean setHeightLimit(int limit) {
         if (heightLimit == limit) return false;
