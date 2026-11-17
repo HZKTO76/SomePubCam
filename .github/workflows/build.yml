@@ -1,6 +1,9 @@
 name: Build PronCam
 
 on:
+  push:
+    branches: [main]
+    paths: [ci/build-request.json]
   workflow_dispatch:
     inputs:
       source_commit:
@@ -10,6 +13,10 @@ on:
       publish_release:
         description: Publish the checked APK in Releases
         default: false
+        type: boolean
+      send_telegram:
+        description: Send the checked APK through the configured Telegram bot
+        default: true
         type: boolean
 
 permissions:
@@ -31,6 +38,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Check public build and delivery controller
+        run: |
+          bash ci/public-build.sh self-test
+          python3 ci/telegram-build.py --self-test
       - id: source
         name: Select source revision
         env:
@@ -133,6 +144,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SCAMERA_VERSION_CODE: ${{ needs.source.outputs.version }}
         run: bash ci/public-build.sh release
+      - name: Send checked APK through Telegram bot
+        if: github.event_name == 'push' || inputs.send_telegram == true
+        env:
+          PRONCAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_OWNER: ${{ secrets.TELEGRAM_OWNER }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          TELEGRAM_TOPIC: ${{ secrets.TELEGRAM_TOPIC }}
+        run: bash ci/public-build.sh telegram
       - name: Remove temporary source and key
         if: always()
         run: bash ci/public-build.sh cleanup

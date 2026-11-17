@@ -3,10 +3,8 @@ name: Build SomeCam test APK
 # Actions minutes and artifact storage are budgeted: builds run for main only (no PR or stale-branch duplicates, docs-only
 # pushes skipped), a newer push cancels the running build, and the artifacts are kept for days, not the 90-day default.
 # Independent checks and Android compilation overlap; only publish waits for every job to succeed.
+# Legacy public-source build is manual; current builds use build.yml and pinned private source.
 on:
-  push:
-    branches: [ main ]
-    paths-ignore: [ '**/*.md', 'docs/**', 'research/**' ]
   workflow_dispatch:
 
 concurrency:

@@ -4,7 +4,7 @@ umask 077
 
 # Published as ci/public-build.sh in Xxdl, outside the private source checkout.
 mode=${1:-}
-case "$mode" in resolve|checkout|host|build|stage|release|cleanup|self-test) ;; *) exit 2 ;; esac
+case "$mode" in resolve|checkout|host|build|stage|release|telegram|cleanup|self-test) ;; *) exit 2 ;; esac
 
 check_stage() {
     python3 - "$1" <<'PY'
@@ -41,8 +41,13 @@ if [[ "$mode" == self-test ]]; then
     if check_stage "$stage" >/dev/null 2>&1; then exit 1; fi
     cat > "$fixture/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
-[[ "$*" == 'api repos/SOTTRME/Privss' ]] || exit 99
-printf '{"id":1461683737,"private":true,"full_name":"SOTTRME/Privss"}\n'
+case "$*" in
+    'api repos/SOTTRME/Privss')
+        printf '{"id":1461683737,"private":true,"full_name":"SOTTRME/Privss"}\n' ;;
+    'api repos/SOTTRME/Privss/git/commits/1111111111111111111111111111111111111111')
+        printf '{"sha":"1111111111111111111111111111111111111111"}\n' ;;
+    *) exit 99 ;;
+esac
 MOCK
     chmod +x "$fixture/bin/gh"
     self=$(realpath "${BASH_SOURCE[0]}")
@@ -54,6 +59,16 @@ MOCK
     if GITHUB_ACTOR=SOTTRME GITHUB_TRIGGERING_ACTOR=untrusted bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     if GITHUB_ACTOR=SOTTRME PRONCAM_SOURCE_REF='main; touch injected' bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     [[ ! -e "$fixture/outputs" && ! -e "$fixture/injected" ]]
+    mkdir "$fixture/ci"
+    printf '{"schema":1,"source_commit":"1111111111111111111111111111111111111111","send_telegram":true}\n' > "$fixture/ci/build-request.json"
+    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=1 bash "$self" resolve > "$fixture/resolve.log" 2>&1
+    grep -q '^sha=1111111111111111111111111111111111111111$' "$fixture/outputs"
+    grep -q '^version=31306$' "$fixture/outputs"
+    if GITHUB_ACTOR=untrusted GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=pull_request bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    printf '{"schema":1,"source_commit":"main; touch injected","send_telegram":true}\n' > "$fixture/ci/build-request.json"
+    if GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    [[ ! -e "$fixture/injected" ]]
     private="$fixture/proncam-source"
     mkdir -p "$private/tools/ci"
     printf '#!/usr/bin/env bash\necho PRIVATE_SOURCE_CANARY\necho PRIVATE_SOURCE_CANARY >&2\nexit 17\n' > "$private/tools/ci/host-native-a.sh"
@@ -72,7 +87,7 @@ fi
 
 [[ ${GITHUB_REPOSITORY:-} == SOTTRME/Xxdl && ${GITHUB_REPOSITORY_ID:-} == 1461381914 &&
    ${GITHUB_ACTOR:-} == SOTTRME && ${GITHUB_TRIGGERING_ACTOR:-} == SOTTRME && ${GITHUB_REF:-} == refs/heads/main &&
-   ${GITHUB_EVENT_NAME:-} == workflow_dispatch ]] || { echo 'Build context rejected'; exit 1; }
+   ( ${GITHUB_EVENT_NAME:-} == workflow_dispatch || ${GITHUB_EVENT_NAME:-} == push ) ]] || { echo 'Build context rejected'; exit 1; }
 : "${RUNNER_TEMP:?}" "${GITHUB_WORKSPACE:?}"
 source_dir="$RUNNER_TEMP/proncam-source"
 key="$RUNNER_TEMP/proncam-release.jks"
@@ -80,6 +95,7 @@ askpass="$RUNNER_TEMP/proncam-askpass"
 output="$GITHUB_WORKSPACE/public-out"
 if [[ "$mode" == cleanup ]]; then
     rm -rf -- "$source_dir"
+    rm -rf -- "$RUNNER_TEMP/proncam-telegram"
     rm -f -- "$key" "$askpass" "$RUNNER_TEMP"/proncam-private-*.log "$RUNNER_TEMP/proncam-metadata.json"
     exit
 fi
@@ -100,8 +116,25 @@ PY
 }
 
 if [[ "$mode" == resolve ]]; then
+    if [[ -z ${PRONCAM_SOURCE_TOKEN:-} ]]; then
+        printf '::error::Required repository secret PRONCAM_SOURCE_TOKEN is not configured.\n' >&9
+        exit 1
+    fi
     private_repo
     ref=${PRONCAM_SOURCE_REF:-}
+    if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+        ref=$(python3 - "$GITHUB_WORKSPACE/ci/build-request.json" 9>&- <<'PY'
+import json, re, sys
+request = json.load(open(sys.argv[1]))
+if (not isinstance(request, dict) or request.get('schema') != 1
+        or request.get('send_telegram') is not True
+        or not isinstance(request.get('source_commit'), str)
+        or not re.fullmatch('[0-9a-f]{40}', request['source_commit'])):
+    raise SystemExit('Invalid build request')
+print(request['source_commit'])
+PY
+        )
+    fi
     [[ -z "$ref" || "$ref" =~ ^[0-9a-f]{40}$ ]] || exit 2
     endpoint="repos/SOTTRME/Privss/git/commits/$ref"
     [[ -n "$ref" ]] || endpoint=repos/SOTTRME/Privss/git/ref/heads/main
@@ -141,6 +174,27 @@ if [[ "$mode" == stage || "$mode" == release ]]; then
             --title "PronCam $SCAMERA_VERSION_CODE" --notes 'Изменение названия и оптимизация приложения.' "$output"/*
         printf 'Checked APK published in Releases.\n' >&9
     fi
+    exit
+fi
+
+if [[ "$mode" == telegram ]]; then
+    check_stage "$output"
+    [[ ${PRONCAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && $(git -C "$source_dir" rev-parse HEAD) == "$PRONCAM_SOURCE_SHA" ]] || exit 2
+    for name in TELEGRAM_BOT_TOKEN TELEGRAM_API_ID TELEGRAM_API_HASH; do
+        if [[ -z ${!name:-} ]]; then
+            printf '::error::Required Telegram secret %s is not configured.\n' "$name" >&9
+            exit 1
+        fi
+    done
+    python3 "$GITHUB_WORKSPACE/ci/check-telegram-build.py" \
+        --publisher "$source_dir/tools/telegram_publish.py" 9>&-
+    python3 -m venv "$RUNNER_TEMP/proncam-telegram" 9>&-
+    "$RUNNER_TEMP/proncam-telegram/bin/pip" install --disable-pip-version-check -q \
+        -r "$source_dir/tools/telegram-requirements.txt" 9>&-
+    env -u PRONCAM_SOURCE_TOKEN -u GH_TOKEN -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_ENV -u GITHUB_PATH \
+        "$RUNNER_TEMP/proncam-telegram/bin/python" "$GITHUB_WORKSPACE/ci/telegram-build.py" \
+        --source-dir "$source_dir" --output-dir "$output" --source-sha "$PRONCAM_SOURCE_SHA" 9>&-
+    printf 'Checked APK delivered through Telegram bot.\n' >&9
     exit
 fi
 
