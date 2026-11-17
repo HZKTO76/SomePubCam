@@ -1,6 +1,8 @@
 // WhyMsDenoise.java one to one: the post-CCM optics cleanup and the reference's Oklab Laplacian pyramid denoise (strips of
-// rows above 16 MP). P671's Oklab cache of the optics pass (scam_dev ms_oklab_cache, the same numbers) is speed only and not
-// ported: the optics pass is always the plain one here (the log's «opticsOklab=inline»).
+// rows above 16 MP). P671's Oklab cache of the optics pass (scam_dev ms_oklab_cache, default on; the same numbers, speed only) as
+// the Java: strips of OPTICS_STRIP rows, each strip's Oklab (and two rows each side) into an RGBA32F cache (resolvedn/optics
+// OKLAB_CACHE 1), then the filter on the strip's rows reading it (OKLAB_CACHE 2); not tiled. The Java's GpuPace bands of a strip
+// only split the same draw: here each strip's rows are one viewport and one draw (the log's «opticsOklab=cached»).
 #pragma once
 
 #include "ScamHdrDenoise.hpp"
@@ -72,6 +74,7 @@ public:
         const int rows = stripRows(whole_.x, whole_.y, requested);
         tiled_ = rows < whole_.y;
         const bool reuse = prefs.scamDevSwitch("ms_reuse", true);
+        bool okCacheUsed = false;   // P671: this run's optics read the Oklab cache (for the log line)
         Texture out = pipeline.getMain();
         Texture codes;
         const auto& eff = pipeline.merge.lastEffectiveFrames;
@@ -94,12 +97,19 @@ public:
             prog.setVar("originDstU", origin_);
             prog.drawBlocks(prepared);
             Texture filtered = tex(owned, 0, 4);
-            program("optics", filtered);
-            bind("u_tex_rgb", prepared);
             const bool speckle = prefs.hybridSwitch("resolve_speckle_enable", false);
-            prog.setVar("u_quad_speckle_strength", speckle ? std::max(0.f, std::min(1.f, prefs.hybridValue("resolve_speckle_strength", 1.f))) : 0.f);
-            prog.setVar("u_quad_speckle_threshold", std::max(0.01f, std::min(0.5f, prefs.hybridValue("resolve_speckle_threshold", 0.15f))));
-            prog.drawBlocks(filtered);
+            const float speckleStrength = speckle ? std::max(0.f, std::min(1.f, prefs.hybridValue("resolve_speckle_strength", 1.f))) : 0.f;
+            const float speckleThreshold = std::max(0.01f, std::min(0.5f, prefs.hybridValue("resolve_speckle_threshold", 0.15f)));
+            // P671: the corner filter's Oklab neighbours from a per-strip cache (the same numbers; not tiled)
+            const bool cached = !tiled_ && oklabCache() && opticsCached(prepared, filtered, speckleStrength, speckleThreshold);
+            okCacheUsed |= cached;
+            if (!cached) {
+                program("optics", filtered);
+                bind("u_tex_rgb", prepared);
+                prog.setVar("u_quad_speckle_strength", speckleStrength);
+                prog.setVar("u_quad_speckle_threshold", speckleThreshold);
+                prog.drawBlocks(filtered);
+            }
             release(owned, prepared);
             if (pyramid) {
                 Texture weights;
@@ -186,10 +196,74 @@ public:
         grids_.clear();
         prog.closed = true;
         logI("SCAM_PIPELINE", std::string("resolve post: pyramid=") + (pyramid ? "true" : "false") + " model=" + javaFloatString(model) + " shadow="
-             + javaFloatString(shadow) + " opticsOklab=inline rows=" + std::to_string(rows));
+             + javaFloatString(shadow) + " opticsOklab=" + (okCacheUsed ? "cached" : "inline") + " rows=" + std::to_string(rows));
     }
 
+    /// P671: the optics strips' rows (the cache holds two more above and below: 4 x 260 x 16 B a column, 17 MB at 4096 wide)
+    static constexpr int OPTICS_STRIP = 256;
+
+    /// P671: scam_dev ms_oklab_cache (default on; off: as before) - resolvedn/optics' corner filter reads its neighbours' Oklab from a
+    /// cache written per strip (OKLAB_CACHE 1: rgb_to_oklab of every pixel of the strip and two rows on each side into RGBA32F,
+    /// exact floats; OKLAB_CACHE 2: the filter on the strip's rows): the same numbers (tools/check_ms_oklab_cache.py: bit for bit)
+    static bool oklabCache() { return !PostGlMode::legacy() && Settings::current().scamDevSwitch("ms_oklab_cache", true); }
+
 private:
+    /// P671: optics over `filtered` in strips with the Oklab cache; false (nothing drawn, no error left) when it cannot
+    bool opticsCached(const Texture& prepared, const Texture& filtered, float speckleStrength, float speckleThreshold) {
+        GLProg& prog = *glProg;
+        const int w = whole_.x, h = whole_.y;
+        Texture cache;
+        try {
+            while (glGetError() != GL_NO_ERROR) {
+                // drain: only the passes below decide
+            }
+            cache = makeTexture(Point{w, std::min(h, OPTICS_STRIP + 4)}, GLFormat(DataType::FLOAT_32, 4), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
+            const GLenum colour0 = GL_COLOR_ATTACHMENT0;
+            const bool invalidate = PostGlMode::invalidate();
+            for (int y = 0; y < h; y += OPTICS_STRIP) {
+                const int rows = std::min(OPTICS_STRIP, h - y);
+                const int first = std::max(0, y - 2), stop = std::min(h, y + rows + 2);
+                prog.setDefine("OKLAB_CACHE", 1);
+                program("optics", filtered);
+                bind("u_tex_rgb", prepared);
+                prog.setVar("cacheOriginU", first);
+                cache->BufferLoad();
+                if (invalidate) glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, &colour0);
+                stripRowsDraw(0, stop - first, w);
+                prog.setDefine("OKLAB_CACHE", 2);
+                program("optics", filtered);
+                bind("u_tex_rgb", prepared);
+                prog.setTexture("OkCache", cache);
+                prog.setVar("cacheOriginU", first);
+                prog.setVar("u_quad_speckle_strength", speckleStrength);
+                prog.setVar("u_quad_speckle_threshold", speckleThreshold);
+                filtered->BufferLoad();
+                if (invalidate && y == 0) glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, &colour0);
+                stripRowsDraw(y, rows, w);
+            }
+            const GLenum error = glGetError();
+            if (error != GL_NO_ERROR) {
+                char hex[16];
+                std::snprintf(hex, sizeof hex, "%x", error);
+                throw std::runtime_error(std::string("GL error 0x") + hex);
+            }
+            cache->close();
+            return true;
+        } catch (const std::exception& failure) {
+            logI("SCAM_PIPELINE", std::string("resolve optics Oklab cache: ") + failure.what() + ", the plain pass");
+            prog.setDefine("OKLAB_CACHE", 0);   // the plain pass's own (GLProg clears the defines before a compile)
+            if (cache) cache->close();
+            return false;
+        }
+    }
+    /// rows [y, y + rows) of the bound target in one viewport and draw, flushed: the Java's pacedRows draws them in GpuPace bands
+    /// (the same fragments, each written once)
+    void stripRowsDraw(int y, int rows, int w) {
+        glViewport(0, y, w, rows);
+        glProg->draw();
+        glFlush();
+    }
+
     struct Grid { Point full; int origin = 0; };
     std::map<GLTexture*, Grid> grids_;
     Point whole_;

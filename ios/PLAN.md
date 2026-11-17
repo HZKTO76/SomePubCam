@@ -1118,3 +1118,18 @@ trend's on two frames latches the flicker, six frames without clear it; the AE's
 latches it with its frequency; no verdict 1.5 s after the window latches it (Android's rule). Latched: the ceiling rounds to the
 half period (1/250 -> 10 ms at 50 Hz); cleared: the setting stays. Device check needed (log lines «mains flicker ... latched» /
 «no mains flicker»).
+
+## Speed: Android P671's post items on iOS (2026-11-17)
+Owner: «Займись оптимизацией и ускорением обработки, изучи чейнжлоги». The owner's iPhone 15 Pro logs of 2026-11-16 (12 MP «Быстрый»):
+hold 1.2-1.7 s, merge 0.9-1.2 s (uploads = fence waits on the GPU's per-frame work, copies 45-68 ms; readback 228-404 ms, mostly
+waiting for the GPU), post ~0.95 s (the «output» 690-710 ms is the final readback waiting for the whole post's GPU work), save
+136-565 ms (the library write 71-506). Merge and post are at Android's X200 Ultra (1183 / 1001 ms); hold is structural (no RAW ring).
+Android's speed-only post items the port lacked, ported (bit for bit): WhyCombine GATHER_TAPS (why_gather_taps), the scene luma
+cache EDGE_LUMA_CACHE (SceneLumaCache.hpp; hybrid why_edge_luma_cache), WhyMsDenoise's optics Oklab cache (ms_oklab_cache,
+OKLAB_CACHE 1/2 in 256-row strips, each strip one draw). Host Mesa, whole shot, 15 Pro and iPad bursts, V2 and V1: the photo's
+sha256 identical to the baseline with the items on and off (V2 runs no WhyCombine: V1 checked through hybrid_tone_version 0).
+llvmpipe shows no speed change (indicative only); the gain is on the device's GPU (next log: «GPU ms» WhyCombine / WhyMsDenoise).
+The combine's compile fallback keeps the pending defines (GLProg pendingDefines / setPendingDefines). Noted: Android's own
+fallback appends `X 0` after `X 1` and defines are first-match-wins, so its retry would compile `X 1` again (Android only).
+Next candidates: per-program GPU times in ScamGL (the «GPU ms» sums overlap), the merge while the frames arrive (shared merge
+hook; changes the base pick's timing: owner A/B), a binary archive of the pipeline states (warm-up 3.3-3.5 s a launch).

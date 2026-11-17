@@ -1,13 +1,15 @@
 // WhyCombine.java one to one (the default GL model): the WHY tone's final pass - the highlight landing mask, the fused luma's
 // local contrast, the rim support tiles, the sun bloom and the opposed landing of ScamRgb, the sky, the colour look and the
 // tone curve - into the next main; with Ultra HDR the sky term's ratio for the gain map (skyHdrRatio). «Портрет» as the Java: the
-// skin-tone correction (PORTRAIT), «Маска лица» (FACE_MASK, why/facemask on the whyLow grid) and Face AWB (FACE_AWB). Not ported
-// (stays off): the scene luma cache (the reference renders without it: the original colour evaluation). The film simulation's
-// scene table (FILM_SIM) and «Плёночный LUT» (FILM_LUT) as the Java. P713's coarse landing mask (CoarseMask) as the Java; its
+// skin-tone correction (PORTRAIT), «Маска лица» (FACE_MASK, why/facemask on the whyLow grid) and Face AWB (FACE_AWB). P671 (speed,
+// the same pixels): the scene luma cache (SceneLumaCache, EDGE_LUMA_CACHE; hybrid why_edge_luma_cache) and the one-channel windows
+// as textureGather blocks (GATHER_TAPS; scam_dev why_gather_taps), with the Java's retry without them when the program fails. The
+// film simulation's scene table (FILM_SIM) and «Плёночный LUT» (FILM_LUT) as the Java. P713's coarse landing mask (CoarseMask) as the Java; its
 // deferred draw beside the final output's tiles (GLDeferredDraw, drawBlocksDeferrable) is speed only: the same draw at once here.
 #pragma once
 
 #include "CoarseMask.hpp"
+#include "SceneLumaCache.hpp"
 #include "WhyFusion.hpp"
 
 namespace scam_post {
@@ -23,6 +25,9 @@ public:
     /// P713 (speed): scam_dev.txt "hlmask_coarse" (on) - the landing's mask on a grid ~sigma / 6 times coarser (CoarseMask); 0: as
     /// before
     static bool coarseMaskOn() { return !PostGlMode::legacy() && Settings::current().scamDevSwitch("hlmask_coarse", true); }
+    /// P671: scam_dev why_gather_taps (default on): the photo's combine reads its one-channel windows as 2 x 2 textureGather blocks
+    /// (why/combine.glsl GATHER_TAPS: the same texels, the same sums in the same order; tools/check_combine_gather.py)
+    static bool gatherTaps() { return !PostGlMode::legacy() && Settings::current().scamDevSwitch("why_gather_taps", true); }
 
     static std::optional<std::vector<float>> hlWeights(float sigmaU) {
         if (!Settings::current().scamDevSwitch("hlmask_fast", true)) return std::nullopt;
@@ -269,6 +274,7 @@ public:
         std::optional<CoarseMask::Plan> hlPlan;   // P713: the landing's mask on a coarse grid (none: whyLow's grid)
         Texture hlA, hlB, sunBloom, oppShare, fusedLc, faceTex;
         std::unique_ptr<GLBuffer> rimTiles;
+        Texture sceneY;   // P671: the scene luma cache (SceneLumaCache)
         GLint rimBindings[2] = {0, 0};
         bool rimBound = false;
         float measured = 0.f;
@@ -354,6 +360,9 @@ public:
         const bool faceShot = r.portraitFace && st.portrait && st.portrait->count > 0;
         const std::optional<std::array<float, 10>> faceMask = faceShot ? WhyTone::faceMask() : std::nullopt;
         if (faceMask) faceTex = faceMaskTexture(prog, st.low, *st.portrait, (*faceMask)[8], (*faceMask)[9]);
+        if (WhyTone::edgeHold() > 0.f && !st.inputReleased && !filmOnly && sharp && st.factor > 1 && detail != 0.f && st.detailRef
+            && Settings::current().hybridSwitch("why_edge_luma_cache", true))
+            sceneY = SceneLumaCache::prepare(prog, pipeline, *input, *gainMap, st.inScale);
         if (WhyTone::rimSmooth() && st.factor > 1 && detail != 0.f && st.detailRef && st.low->mSize == st.detailRef->mSize
             && Settings::current().hybridSwitch("why_rim_support", true))
             rimTiles = rimSupport(prog, *st.low, r.ae, sharp, sharp ? r.ae / std::max(st.sharpMul, 1e-6f) : 1.f);
@@ -441,9 +450,30 @@ public:
         }
         WorkingTexture = pipeline.getMain();
         if (rimTiles) prog.setDefine("RIM_SUPPORT", 1);
+        if (sceneY) prog.setDefine("EDGE_LUMA_CACHE", 1);
+        // P671 (speed): the one-channel windows as textureGather blocks (the same texels and sums; why/combine.glsl GATHER_TAPS)
+        const bool gather = gatherTaps();
+        if (gather) prog.setDefine("GATHER_TAPS", 1);
+        bool gatherOn = gather;
         const int stop = javaRound(Settings::current().scamDevNumber("why_combine_stop", 0.f));
         if (stop > 0) prog.setDefine("WHY_STOP", stop);
-        prog.useAssetProgram("why/combine", false);
+        const Defines toneDefines = prog.pendingDefines();
+        try {
+            prog.useAssetProgram("why/combine", false);
+        } catch (const std::exception& e) {
+            if (!rimTiles && !sceneY && !gather) throw;
+            rimTiles.reset();
+            if (sceneY) { sceneY->close(); sceneY = nullptr; }
+            logI("SCAM_PIPELINE", std::string("optional tone cache program failed: ") + e.what() + "; reference evaluation");
+            // the tone defines as they were (GLProg cleared them before its compile), the optional gates at 0: a define's first
+            // value is the one readProgram takes, so they are changed in place
+            Defines retry = toneDefines;
+            for (auto& d : retry)
+                if (d.first == "RIM_SUPPORT" || d.first == "EDGE_LUMA_CACHE" || d.first == "GATHER_TAPS") d.second = "0";
+            prog.setPendingDefines(std::move(retry));
+            gatherOn = false;
+            prog.useAssetProgram("why/combine", false);
+        }
         if (rimTiles) {
             glGetIntegerv(GL_SHADER_STORAGE_BUFFER_BINDING, &rimBindings[0]);
             glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, 0, &rimBindings[1]);
@@ -601,8 +631,13 @@ public:
             prog.setVar("gradeAU", std::vector<float>(grade[0].begin(), grade[0].end()));
             prog.setVar("gradeBU", std::vector<float>(grade[1].begin(), grade[1].end()));
         }
+        if (sceneY) SceneLumaCache::bind(prog, *sceneY);
         prog.drawBlocks(WorkingTexture);
+        if (sceneY) logI("SCAM_PIPELINE", "WHY scene luma cache=" + std::to_string(sceneY->mSize.x) + "x" + std::to_string(sceneY->mSize.y)
+                         + " bytes=" + std::to_string(int64_t(sceneY->mSize.x) * sceneY->mSize.y * 4));
         if (rimTiles) logI("SCAM_PIPELINE", "WHY rim support tiles=" + std::to_string(rimTiles->size));
+        // (the iOS port's own line: the Java logs no gather; the host check reads it to see the P671 program in use)
+        if (gatherOn) logI("SCAM_PIPELINE", "WHY combine gather taps=on");
         if (skyWith) {
             try {
                 skyHdrRatio(pipeline, st, r, *skyWith, *skyWithout, lightChroma > 0.f, measured > 0.f);
@@ -618,6 +653,7 @@ public:
             skyWithout->close();
         }
         prog.closed = true;
+        if (sceneY) sceneY->close();
         if (rimTiles) rimTiles.reset();
         if (rimBound) {
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, GLuint(rimBindings[1]));

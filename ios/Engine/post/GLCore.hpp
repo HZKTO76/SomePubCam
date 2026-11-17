@@ -391,6 +391,10 @@ public:
     }
     void setDefine(const std::string& name, float v) { setDefineFloats(name, {v}); }
     void setDefine(const std::string& name, Point p) { setDefineInts(name, {p.x, p.y}); }
+    /// the defines pending for the next program (useShader clears them before it compiles: a caller that retries a failed
+    /// compile with some of them changed takes them first and sets them back, as Java's GLProg keeps them after a failure)
+    const Defines& pendingDefines() const { return defines_; }
+    void setPendingDefines(Defines defines) { defines_ = std::move(defines); }
     void setLayout(int x, int y, int z) {
         setDefine("LAYOUT", "layout(local_size_x = " + std::to_string(x) + ", local_size_y = " + std::to_string(y)
                   + ", local_size_z = " + std::to_string(z) + ") in;");
