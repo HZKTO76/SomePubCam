@@ -334,6 +334,22 @@ jobs:
             | grep -E "error:|Test Case|Executed|MERGE TEST|measured \\[|\*\* TEST" || true
           grep -q "\*\* TEST SUCCEEDED \*\*" /tmp/test.log || { tail -120 /tmp/test.log; exit 1; }
 
+      - name: Layout snapshots (Tests/LayoutSnapshots.swift)
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/ui-snapshots"
+          d=$(grep -o 'SNAPSHOT DIR: .*' /tmp/test.log | head -1 | cut -d' ' -f3-)
+          echo "simulator dir: $d"
+          if [ -n "$d" ] && [ -d "$d" ]; then cp "$d"/*.png "$RUNNER_TEMP/ui-snapshots/" || true
+          else find ~/Library/Developer/CoreSimulator/Devices -path '*scam-snapshots/*.png' -exec cp {} "$RUNNER_TEMP/ui-snapshots/" \; 2>/dev/null || true; fi
+          ls -la "$RUNNER_TEMP/ui-snapshots" | head -40
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-snapshots
+          path: ${{ runner.temp }}/ui-snapshots/*.png
+          retention-days: 7
+
       - name: Import signing identity
         if: env.HAS_SIGNING == 'true'
         env:
