@@ -127,6 +127,7 @@ private struct TurnsWithPhone: ViewModifier {
 /// The shared segmented control of the camera's sheets (IosSegmented: a capsule track, the grey thumb gliding to the chosen
 /// segment, its label in the accent); 14 pt semibold, 36 pt high.
 struct CameraSegmented: View {
+    static let height: CGFloat = 36
     let labels: [String]
     let selected: Int
     var disabled = false
@@ -138,18 +139,20 @@ struct CameraSegmented: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(labels.indices, id: \.self) { i in
-                ZStack {
+                // the thumb is the segment's background: a shape in the segment's own stack took every height the parent offered
+                // (the iPad's look tray: a pill and a circle the panel's height)
+                HStack(spacing: 4) {
+                    Text(labels[i]).font(.app(14, 600)).lineLimit(1).minimumScaleFactor(0.7)
+                        .foregroundStyle(i == selected ? CameraStyle.accent : CameraStyle.text)
+                    if i < dots.count, dots[i] { Circle().fill(CameraStyle.accent).frame(width: 5, height: 5) }
+                }
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height)
+                .background {
                     if i == selected {
                         Capsule().fill(CameraStyle.segThumb).matchedGeometryEffect(id: "thumb", in: thumb).padding(2)
                     }
-                    HStack(spacing: 4) {
-                        Text(labels[i]).font(.app(14, 600)).lineLimit(1).minimumScaleFactor(0.7)
-                            .foregroundStyle(i == selected ? CameraStyle.accent : CameraStyle.text)
-                        if i < dots.count, dots[i] { Circle().fill(CameraStyle.accent).frame(width: 5, height: 5) }
-                    }
-                    .padding(.horizontal, 6)
                 }
-                .frame(maxWidth: .infinity, minHeight: 36)
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
                     if let onDoubleTap { onDoubleTap(i) } else if i != selected { pick(i) }
@@ -158,6 +161,7 @@ struct CameraSegmented: View {
                 .accessibilityAddTraits(i == selected ? [.isButton, .isSelected] : .isButton)
             }
         }
+        .frame(height: Self.height)
         .background(CameraStyle.segTrack, in: Capsule())
         .opacity(disabled ? 0.35 : 1)
         .allowsHitTesting(!disabled)

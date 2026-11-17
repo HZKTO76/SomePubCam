@@ -25,6 +25,7 @@ struct LensStrip: View {
             HStack(spacing: 2 * fit) {
                 ForEach(lenses) { lens in tile(lens, fit: fit) }
             }
+            .fixedSize(horizontal: true, vertical: false)
             .animation(CameraMotion.glide, value: camera.activeModuleID)
             .padding(3)
             .background(Capsule().fill(CameraStyle.control))
@@ -49,21 +50,24 @@ struct LensStrip: View {
         let active = lens.id == camera.activeModuleID
         let live = active && abs(camera.zoom - lens.zoom) >= 0.05
         let label = live ? CameraStyle.zoomText(camera.zoom) + "×" : Self.display(lens.label, sign: active)
-        return ZStack {
-            if active {
-                RoundedRectangle(cornerRadius: Self.corner * fit).fill(CameraStyle.chosen)
-                    .matchedGeometryEffect(id: "pill", in: pill)
+        // the pill is the stop's background and the stop as wide as its label (48 pt at least): a pill in the stop's own stack took
+        // the strip's spare width (the iPhone 15 Pro: «1×» half the screen wide, the strip from edge to edge)
+        return Text(label)
+            .font(.system(size: (active ? 15 : 14) * fit, weight: .semibold))
+            .monospacedDigit()
+            .foregroundStyle(active ? CameraStyle.accent : Color.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, 4 * fit)
+            .turnsWithPhone()
+            .frame(minWidth: Self.width * fit, minHeight: Self.height, maxHeight: Self.height)
+            .fixedSize(horizontal: true, vertical: false)
+            .background {
+                if active {
+                    RoundedRectangle(cornerRadius: Self.corner * fit).fill(CameraStyle.chosen)
+                        .matchedGeometryEffect(id: "pill", in: pill)
+                }
             }
-            Text(label)
-                .font(.system(size: (active ? 15 : 14) * fit, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(active ? CameraStyle.accent : Color.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .padding(.horizontal, 4 * fit)
-                .turnsWithPhone()
-        }
-        .frame(minWidth: Self.width * fit, minHeight: Self.height, maxHeight: Self.height)
         .contentShape(Rectangle())
         .onTapGesture { tap(lens) }
         .accessibilityLabel(L("lens.prefix") + Self.display(lens.label, sign: true))
