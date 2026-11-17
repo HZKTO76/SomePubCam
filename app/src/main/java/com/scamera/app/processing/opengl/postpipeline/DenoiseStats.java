@@ -196,10 +196,14 @@ final class DenoiseStats {
         final com.scamera.app.processing.opengl.GLBlockDivider divider =
                 new com.scamera.app.processing.opengl.GLBlockDivider(h, com.scamera.app.processing.opengl.GLDrawParams.TILE_ROWS);
         final int[] row = new int[2];
-        while (divider.nextBlock(row)) {
-            android.opengl.GLES30.glViewport(x, y + row[0], w, row[1]);
-            glProg.draw();
-            com.scamera.app.processing.opengl.GpuPace.block(); // P616: a submission per block while paced
+        try {
+            while (divider.nextBlock(row)) {
+                com.scamera.app.processing.opengl.GLProg.band(x, y + row[0], w, row[1]);
+                glProg.draw();
+                com.scamera.app.processing.opengl.GpuPace.block(); // P616: a submission per block while paced
+            }
+        } finally {
+            com.scamera.app.processing.opengl.GLProg.bandsDone();
         }
         android.opengl.GLES30.glFlush();
     }

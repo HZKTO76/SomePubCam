@@ -177,6 +177,9 @@ public final class SensorModePick {
      * the user's.
      */
     public static int ispSurfaceFor(int ispSurface, @Nullable Pick pick, boolean otherForcedMode, boolean fullRes, boolean x7Ultra) {
+        // P722 (owner, realme RMX3840: «Сенсормод 13 с фейк офф исп» ran; row 8 RAW-only had no exposure): its ISZ rows keep the
+        // ISP stream as fake off at Auto
+        if (ispSurface == 0 && OplusIsz.keepsIspStream(pick)) return 3;
         if (!x7Ultra || ispSurface != 0) return ispSurface;
         if (pick != null && (pick.rawOnly() || pick.ispOff)) return ispSurface;
         return fullRes || otherForcedMode || pick != null && !pick.dcg() ? 3 : ispSurface;
@@ -191,6 +194,7 @@ public final class SensorModePick {
      * P631: a Xiaomi row marked {@link Pick#ispOff} (XiaomiSensorRow) whatever the setting.
      */
     public static boolean ispStreamOff(int ispSurface, @Nullable Pick pick, boolean otherForcedMode, boolean nubia) {
+        if (OplusIsz.keepsIspStream(pick)) return ispSurface == 2; // P722: the realme rows as «Поток ISP» says (Auto: fake off)
         if (pick != null && (pick.rawOnly() || pick.ispOff)) return true;
         if (ispSurface == 2) return true;
         final boolean forced = otherForcedMode || pick != null && !pick.dcg();

@@ -1134,7 +1134,8 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
         // draw again (the fall-back to the ISP picture). scam_dev vf_isp_latch 0: every ISP frame draws (as before).
         final long now = System.nanoTime();
         final boolean latchOnly = (now - mRawShownNs < RAW_SHOWN_NS
-                && com.scamera.app.settings.PreferenceKeys.scamDevSwitch("vf_isp_latch", true)) || seriesHold(now);
+                && com.scamera.app.settings.PreferenceKeys.scamDevSwitch("vf_isp_latch", true)) || seriesHold(now)
+                || !com.scamera.app.util.ThermalPolicy.ispFrameDue(now); // P723: 25 draws a second while a shot is processed
         Runnable latch = null;
         synchronized (this) {
             if (st != ispSurface || ispLatchTask == null) return;

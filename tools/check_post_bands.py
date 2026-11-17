@@ -11,6 +11,8 @@ uniforms over a frame of 200 rows in one draw (the 256-row band of before), then
 a 16-row boundary, the last one shorter) - the RGBA32F bytes must be equal. why/combine also with the photo's defines.
 P683: and in bands of 8 rows - the tiles a picture under 8 MP was drawn in until P683 (PostPipeline then set TILE_ROWS 8), now
 256 as for every other picture: the same pixels prove that change keeps the photo bit for bit.
+P724: and in scissored bands (GLProg.band: the scissor rectangle = the band's viewport, so a tiling GPU keeps only the band's
+bins) of 16 and 48 rows and 40 columns, the clear outside them untouched.
 P713: and in bands of 16 and 40 COLUMNS (viewports x .. x + n over the full height) - GLDeferredDraw draws the WHY combine of a
 streamed JPEG in column bands beside a 90 / 270 degree photo's output tiles; the combine also with the coarse highlight mask.
 """
@@ -129,7 +131,7 @@ def fill(ctx, prog, seed):
     return textures
 
 
-def render(ctx, prog, bands, columns=False):
+def render(ctx, prog, bands, columns=False, scissor=False):
     out = ctx.texture((W, H), 4, dtype='f4')
     fb = ctx.framebuffer([out])
     fb.use()
@@ -141,8 +143,32 @@ def render(ctx, prog, bands, columns=False):
     while y < (W if columns else H):
         rows = min((W if columns else H) - y, bands)
         ctx.viewport = (y, 0, rows, H) if columns else (0, y, W, rows)
+        if scissor:
+            ctx.scissor = ctx.viewport
         vao.render(mode=5 if names else 4, vertices=4 if names else 3)
         y += rows
+    ctx.scissor = None
+    data = out.read()
+    vao.release()
+    quad.release()
+    fb.release()
+    out.release()
+    return data
+
+
+def render_cut(ctx, prog):
+    """One draw over the frame with the scissor over its lower half only (the upper half keeps the clear colour)."""
+    out = ctx.texture((W, H), 4, dtype='f4')
+    fb = ctx.framebuffer([out])
+    fb.use()
+    fb.clear(0.25, 0.5, 0.75, 1.0)
+    quad = ctx.buffer(np.array([-1, -1, 1, -1, -1, 1, 1, 1], 'f4').tobytes())
+    names = [n for n in prog if n == 'vPosition']
+    vao = ctx.vertex_array(prog, [(quad, '2f', 'vPosition')] if names else [])
+    ctx.viewport = (0, 0, W, H)
+    ctx.scissor = (0, 0, W, H // 2)
+    vao.render(mode=5 if names else 4, vertices=4 if names else 3)
+    ctx.scissor = None
     data = out.read()
     vao.release()
     quad.release()
@@ -182,6 +208,7 @@ def main():
     except Exception:
         ctx = moderngl.create_standalone_context(require=430)
     tried = equal = skipped = 0
+    scissor_live = None
     for name, src in variants():
         prog = program(ctx, src)
         if prog is None:
@@ -207,12 +234,21 @@ def main():
                 cols = sorted(set(np.nonzero((a != g).any(axis=(0, 2)))[0].tolist()))
                 check(False, '%s: bands of %d columns differ from one draw in columns %s' % (name, b, cols[:12]))
                 same = False
+        if scissor_live is None:
+            # the scissor really cuts: half a band's rows scissored away must change the picture
+            ctx_v = render_cut(ctx, prog)
+            scissor_live = ctx_v != whole
+            check(scissor_live, '%s: a scissor smaller than the viewport changed nothing (scissor not applied?)' % name)
+        for b, columns in [(16, False), (48, False), (40, True)]:
+            if render(ctx, prog, b, columns=columns, scissor=True) != whole:
+                check(False, '%s: scissored bands of %d %s differ from one draw' % (name, b, 'columns' if columns else 'rows'))
+                same = False
         equal += same
         for t in textures:
             t.release()
         prog.release()
-    print('     %d post fragment programs drawn in bands of %s rows, of %s columns and in one draw: %d bit for bit equal (%d not compiled'
-          ' by llvmpipe)' % (tried, BANDS, COLUMN_BANDS, equal, skipped))
+    print('     %d post fragment programs drawn in bands of %s rows, of %s columns, scissored and in one draw: %d bit for bit equal'
+          ' (%d not compiled by llvmpipe)' % (tried, BANDS, COLUMN_BANDS, equal, skipped))
     check(tried >= 20, 'at least 20 post programs compiled (%d)' % tried)
     print('ALL OK' if not FAILURES else 'FAILED: %d' % len(FAILURES))
     return 1 if FAILURES else 0

@@ -70,6 +70,64 @@ public final class WhyFusion extends Node {
         return new float[]{(float) (k * g * Math.max(s, 0f)), (float) (k * g * g * Math.max(o, 0f))};
     }
 
+    /** P727: the MRT level-1 pass failed once in this process (an incomplete framebuffer or a GL error): the three passes. */
+    private static volatile boolean mrtFailed;
+
+    /**
+     * P727 (owner, 2026-11-17: «Оптимизируй нашу постобработку»; LG V50: why/lpyr 282 ms of GPU over 33 passes): level 1 of the
+     * lumas L, the weights p and (bands) the (G, Fpp) of the per-pixel fusion in one pass into the three planes (why/lpyr MODE 11,
+     * three colour attachments) - each of the 25 whyLow taps of a level-1 pixel runs prepare() once instead of once per pass, and
+     * whyLow is read once. The same sums in the same order into the same formats (tools/check_lpyr_mrt.py: bit for bit). False:
+     * draw the passes of before (scam_dev lpyr_mrt 0, the old GL model, a failure).
+     */
+    private boolean levelOne(GLTexture source, GLTexture l1, GLTexture w1, GLTexture gf1, float[] em, float[] lw, float ae, float center, float[] satLight,
+                             float[] band) {
+        if (mrtFailed || com.scamera.app.processing.opengl.PostGlMode.legacy() || !PreferenceKeys.scamDevSwitch("lpyr_mrt", true))
+            return false;
+        final int[] fb = new int[1];
+        try {
+            while (android.opengl.GLES30.glGetError() != android.opengl.GLES30.GL_NO_ERROR) {
+                // drain: only this pass decides
+            }
+            final int n = gf1 != null ? 3 : 2;
+            final int[] attachments = {android.opengl.GLES30.GL_COLOR_ATTACHMENT0, android.opengl.GLES30.GL_COLOR_ATTACHMENT1,
+                    android.opengl.GLES30.GL_COLOR_ATTACHMENT2};
+            android.opengl.GLES30.glGenFramebuffers(1, fb, 0);
+            android.opengl.GLES30.glBindFramebuffer(android.opengl.GLES30.GL_FRAMEBUFFER, fb[0]);
+            final GLTexture[] planes = {l1, w1, gf1};
+            for (int i = 0; i < n; i++)
+                android.opengl.GLES30.glFramebufferTexture2D(android.opengl.GLES30.GL_FRAMEBUFFER, attachments[i],
+                        android.opengl.GLES30.GL_TEXTURE_2D, planes[i].id, 0);
+            android.opengl.GLES30.glDrawBuffers(n, attachments, 0);
+            if (android.opengl.GLES30.glCheckFramebufferStatus(android.opengl.GLES30.GL_FRAMEBUFFER) != android.opengl.GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                mrtFailed = true;
+                Log.w("SCAM_PIPELINE", "WHY fusion: the level-1 MRT framebuffer is incomplete, the three passes");
+                return false;
+            }
+            shaderProg.setDefine("MRT_GF", gf1 != null ? 1 : 0);
+            fusionProgram("why/lpyr", 11, source, em, lw, ae, center, satLight);
+            if (gf1 != null) shaderProg.setVar("bandEdgeU", 0f, 0f, band[2], band[3]);
+            android.opengl.GLES30.glViewport(0, 0, l1.size.x, l1.size.y);
+            if (com.scamera.app.processing.opengl.PostGlMode.invalidate())
+                android.opengl.GLES30.glInvalidateFramebuffer(android.opengl.GLES30.GL_FRAMEBUFFER, n, attachments, 0);
+            shaderProg.drawBlocks(l1.size.x, l1.size.y);
+            final int error = android.opengl.GLES30.glGetError();
+            if (error != android.opengl.GLES30.GL_NO_ERROR) {
+                mrtFailed = true;
+                Log.w("SCAM_PIPELINE", "WHY fusion: the level-1 MRT pass gave GL error 0x" + Integer.toHexString(error) + ", the three passes");
+                return false;
+            }
+            return true;
+        } catch (RuntimeException failure) {
+            mrtFailed = true;
+            Log.w("SCAM_PIPELINE", "WHY fusion: the level-1 MRT pass failed (" + failure + "), the three passes");
+            return false;
+        } finally {
+            android.opengl.GLES30.glBindFramebuffer(android.opengl.GLES30.GL_FRAMEBUFFER, 0);
+            if (fb[0] != 0) android.opengl.GLES30.glDeleteFramebuffers(1, fb, 0);
+        }
+    }
+
     /** {@code asset} (gf or lpyr) in MODE {@code mode} with the fusion's uniforms of this shot (import why_fusion). */
     private void fusionProgram(String asset, int mode, GLTexture source, float[] em, float[] lw, float ae, float center, float[] satLight) {
         shaderProg.setDefine("MODE", mode);
@@ -395,11 +453,15 @@ public final class WhyFusion extends Node {
                     A[l] = new GLTexture(size, rg16, null, GL_NEAREST, GL_CLAMP_TO_EDGE);
                 }
             }
-            // level 1 of the lumas and the weights straight from whyLow, then the Gaussian pyramids
-            fusionProgram("why/lpyr", 0, st.lowDn, em, lw, ae, center, satLight);
-            shaderProg.drawBlocks(L[1]);
-            fusionProgram("why/lpyr", 1, st.lowDn, em, lw, ae, center, satLight);
-            shaderProg.drawBlocks(W[1]);
+            // level 1 of the lumas and the weights straight from whyLow, then the Gaussian pyramids; P727: with the bands' (G, Fpp)
+            // in one pass into the three planes (MODE 11)
+            final boolean mrt = levelOne(st.lowDn, L[1], W[1], bands ? GF[1] : null, em, lw, ae, center, satLight, band);
+            if (!mrt) {
+                fusionProgram("why/lpyr", 0, st.lowDn, em, lw, ae, center, satLight);
+                shaderProg.drawBlocks(L[1]);
+                fusionProgram("why/lpyr", 1, st.lowDn, em, lw, ae, center, satLight);
+                shaderProg.drawBlocks(W[1]);
+            }
             for (int l = 2; l <= levels; l++) {
                 for (GLTexture[] p : new GLTexture[][]{L, W}) {
                     shaderProg.setDefine("MODE", 2);
@@ -412,9 +474,11 @@ public final class WhyFusion extends Node {
             if (bands) {
                 // P391: level 1 of the guide's log light and the per-pixel fusion from whyLow (MODE 7), the Gaussian pyramid of both
                 // REF_DOWN - 1 levels beyond the pyramid's
-                fusionProgram("why/lpyr", 7, st.lowDn, em, lw, ae, center, satLight);
-                shaderProg.setVar("bandEdgeU", 0f, 0f, band[2], band[3]);
-                shaderProg.drawBlocks(GF[1]);
+                if (!mrt) {
+                    fusionProgram("why/lpyr", 7, st.lowDn, em, lw, ae, center, satLight);
+                    shaderProg.setVar("bandEdgeU", 0f, 0f, band[2], band[3]);
+                    shaderProg.drawBlocks(GF[1]);
+                }
                 for (int l = 2; l <= deep; l++) {
                     shaderProg.setDefine("MODE", 2);
                     gammaDefine();

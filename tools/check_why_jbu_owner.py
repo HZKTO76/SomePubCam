@@ -49,8 +49,9 @@ def check(ok, msg):
 
 
 def ours(cond, name):
-    """A condition on P673's define JBU (false with it off: JBU 0); P677's BANDS (V2's edge bands) is dropped the same way."""
-    return re.search(r'\b(JBU|BANDS)\b', cond) is not None
+    """A condition on P673's define JBU (false with it off: JBU 0); P677's BANDS (V2's edge bands) is dropped the same way, and
+    P727's MRT pass of lpyr (MODE 11, MRT_GF: a mode of its own the other modes never compile)."""
+    return re.search(r'\b(JBU|BANDS|MRT_GF)\b', cond) is not None or re.search(r'\bMODE\s*==\s*11\b', cond) is not None
 
 
 def off_code(text, name):
@@ -61,7 +62,7 @@ def off_code(text, name):
         line = raw.split('//')[0].rstrip()
         s = line.strip()
         m = re.match(r'#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)', s)
-        if re.match(r'#\s*define\s+(JBU|BANDS)\s', s):
+        if re.match(r'#\s*define\s+(JBU|BANDS|MRT_GF)\s', s):
             continue
         if m:
             kw, cond = m.group(1), m.group(2)

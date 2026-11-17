@@ -20,9 +20,13 @@ precision highp float; precision highp sampler2D;
 //   MODE 8 (P391): the edge measure D of a level l >= 1: |G_l - G_l+3| (G_l+3 bilinear from its nodes, what the chain of expands
 //           gives) less k of its noise sigmas in quadrature (R16F, EV)
 //   MODE 9 (P391): MODE 8 at level 0 (G_0 of each whyLow pixel; R16F at whyLow's size)
+//   MODE 11 (P727): MODE 0, MODE 1 and (MRT_GF 1) MODE 7 in one pass into three targets - each whyLow tap's prepare() once for
+//           all of them instead of once per pass (25 taps a level-1 pixel); the same sums in the same order, the same outputs
 //   MODE 10 (P391): the edge share of a level l >= 1 (RG16F): r = max(the ramp of this level's cone max of D, the carry: the 3 x 3
 //           max of the finer level's share round 2 x), g = the carry alone (the coarsest level's share, the fractional depth's base)
 #define MODE 0
+// P727: MODE 11 also writes MODE 7's (G, Fpp) to its third target
+#define MRT_GF 0
 // P378 SKY 1 (WhyFusion, MODE 5 with the guided share and a sky mask): the clear sky keeps the pyramid's fusion (M1); 0: the
 // shader before P378, token for token.
 #define SKY 0
@@ -118,7 +122,15 @@ uniform sampler2D Fused31;      // the fused luma of build 31091's weights and d
 // P404: the display standard of the fusion's lumas (import why_fusion; 0 = the pure power, as before)
 #define GAMMA_TYPE 0
 #import why_fusion
+#if MODE == 11
+layout(location = 0) out vec4 Output;   // MODE 0's L
+layout(location = 1) out vec4 Output1;  // MODE 1's p
+#if MRT_GF == 1
+layout(location = 2) out vec4 Output2;  // MODE 7's (G, Fpp)
+#endif
+#else
 out vec4 Output;
+#endif
 
 // Linear expansion of the coarser level at fine pixel x (coarse i sits on fine 2i).
 vec4 expand(sampler2D t, ivec2 xy) {
@@ -320,7 +332,40 @@ float level5(ivec2 xy, float I, vec4 p, vec4 L, vec4 jw) {
 void main() {
     ivec2 xy = ivec2(gl_FragCoord.xy);
     const float k[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
-#if MODE == 0 || MODE == 1 || MODE == 2 || MODE == 6 || MODE == 7
+#if MODE == 11
+    ivec2 last = textureSize(InputBuffer, 0) - ivec2(1);
+    vec4 accL = vec4(0.0), accP = vec4(0.0);
+#if MRT_GF == 1
+    vec4 accG = vec4(0.0);
+#endif
+    for (int j = 0; j < 5; j++) {
+        vec4 rowL = vec4(0.0), rowP = vec4(0.0);
+#if MRT_GF == 1
+        vec4 rowG = vec4(0.0);
+#endif
+        for (int i = 0; i < 5; i++) {
+            vec4 v = texelFetch(InputBuffer, clamp(2 * xy + ivec2(i - 2, j - 2), ivec2(0), last), 0);
+            float I;
+            vec4 p, L;
+            prepare(v.rgb, I, p, L);
+            rowL += k[i] * L;
+            rowP += k[i] * p;
+#if MRT_GF == 1
+            rowG += k[i] * vec4(log2(I + bandEdgeU.z), dot(p, L), 0.0, 0.0);
+#endif
+        }
+        accL += k[j] * rowL;
+        accP += k[j] * rowP;
+#if MRT_GF == 1
+        accG += k[j] * rowG;
+#endif
+    }
+    Output = accL;
+    Output1 = accP;
+#if MRT_GF == 1
+    Output2 = accG;
+#endif
+#elif MODE == 0 || MODE == 1 || MODE == 2 || MODE == 6 || MODE == 7
     ivec2 last = textureSize(InputBuffer, 0) - ivec2(1);
     vec4 acc = vec4(0.0);
     for (int j = 0; j < 5; j++) {

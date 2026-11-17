@@ -188,10 +188,18 @@ public final class WhyResolveDenoise {
 
     private static void drawRegion(GLProg prog, GLTexture target, int y, int height) {
         target.renderInto();
-        for (int row = 0; row < height; row += 256) {
-            android.opengl.GLES30.glViewport(0, y + row, target.size.x, Math.min(256, height - row));
-            prog.draw();
-            com.scamera.app.processing.opengl.GpuPace.block(); // P616: a submission per block while paced
+        try {
+            final String pass = prog.activeName;
+            for (int row = 0; row < height; ) {
+                // P724: sized by the program's GPU time once measured (256 rows before, and without the pacer)
+                final int n = Math.min(height - row, com.scamera.app.processing.opengl.GpuPace.bandRows(pass, target.size.x, 256, com.scamera.app.processing.opengl.GpuPace.WIDE_BAND_ROWS));
+                GLProg.band(0, y + row, target.size.x, n);
+                prog.draw();
+                com.scamera.app.processing.opengl.GpuPace.block(pass, (long) target.size.x * n); // P616: a submission per block while paced
+                row += n;
+            }
+        } finally {
+            GLProg.bandsDone();
         }
         android.opengl.GLES30.glFlush();
     }

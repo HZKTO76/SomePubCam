@@ -1004,6 +1004,25 @@ public class GLProg implements AutoCloseable {
 
     private static final int[] COLOUR0 = {GL_COLOR_ATTACHMENT0};
 
+    /**
+     * P724: one band of a banded draw - its viewport and, unless scam_dev post_scissor 0, the same rectangle as the scissor. A
+     * full-viewport quad covers exactly the viewport, so the scissor removes no fragment: the pixels are the same. A tiling GPU
+     * (Adreno, Mali) works out the region a render pass touches from the scissor; without it every flushed band of a full-size
+     * target could load and store the whole target (LG V50: tens of ms per band whatever its height, P668 / ef999335). Every band
+     * loop ends with {@link #bandsDone} (glClear and glBlitFramebuffer obey the scissor).
+     */
+    public static void band(int x, int y, int w, int h) {
+        glViewport(x, y, w, h);
+        if (!GpuPace.scissor()) return;
+        android.opengl.GLES30.glEnable(android.opengl.GLES30.GL_SCISSOR_TEST);
+        android.opengl.GLES30.glScissor(x, y, w, h);
+    }
+
+    /** P724: the scissor of {@link #band} off again. */
+    public static void bandsDone() {
+        if (GpuPace.scissor()) android.opengl.GLES30.glDisable(android.opengl.GLES30.GL_SCISSOR_TEST);
+    }
+
     public void drawBlocks(GLTexture target, Point size) {
         target.renderInto();
         drawBlocks(size.x, size.y);
@@ -1047,12 +1066,17 @@ public class GLProg implements AutoCloseable {
     public void drawBlocks(int w, int h) {
         final boolean flush = !PostGlMode.legacy();
         final String pass = activeName;
-        for (int y = 0; y < h; ) {
-            final int rows = Math.min(h - y, flush ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS) : GLDrawParams.TILE_ROWS);
-            glViewport(0, y, w, rows);
-            draw();
-            if (flush) GpuPace.flushBlock(pass, (long) w * rows);
-            y += rows;
+        try {
+            for (int y = 0; y < h; ) {
+                final int rows = Math.min(h - y, flush ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS, GpuPace.WIDE_BAND_ROWS)
+                        : GLDrawParams.TILE_ROWS);
+                band(0, y, w, rows);
+                draw();
+                if (flush) GpuPace.flushBlock(pass, (long) w * rows);
+                y += rows;
+            }
+        } finally {
+            bandsDone();
         }
     }
 
@@ -1062,12 +1086,17 @@ public class GLProg implements AutoCloseable {
         final boolean flush = !PostGlMode.legacy();
         final int w = target.size.x;
         final String pass = activeName;
-        for (int y = Math.max(0, y0); y < Math.min(y1, target.size.y); ) {
-            final int rows = Math.min(Math.min(y1, target.size.y) - y, flush ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS) : GLDrawParams.TILE_ROWS);
-            glViewport(0, y, w, rows);
-            draw();
-            if (flush) GpuPace.flushBlock(pass, (long) w * rows);
-            y += rows;
+        try {
+            for (int y = Math.max(0, y0); y < Math.min(y1, target.size.y); ) {
+                final int rows = Math.min(Math.min(y1, target.size.y) - y, flush
+                        ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS, GpuPace.WIDE_BAND_ROWS) : GLDrawParams.TILE_ROWS);
+                band(0, y, w, rows);
+                draw();
+                if (flush) GpuPace.flushBlock(pass, (long) w * rows);
+                y += rows;
+            }
+        } finally {
+            bandsDone();
         }
     }
 
@@ -1098,14 +1127,18 @@ public class GLProg implements AutoCloseable {
         final int format = flushFormat != -1 ? flushFormat : flushType == GL_FLOAT ? GL_RGBA : GL_RGBA_INTEGER;
         final GLBlockDivider bands = new GLBlockDivider(h, bandRows);
         final int[] band = new int[2];
-        while (bands.nextBlock(band)) {
-            glViewport(0, band[0], w, band[1]);
-            quad.draw(location("vPosition", true));
-            GpuPace.flushBlock(); // P616
-            if (flushType == -1) continue;
-            glReadPixels(0, band[0], 1, 1, format, flushType, flushPixels);
-            final int error = glGetError();
-            if (error != 0) Log.d("GLPrograms", "GLError: " + error);
+        try {
+            while (bands.nextBlock(band)) {
+                band(0, band[0], w, band[1]);
+                quad.draw(location("vPosition", true));
+                GpuPace.flushBlock(); // P616
+                if (flushType == -1) continue;
+                glReadPixels(0, band[0], 1, 1, format, flushType, flushPixels);
+                final int error = glGetError();
+                if (error != 0) Log.d("GLPrograms", "GLError: " + error);
+            }
+        } finally {
+            bandsDone();
         }
     }
 

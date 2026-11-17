@@ -26,10 +26,17 @@ public final class ThermalPolicy {
      * frames a second on older GPUs; newer RAW-capable GPUs use 30 fps with a smaller preview target. OPPO Find X7 Ultra, the same
      * 26-frame merge: 3.06 s with the ISP viewfinder (30 draws a second, 1.3 ms
      * each), 4.38 s with the developed RAW one (29 tones and 55 draws a second, 8 - 10 ms each). scam_dev vf_busy_fps: the rate
-     * (0 = every frame, as before).
+     * (0 = every frame, as before). P723 (owner, 2026-11-17: «Делай ограничение видоискателя до 25фпс во время обработки»): 25 instead
+     * of 15 and of the newer GPUs' 30; the ISP viewfinder too ({@link #ispFrameDue}; it drew every frame, LG V50 2026-11-16: 29.9 a
+     * second through a 14.6 s post).
      */
-    static final int BUSY_VF_FPS = 15;
+    static final int BUSY_VF_FPS = 25;
     private static volatile int defaultBusyVfFps = BUSY_VF_FPS;
+    /** The busy RAW viewfinder develops fewer preview pixels (newer RAW-capable GPUs; was {@code defaultBusyVfFps == 30}). */
+    private static volatile boolean fastRawBusy;
+    /** P723: the ISP viewfinder's draw rate while a shot is processed (scam_dev vf_busy_isp_fps, 0 = every frame). */
+    static final int BUSY_ISP_VF_FPS = 25;
+    private static final Pacer ispPacer = new Pacer();
     private static volatile boolean memoryPolicyKnown;
     /** A processing flag older than this counts as cleared (a path that never cleared it must not slow the viewfinder for good). */
     static final long BUSY_MAX_NS = 20_000_000_000L;
@@ -37,9 +44,8 @@ public final class ThermalPolicy {
     static final long NOTICE_EVERY_MS = 5 * 60_000L;
     private static volatile int status = -1;
     private static volatile boolean registered;
-    private static long lastVfNs;
-    /** P611: the frames the cap allows and the viewfinder has not shown yet (see {@link #due(long, int)}). */
-    private static double vfCredit;
+    /** P611: the RAW viewfinder's frame credit (see {@link #due(long, int)}). */
+    private static final Pacer rawPacer = new Pacer();
     private static volatile long lastNoticeMs = Long.MIN_VALUE / 2;
 
     private ThermalPolicy() {}
@@ -52,8 +58,9 @@ public final class ThermalPolicy {
                 if (manager != null) {
                     android.app.ActivityManager.MemoryInfo memory = new android.app.ActivityManager.MemoryInfo();
                     manager.getMemoryInfo(memory);
-                    defaultBusyVfFps = busyFpsForDevice(memory.totalMem, Build.BOARD,
-                            com.scamera.app.settings.DeviceDefaults.rawViewfinderSoc());
+                    final boolean fastSoc = com.scamera.app.settings.DeviceDefaults.rawViewfinderSoc();
+                    defaultBusyVfFps = busyFpsForDevice(memory.totalMem, Build.BOARD, fastSoc);
+                    fastRawBusy = fastRawBusy(memory.totalMem, Build.BOARD, fastSoc);
                     memoryPolicyKnown = memory.totalMem > 0;
                 }
             } catch (RuntimeException ignored) {}
@@ -111,13 +118,37 @@ public final class ThermalPolicy {
     }
 
     static int busyFpsForDevice(long totalBytes, String board, boolean fastRawSoc) {
-        final int legacy = busyFpsForDevice(totalBytes, board);
-        return fastRawSoc && totalBytes > 0 && legacy == BUSY_VF_FPS ? 30 : legacy;
+        return busyFpsForDevice(totalBytes, board);
     }
 
-    /** Newer RAW-capable GPUs keep 30 fps by temporarily developing fewer preview pixels. */
+    static boolean fastRawBusy(long totalBytes, String board, boolean fastRawSoc) {
+        return fastRawSoc && totalBytes > 0 && busyFpsForDevice(totalBytes, board) == BUSY_VF_FPS;
+    }
+
+    /** Newer RAW-capable GPUs keep the busy rate by temporarily developing fewer preview pixels. */
     public static boolean reducedRawViewfinder() {
-        return defaultBusyVfFps == 30 && busy(android.os.SystemClock.elapsedRealtimeNanos());
+        return fastRawBusy && busy(android.os.SystemClock.elapsedRealtimeNanos());
+    }
+
+    static int busyIspFps() {
+        try {
+            return Math.max(0, Math.round(com.scamera.app.settings.PreferenceKeys.scamDevNumber("vf_busy_isp_fps", BUSY_ISP_VF_FPS)));
+        } catch (RuntimeException | LinkageError e) {
+            return BUSY_ISP_VF_FPS;
+        }
+    }
+
+    /**
+     * P723: the ISP viewfinder may draw the frame that arrived at {@code nowNs} (System.nanoTime): always when no shot is processed,
+     * else at most {@link #busyIspFps} a second. A frame not drawn is still latched (its buffer goes back to the camera).
+     */
+    public static boolean ispFrameDue(long nowNs) {
+        final int fps = busy(android.os.SystemClock.elapsedRealtimeNanos()) ? busyIspFps() : 0;
+        synchronized (ispPacer) {
+            if (fps > 0) return ispPacer.due(nowNs, fps);
+            ispPacer.reset(nowNs);
+            return true;
+        }
     }
 
     /** P683: a shot is being processed now (on any device; {@link #reducedRawViewfinder} only where the busy viewfinder keeps 30 fps). */
@@ -160,8 +191,7 @@ public final class ThermalPolicy {
         final int busyFps = busy(android.os.SystemClock.elapsedRealtimeNanos()) ? busyFps() : 0;
         final int limit = severe() ? (busyFps > 0 ? Math.min(SEVERE_VF_FPS, busyFps) : SEVERE_VF_FPS) : busyFps;
         if (limit > 0) return due(nowNs, limit);
-        lastVfNs = nowNs;
-        vfCredit = 0;
+        rawPacer.reset(nowNs);
         return true;
     }
 
@@ -180,16 +210,30 @@ public final class ThermalPolicy {
      * stream's rate, then the cap). A first frame, a time going back or a gap above a second shows at once.
      */
     static synchronized boolean due(long nowNs, int fps) {
-        if (lastVfNs == 0 || nowNs <= lastVfNs || nowNs - lastVfNs > 1_000_000_000L) {
-            lastVfNs = nowNs;
-            vfCredit = 0;
+        return rawPacer.due(nowNs, fps);
+    }
+
+    /** The frame credit of one viewfinder stream (callers hold a lock). */
+    static final class Pacer {
+        private long lastNs;
+        private double credit;
+
+        void reset(long nowNs) {
+            lastNs = nowNs;
+            credit = 0;
+        }
+
+        boolean due(long nowNs, int fps) {
+            if (lastNs == 0 || nowNs <= lastNs || nowNs - lastNs > 1_000_000_000L) {
+                reset(nowNs);
+                return true;
+            }
+            credit = Math.min(2.0, credit + (nowNs - lastNs) * (double) fps / 1e9);
+            lastNs = nowNs;
+            if (credit < 0.875) return false;
+            credit -= 1.0;
             return true;
         }
-        vfCredit = Math.min(2.0, vfCredit + (nowNs - lastVfNs) * (double) fps / 1e9);
-        lastVfNs = nowNs;
-        if (vfCredit < 0.875) return false;
-        vfCredit -= 1.0;
-        return true;
     }
 
     /** The hot-phone notice for a FULLRES press now, or null (not SEVERE, or said less than {@link #NOTICE_EVERY_MS} ago). */
@@ -202,5 +246,9 @@ public final class ThermalPolicy {
     }
 
     /** Test hook: forget the last notice. */
-    static void resetNotice() { lastNoticeMs = Long.MIN_VALUE / 2; lastVfNs = 0; vfCredit = 0; }
+    static void resetNotice() {
+        lastNoticeMs = Long.MIN_VALUE / 2;
+        synchronized (ThermalPolicy.class) { rawPacer.reset(0); }
+        synchronized (ispPacer) { ispPacer.reset(0); }
+    }
 }

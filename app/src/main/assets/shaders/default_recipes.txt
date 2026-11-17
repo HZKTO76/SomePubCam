@@ -59,6 +59,7 @@ A why/low 0 DETAIL_REF=1
 A why/lpyr 0 MODE=0
 A why/lpyr 0 MODE=1
 A why/lpyr 0 MODE=10
+A why/lpyr 0 MODE=11
 A why/lpyr 0 MODE=2
 A why/lpyr 0 MODE=5
 A why/lpyr 0 MODE=6

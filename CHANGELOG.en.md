@@ -2,10 +2,24 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 (4) — Processing speed
+
+- Post-processing sends its work to the GPU in larger pieces, each touching only its own band of the frame. Photos are ready sooner, most of all on older phones, and the result is the same to the pixel.
+- Sharpening and local tone correction take fewer passes over the frame, with no visible difference in the photo.
+
+## 2026-11-17 (3) — Viewfinder during processing
+
+- While a photo is processed, the viewfinder shows up to 25 frames a second on every phone with enough memory for it; the GPU time this frees goes to the processing.
+
+## 2026-11-17 (2) — realme 2×
+
+- realme 12 Pro+: «2×» no longer uses the dead sensor mode 8 (the camera sets no exposure in it, hence the black frame); the module tries mode 7 and, with nothing without remosaic, takes mode 13 with the remosaic, the ISP stream fake off.
+- realme 12 Pro+: if these modes fail too, the module moves to a digital crop by itself; Unspektra AE goes back to the camera's AE.
+
 ## 2026-11-17 — Motion in Fast merge
 
 - Reduced ghosting and retained more texture on moving subjects.
-- Added an adjustable motion denoise SNR curve in Noise reduction and merge.
+- Added an adjustable motion denoise curve in Noise reduction and merge.
 - The viewfinder stays full width on displays with a small cutout.
 
 ## 2026-11-17 — Viewfinder and saving

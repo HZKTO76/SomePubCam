@@ -128,8 +128,15 @@ public final class GLGpuTimer {
         return previous;
     }
 
+    /** P724: the span the GPU time goes to now ("node/program", as reported), or null when not measuring. */
+    static String currentKey() {
+        final Run run = CURRENT.get();
+        return run == null || !run.active || run.names.isEmpty() ? null : run.names.get(run.names.size() - 1);
+    }
+
     /** Releases this run's queries without waiting for results, on a failed pipeline while its context is current. */
     public static void discard() {
+        GpuPace.forgetRun(); // P724: a run without a report teaches the band sizing nothing
         final Run run = CURRENT.get();
         if (run == null) return;
         CURRENT.remove();
@@ -171,6 +178,14 @@ public final class GLGpuTimer {
         }
         GLES30.glGetIntegerv(GPU_DISJOINT_EXT, r, 0);
         final boolean disjoint = r[0] != 0;
+        // P724: the programs' GPU time per pixel sizes the next bands (GpuPace); a disjoint run's times are not trusted
+        if (disjoint) GpuPace.forgetRun();
+        else {
+            final LinkedHashMap<String, Long> spans = new LinkedHashMap<>();
+            for (Map.Entry<String, long[]> e : sums.entrySet()) spans.put(e.getKey(), e.getValue()[0]);
+            final int learnt = GpuPace.learnGpuTime(spans);
+            if (learnt > 0) Log.i("SCAM_PIPELINE", "post GPU bands: " + learnt + " programs sized by their GPU time from the next band on");
+        }
         final ArrayList<Map.Entry<String, long[]>> list = new ArrayList<>(sums.entrySet());
         list.sort((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]));
         Log.i("SCAM_PIPELINE", nodeLine(label, sums, total, disjoint));

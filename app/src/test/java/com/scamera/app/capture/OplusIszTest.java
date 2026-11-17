@@ -56,18 +56,60 @@ public class OplusIszTest {
         assertArrayEquals(new String[]{"0"}, OplusIsz.cameras());
         assertArrayEquals(new int[]{8, 4096, 3072, 30}, OplusIsz.row("0"));
         assertNull(OplusIsz.row("1"));
-        final SensorModePick.Pick isz = OplusIsz.mark("0", "back0", new SensorModePick.Pick(8, 4096, 3072));
+        final SensorModePick.Pick row8 = new SensorModePick.Pick(8, 4096, 3072);
+        assertSame("P722: row 8 is no candidate any more (no exposure in it)", row8, OplusIsz.mark("0", "back0", row8));
+        final SensorModePick.Pick isz = OplusIsz.mark("0", "back0", new SensorModePick.Pick(13, 4096, 3072));
         assertEquals(SensorModePick.ISZ, isz.route);
-        assertEquals(2, isz.block);
+        assertEquals("untried: the Quad declared, the frames decide", 2, isz.block);
         assertTrue(isz.rawOnly());
         final SensorModePick.Pick other = new SensorModePick.Pick(11, 4096, 2304);
         assertSame("another row: unchanged", other, OplusIsz.mark("0", "back0", other));
-        assertTrue("P722: the engineer-mode row has no camera AE: the module takes Unspektra AE", OplusIsz.needsOwnAe(8));
-        assertFalse(OplusIsz.needsOwnAe(11));
         ShadowBuild.setModel("RMX5200");
         assertFalse("another realme: no ISZ", OplusIsz.device());
-        assertFalse(OplusIsz.needsOwnAe(8));
         assertEquals(0, OplusIsz.cameras().length);
+    }
+
+    /** P722: the RMX3840's row 8 reported 74 769 ns (the sensor's shortest 77 370) on every result: 10 of them fail the row. */
+    @Test public void resultsBelowTheShortestExposureFailTheRow() {
+        final int[] count = {0};
+        for (int i = 1; i < OplusIsz.DEAD_RESULTS; i++) assertNull(OplusIsz.deadExposure(77_370, 74_769L, count));
+        assertEquals(OplusIsz.DEAD_RESULTS - 1, count[0]);
+        final String why = OplusIsz.deadExposure(77_370, 74_769L, count);
+        assertTrue(why, why != null && why.contains("74769 ns") && why.contains("77370 ns"));
+        final int[] fine = {0};
+        for (int i = 0; i < 30; i++) {
+            assertNull(OplusIsz.deadExposure(77_370, i % 2 == 0 ? 74_769L : 10_000_000L, fine)); // a real exposure between: no run
+            assertNull(OplusIsz.deadExposure(77_370, 77_000L, fine)); // within 1 % of the floor: a real shortest exposure
+        }
+        assertNull("no floor known", OplusIsz.deadExposure(0, 74_769L, new int[]{50}));
+        assertNull("no exposure in the result", OplusIsz.deadExposure(77_370, null, new int[]{50}));
+    }
+
+    /** P722: the RMX3840 rows 8, 13, 7 in turn; row 13's plain Bayer kept as the remosaic fallback, a plain row 7 is dead. */
+    @Test public void theRealmeRowsAreTriedInTurnThenRow13WithTheRemosaic() {
+        ShadowBuild.setManufacturer("realme");
+        ShadowBuild.setModel("RMX3840");
+        final android.content.SharedPreferences p = org.robolectric.RuntimeEnvironment.getApplication().getSharedPreferences("p722", 0);
+        p.edit().clear().commit();
+        final String now = "fw|1";
+        assertEquals("row 7 first (its frames tell whether it is the Quad)", 7, OplusIsz.nextRealmeRow(p, "0", now));
+        OplusIsz.noteRow(p, "0", 7, OplusIsz.ROW_DEAD, now);
+        assertEquals(13, OplusIsz.nextRealmeRow(p, "0", now));
+        OplusIsz.noteRow(p, "0", 13, OplusIsz.ROW_REMOSAIC, now);
+        assertEquals("none left without the remosaic: row 13 with it", 13, OplusIsz.nextRealmeRow(p, "0", now));
+        OplusIsz.noteRow(p, "0", 13, OplusIsz.ROW_DEAD, now);
+        assertEquals("nothing runs: the digital crop", -1, OplusIsz.nextRealmeRow(p, "0", now));
+        assertEquals("another firmware: all untried again", 7, OplusIsz.nextRealmeRow(p, "0", "fw|2"));
+        final SensorModePick.Pick r13 = new SensorModePick.Pick(13, 4096, 3072, false, 1, SensorModePick.ISZ);
+        assertTrue("P722: the realme row keeps the ISP stream", OplusIsz.keepsIspStream(r13));
+        assertEquals("Auto: fake off", 3, SensorModePick.ispSurfaceFor(0, r13, true, false, false));
+        assertFalse(SensorModePick.ispStreamOff(0, r13, true, false));
+        assertFalse(SensorModePick.ispStreamOff(3, r13, true, false));
+        assertTrue("Off as set", SensorModePick.ispStreamOff(2, r13, true, false));
+        assertTrue(OplusIsz.realmeCandidate("0", 13) && OplusIsz.realmeCandidate("0", 7));
+        assertFalse(OplusIsz.realmeCandidate("0", 1) || OplusIsz.realmeCandidate("0", 8) || OplusIsz.realmeCandidate("2", 13));
+        assertArrayEquals(new int[]{13, 4096, 3072, 24}, OplusIsz.realmeRow(true, "0", OppoNativeFullRes.RMX3840_MAIN, 13));
+        assertArrayEquals(new int[]{7, 4096, 3072, 30}, OplusIsz.realmeRow(true, "0", OppoNativeFullRes.RMX3840_MAIN, 7));
     }
 
     @Test public void theModuleLabelsAreTwiceTheirZoom() {

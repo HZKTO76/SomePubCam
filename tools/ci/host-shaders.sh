@@ -25,6 +25,10 @@ LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_post_pbo.py
 # P668: every post fragment program drawn in bands of 16 / 48 / 112 rows equals one draw bit for bit (the paced post's band sizing);
 # P683: and in the 8-row tiles a picture under 8 MP had until P683 (now 256 rows as every picture)
 LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_post_bands.py
+# P725: an RL stage as one compute pass equals its fragment passes bit for bit (the R16F stores' rounding emulated)
+LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_sharp_rl_cs.py
+# P727: level 1 of the fusion pyramid's L, p and (G, Fpp) from one MRT pass equals their three passes bit for bit
+LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_lpyr_mrt.py
 # P671: the clip band in the flagged tiles only equals the band over every pixel, bit for bit (and no tile without a flag)
 LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_band_tiles.py
 # P671: the photo's combine with its one-channel windows read as textureGather blocks equals the single reads, bit for bit

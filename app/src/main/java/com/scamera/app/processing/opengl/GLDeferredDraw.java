@@ -221,9 +221,9 @@ public final class GLDeferredDraw {
                 int end = i;
                 while (end < to && !drawn[end]) end++;
                 for (int at = i; at < end; ) {
-                    final int n = Math.min(end - at, GpuPace.bandRows(pass, across, GLDrawParams.TILE_ROWS));
-                    if (columns) GLES30.glViewport(at, 0, n, height);
-                    else GLES30.glViewport(0, at, width, n);
+                    final int n = Math.min(end - at, GpuPace.bandRows(pass, across, GLDrawParams.TILE_ROWS, GpuPace.WIDE_BAND_ROWS));
+                    if (columns) GLProg.band(at, 0, n, height);
+                    else GLProg.band(0, at, width, n);
                     prog.drawQuad(attribute);
                     GpuPace.flushBlock(pass, (long) across * n);
                     for (int k = at; k < at + n; k++) drawn[k] = true;
@@ -235,6 +235,7 @@ public final class GLDeferredDraw {
                 i = end;
             }
         } finally {
+            GLProg.bandsDone(); // P724: before the output's tile draws
             final long restore = System.nanoTime();
             if (outputState == null) caller.restore();
             else caller.restoreFrom(state);

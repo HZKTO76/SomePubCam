@@ -697,6 +697,15 @@ public final class WhyLumaSharpen extends Node {
             if (!(rad > 0f && Math.abs(amount) > 0.001f && iters >= 1)) continue;
             Psf k = psf(kernel, rad * s);
             if (kernel == 0) amount *= scaleComp(s, SCALE2_RL_GAUSS);
+            // P725: the whole stage in one compute pass where it fits
+            final GLTexture fused = fusedRl(obs, size, k, iters, amount, Math.max(0f, rl[i][4]), rlHalo, rlMargin, rlMacro, rlEdgeGuard,
+                    protectShadows, protectHighlights, nb, pool);
+            if (fused != null) {
+                obs = fused;
+                stages.append(" rl").append(i + 1).append("=").append(kernel == 2 ? "airy" : kernel == 1 ? "disk" : "gauss")
+                        .append(rad * s).append("x").append(iters).append("@").append(amount).append("(cs)");
+                continue;
+            }
             if (ratio == null) ratio = plane(size, GLFormat.DataType.FLOAT_16, 1);
             // P364: the PSF's half size as a define - the convolutions read 2 x 2 textureGather blocks, the same taps in the same
             // order (why/sharp_rl.glsl PSF_HALF; 9 reads instead of 25 at half 2); the old model of post_ab and wider PSFs keep the loop
@@ -809,6 +818,15 @@ public final class WhyLumaSharpen extends Node {
             if (!(rad > 0f && Math.abs(amount) > 0.001f && iters >= 1)) continue;
             Psf k = psf(kernel, rad * kn.s);
             if (kernel == 0) amount *= scaleComp(kn.s, SCALE2_RL_GAUSS);
+            // P725: the whole stage in one compute pass where it fits
+            final GLTexture fused = fusedRl(obs, size, k, iters, amount, Math.max(0f, kn.rl[i][4]), kn.rlHalo, kn.rlMargin, kn.rlMacro,
+                    kn.rlEdgeGuard, kn.protectShadows, kn.protectHighlights, kn.nb, pool);
+            if (fused != null) {
+                obs = fused;
+                stages.append(" rl").append(i + 1).append("=").append(kernel == 2 ? "airy" : kernel == 1 ? "disk" : "gauss")
+                        .append(rad * kn.s).append("x").append(iters).append("@").append(amount).append("(cs)");
+                continue;
+            }
             if (ratio == null) ratio = plane(size, GLFormat.DataType.FLOAT_16, 1);
             // P364: the PSF's half size as a define - the convolutions read 2 x 2 textureGather blocks, the same taps in the same
             // order (why/sharp_rl.glsl PSF_HALF; 9 reads instead of 25 at half 2); the old model of post_ab and wider PSFs keep the loop
@@ -850,6 +868,101 @@ public final class WhyLumaSharpen extends Node {
         }
         ratioOut[0] = ratio;
         return obs;
+    }
+
+    /** P725: a compute stage that failed once (a GL error or a program the driver refused) is not tried again in this process. */
+    private static volatile boolean fusedRlFailed;
+    private static volatile int maxSharedBytes = -1;
+
+    /**
+     * P725 (owner, 2026-11-17: «Оптимизируй нашу постобработку ... Начни переписывать сейчас»; LG V50: the RL stages' 12
+     * full-frame passes 428 ms of the post's 2.6 s of GPU): the work-group tile of why/sharp_rl_cs for a PSF of {@code half} and
+     * {@code iters} iterations - its estimate and ratio of the tile and its halo in {@code maxShared} bytes of shared memory - or 0
+     * when no tile of 16 or 32 fits (the fragment passes: TV damping, a wider PSF, more iterations).
+     */
+    static int fusedRlTile(int half, int iters, float damping, int maxShared) {
+        if (half < 1 || half > 2 || iters < 1 || iters > 4 || damping > 0.0001f) return 0;
+        for (int tile : new int[]{32, 16}) {
+            final long side = tile + 4L * half * iters;
+            if (2L * side * side * 4 <= maxShared) return tile;
+        }
+        return 0;
+    }
+
+    /**
+     * P725: one RL stage - its {@code iters} iterations and the last one's blend - as one compute pass (why/sharp_rl_cs) into a
+     * free plane of {@code pool}, or null for the fragment passes of before (scam_dev sharp_rl_cs 0, the old GL model, a stage it
+     * does not take, a failure). The same terms in the same order as why/sharp_rl; the planes' values are those of its R16F planes
+     * up to the GPU's own rounding of an R16F store (tools/check_sharp_rl_cs.py: bit for bit with that rounding, at most about one
+     * fp16 step otherwise). The r32f output (the fp16 values) goes into the R16F plane by why/sharp_place.
+     */
+    private GLTexture fusedRl(GLTexture obs, Point size, Psf k, int iters, float amount, float damping, float halo, float margin,
+                              float macro, float edgeGuard, float protectShadows, float protectHighlights, int nb, List<GLTexture> pool) {
+        if (fusedRlFailed || com.scamera.app.processing.opengl.PostGlMode.legacy() || !PreferenceKeys.scamDevSwitch("sharp_rl_cs", true))
+            return null;
+        if (maxSharedBytes < 0) {
+            final int[] v = new int[1];
+            android.opengl.GLES31.glGetIntegerv(android.opengl.GLES31.GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, v, 0);
+            maxSharedBytes = android.opengl.GLES31.glGetError() == android.opengl.GLES31.GL_NO_ERROR ? v[0] : 0;
+        }
+        final int tile = fusedRlTile(k.half, iters, damping, maxSharedBytes);
+        if (tile == 0) return null;
+        GLTexture out = null;
+        try {
+            while (android.opengl.GLES31.glGetError() != android.opengl.GLES31.GL_NO_ERROR) {
+                // drain: only the pass below decides
+            }
+            out = new GLTexture(size, new GLFormat(GLFormat.DataType.FLOAT_32, 1), null, GL_NEAREST, GL_CLAMP_TO_EDGE);
+            shaderProg.setDefine("PSF_H", k.half);
+            shaderProg.setDefine("ITERS", iters);
+            shaderProg.setDefine("TILE", tile);
+            shaderProg.setLayout(16, 8, 1);
+            shaderProg.useAssetProgram("why/sharp_rl_cs", true);
+            shaderProg.setTexture("Observed", obs);
+            shaderProg.setVarFloats("psfU", k.quadrant);
+            shaderProg.setVar("amountU", amount);
+            shaderProg.setVar("haloU", halo);
+            shaderProg.setVar("marginU", margin);
+            shaderProg.setVar("macroU", macro);
+            shaderProg.setVar("edgeGuardU", edgeGuard);
+            shaderProg.setVar("protectShadowsU", protectShadows);
+            shaderProg.setVar("protectHighlightsU", protectHighlights);
+            shaderProg.setVar("nbU", nb);
+            shaderProg.setTextureCompute("outPlane", out, true);
+            final String pass = shaderProg.activeName;
+            final int tilesX = (size.x + tile - 1) / tile, tilesY = (size.y + tile - 1) / tile;
+            // bands of tile rows, paced like the fragment passes' bands (the viewfinder between them)
+            for (int ty = 0; ty < tilesY; ) {
+                final int rows = com.scamera.app.processing.opengl.GpuPace.bandRows(pass, size.x, 256,
+                        com.scamera.app.processing.opengl.GpuPace.WIDE_BAND_ROWS);
+                final int n = Math.min(tilesY - ty, Math.max(1, rows / tile));
+                shaderProg.setVar("originU", 0, ty * tile);
+                android.opengl.GLES31.glDispatchCompute(tilesX, n, 1);
+                // a submission per band as GLProg.drawBlocks makes (flushed and paced; flushed without the pacer)
+                com.scamera.app.processing.opengl.GpuPace.flushBlock(pass, (long) size.x * Math.min(n * tile, size.y - ty * tile));
+                ty += n;
+            }
+            android.opengl.GLES31.glMemoryBarrier(android.opengl.GLES31.GL_TEXTURE_FETCH_BARRIER_BIT
+                    | android.opengl.GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            final int error = android.opengl.GLES31.glGetError();
+            if (error != android.opengl.GLES31.GL_NO_ERROR) {
+                fusedRlFailed = true;
+                Log.w("SCAM_PIPELINE", "WHY luma sharpen: the RL compute pass gave GL error 0x" + Integer.toHexString(error) + ", the fragment passes");
+                return null;
+            }
+            final GLTexture next = spare(pool, size, obs);
+            shaderProg.useAssetProgram("why/sharp_place", false);
+            shaderProg.setTexture("InputBuffer", out);
+            shaderProg.setVar("originU", 0, 0);
+            shaderProg.drawBlocks(next);
+            return next;
+        } catch (RuntimeException failure) {
+            fusedRlFailed = true;
+            Log.w("SCAM_PIPELINE", "WHY luma sharpen: the RL compute pass failed (" + failure + "), the fragment passes");
+            return null;
+        } finally {
+            if (out != null) out.close();
+        }
     }
 
     /**

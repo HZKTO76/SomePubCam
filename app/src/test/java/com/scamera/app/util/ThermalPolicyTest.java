@@ -41,51 +41,78 @@ public class ThermalPolicyTest {
     @Test public void smallMemoryDevicesReserveGpuTimeForProcessing() {
         assertEquals(2, ThermalPolicy.busyFpsForMemory(4L << 30));
         assertEquals(2, ThermalPolicy.busyFpsForMemory(3L << 30));
-        assertEquals(15, ThermalPolicy.busyFpsForMemory(6L << 30));
-        assertEquals(15, ThermalPolicy.busyFpsForMemory(0));
+        assertEquals(25, ThermalPolicy.busyFpsForMemory(6L << 30));
+        assertEquals(25, ThermalPolicy.busyFpsForMemory(0));
     }
 
     @Test public void nubiaBoardReservesGpuTimeEvenWithMoreRam() {
         assertEquals(2, ThermalPolicy.busyFpsForDevice(6L << 30, "msm8998"));
         assertEquals(2, ThermalPolicy.busyFpsForDevice(8L << 30, "MSM8998"));
-        assertEquals(15, ThermalPolicy.busyFpsForDevice(8L << 30, "kalama"));
-        assertEquals(15, ThermalPolicy.busyFpsForDevice(0, null));
+        assertEquals(25, ThermalPolicy.busyFpsForDevice(8L << 30, "kalama"));
+        assertEquals(25, ThermalPolicy.busyFpsForDevice(0, null));
     }
 
-    @Test public void onlyNewerRawCapableDevicesUseThirtyFpsWhileProcessing() {
-        assertEquals(30, ThermalPolicy.busyFpsForDevice(8L << 30, "sun", true));
-        assertEquals(30, ThermalPolicy.busyFpsForDevice(12L << 30, "MT6991", true));
-        assertEquals(15, ThermalPolicy.busyFpsForDevice(8L << 30, "pineapple", false));
-        assertEquals(15, ThermalPolicy.busyFpsForDevice(0, "sun", true));
+    @Test public void processingCapsTheViewfinderAtTwentyFiveFpsAndOnlyNewerGpusReduceTheRawTarget() {
+        assertEquals(25, ThermalPolicy.busyFpsForDevice(8L << 30, "sun", true));
+        assertEquals(25, ThermalPolicy.busyFpsForDevice(12L << 30, "MT6991", true));
+        assertEquals(25, ThermalPolicy.busyFpsForDevice(8L << 30, "pineapple", false));
+        assertEquals(25, ThermalPolicy.busyFpsForDevice(0, "sun", true));
         assertEquals(2, ThermalPolicy.busyFpsForDevice(4L << 30, "sun", true));
         assertEquals(2, ThermalPolicy.busyFpsForDevice(8L << 30, "msm8998", true));
+        assertTrue(ThermalPolicy.fastRawBusy(8L << 30, "sun", true));
+        assertTrue(ThermalPolicy.fastRawBusy(12L << 30, "MT6991", true));
+        assertFalse(ThermalPolicy.fastRawBusy(8L << 30, "pineapple", false));
+        assertFalse(ThermalPolicy.fastRawBusy(0, "sun", true));
+        assertFalse(ThermalPolicy.fastRawBusy(4L << 30, "sun", true));
+        assertFalse(ThermalPolicy.fastRawBusy(8L << 30, "msm8998", true));
+    }
+
+    @Test public void ispViewfinderDrawsTwentyFiveFramesASecondOnlyWhileProcessing() {
+        int shown = 0;
+        for (int i = 0; i < 60; i++)
+            if (ThermalPolicy.ispFrameDue(5_000_000_000L + i * 33_333_333L)) shown++;
+        assertEquals("idle: every ISP frame", 60, shown);
+        ThermalPolicy.processing(true);
+        shown = 0;
+        for (int i = 0; i < 60; i++)
+            if (ThermalPolicy.ispFrameDue(9_000_000_000L + i * 33_333_333L)) shown++;
+        assertTrue("busy: about 25 a second of a 30 fps stream: " + shown, shown >= 49 && shown <= 51);
+        ThermalPolicy.processing(false);
+        shown = 0;
+        for (int i = 0; i < 60; i++)
+            if (ThermalPolicy.ispFrameDue(13_000_000_000L + i * 33_333_333L)) shown++;
+        assertEquals("after processing: every ISP frame again", 60, shown);
     }
 
     @Test public void theReducedTargetStartsImmediatelyAndEndsWithProcessing() throws Exception {
-        java.lang.reflect.Field field = ThermalPolicy.class.getDeclaredField("defaultBusyVfFps");
+        java.lang.reflect.Field field = ThermalPolicy.class.getDeclaredField("fastRawBusy");
         field.setAccessible(true);
-        int previous = field.getInt(null);
+        boolean previous = field.getBoolean(null);
         try {
-            field.setInt(null, 30);
+            field.setBoolean(null, true);
             assertFalse(ThermalPolicy.reducedRawViewfinder());
             ThermalPolicy.processing(true);
             assertTrue(ThermalPolicy.reducedRawViewfinder());
             ThermalPolicy.processing(false);
             assertFalse(ThermalPolicy.reducedRawViewfinder());
-            field.setInt(null, 15);
+            field.setBoolean(null, false);
             ThermalPolicy.processing(true);
             assertFalse("older devices keep their original target", ThermalPolicy.reducedRawViewfinder());
         } finally {
-            field.setInt(null, previous);
+            field.setBoolean(null, previous);
         }
     }
 
-    @Test public void thirtyFpsPolicyKeepsExplicitOverridesAndTheThermalCap() throws Exception {
+    @Test public void reducedRawPolicyKeepsExplicitOverridesAndTheThermalCap() throws Exception {
         java.lang.reflect.Field field = ThermalPolicy.class.getDeclaredField("defaultBusyVfFps");
         field.setAccessible(true);
         int previous = field.getInt(null);
+        java.lang.reflect.Field fast = ThermalPolicy.class.getDeclaredField("fastRawBusy");
+        fast.setAccessible(true);
+        boolean previousFast = fast.getBoolean(null);
         try (org.mockito.MockedStatic<PreferenceKeys> prefs = org.mockito.Mockito.mockStatic(PreferenceKeys.class)) {
             field.setInt(null, 30);
+            fast.setBoolean(null, true);
             ThermalPolicy.processing(true);
             prefs.when(() -> PreferenceKeys.scamDevSwitch("thermal_policy", true)).thenReturn(true);
             int[] caps = {30, 15, 5, 0};
@@ -108,6 +135,7 @@ public class ThermalPolicyTest {
             assertEquals("SEVERE still caps an unlimited explicit frame rate", 30, shown);
         } finally {
             field.setInt(null, previous);
+            fast.setBoolean(null, previousFast);
         }
     }
 

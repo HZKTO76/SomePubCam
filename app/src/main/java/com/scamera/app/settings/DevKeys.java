@@ -52,7 +52,7 @@ public final class DevKeys {
      * matrix of the Parameters, hybrid_clip_flags: a flag of the burst); or only the DNG reads them; or nothing does any more.
      */
     static final Set<String> NOT_IN_LAB = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-            "post_priority", "gpu_low_priority", "post_gpu_pace", "post_band_ms", "jpeg_threads", "rgba_upload", "gl_warm_up", "gl_warm_up_merge", "release_async", "dng_async", "worker_watchdog",
+            "post_priority", "gpu_low_priority", "post_gpu_pace", "post_band_ms", "post_scissor", "lpyr_mrt", "jpeg_threads", "rgba_upload", "gl_warm_up", "gl_warm_up_merge", "release_async", "dng_async", "worker_watchdog",
             "gl_warm_up_recipes", "ok_read", "worker_nice", "worker_prespawn", "worker_keep_ready", "thermal_async", "black_scan_bulk", "zero_copy_read", // P371: speed only
             "raw_crop_in_place", "prep_warm", // P625: speed only (the same samples)
             "oldstyle_threads", "oldstyle_read16", "exif_beside_encode", // P636: speed only (the same bytes)
@@ -226,8 +226,11 @@ public final class DevKeys {
         k.add(n(vf, "vf_gpu_priority", "1", Lang.t("Приоритет GPU-контекста видоискателя: 1 — высокий, 0 — обычный (меньше мешает обработке)",
                 "Viewfinder GPU context priority: 1 high, 0 normal (gets less in the way of processing)")));
         // P353: the developed RAW viewfinder's tone rate while a shot is processed
-        k.add(n(vf, "vf_busy_fps", "15", Lang.t("RAW-видоискатель во время обработки снимка: не больше стольких кадров в секунду (обработка не делит GPU с ним); 0 — каждый кадр",
+        k.add(n(vf, "vf_busy_fps", "25", Lang.t("RAW-видоискатель во время обработки снимка: не больше стольких кадров в секунду (обработка не делит GPU с ним); 0 — каждый кадр",
                 "RAW viewfinder while a shot is processed: at most this many frames a second (processing does not share the GPU with it); 0 = every frame")));
+        // P723: the ISP viewfinder's draw rate while a shot is processed (MainRenderer.onFrameAvailable)
+        k.add(n(vf, "vf_busy_isp_fps", "25", Lang.t("ISP-видоискатель во время обработки снимка: не больше стольких отрисовок в секунду; 0 — каждый кадр",
+                "ISP viewfinder while a shot is processed: at most this many draws a second; 0 = every frame")));
         k.add(s(vf, "vf_isp_latch", true, Lang.t("RAW-видоискатель: кадр ISP только принимается, без перерисовки того же RAW-кадра (выкл — перерисовка на каждый кадр ISP)",
                 "RAW viewfinder: an ISP frame is only latched, the same RAW frame is not drawn again (off: a redraw for every ISP frame)")));
         // P365: the photo's tone in one fused pass from the RAW texture (MainRenderer / LiveWhyTone.drawFused), the last RAW frame
@@ -512,6 +515,15 @@ public final class DevKeys {
         // P668: the paced post's bands sized to this GPU time (Adreno 650: one 256-row band of the tone's combine ~80 - 140 ms)
         k.add(n(post, "post_band_ms", null, Lang.t("Время GPU на одну полосу обработки, мс (медленные GPU делят проход на более узкие полосы, видоискатель ждёт меньше): пусто — 10; 0 — полосы по 256 строк, как раньше",
                 "GPU time of one processing band, ms (slow GPUs split a pass into narrower bands, the viewfinder waits less): empty: 10; 0: 256-row bands as before")));
+        // P727: level 1 of the fusion pyramid's planes in one pass (three targets; the same sums, bit for bit)
+        k.add(s(post, "lpyr_mrt", true, Lang.t("Пирамида слияния: первый уровень всех трёх плоскостей за один проход (те же пиксели; выкл — три прохода, как раньше)",
+                "Fusion pyramid: level 1 of all three planes in one pass (the same pixels; off: three passes as before)")));
+        // P725: an RL stage of the luma sharpening as one compute pass (the same terms; the stores' rounding of the GPU aside)
+        k.add(s(post, "sharp_rl_cs", true, Lang.t("RL-резкость: все итерации стадии за один вычислительный проход вместо шести полных (те же вычисления; выкл — как раньше)",
+                "RL sharpening: all iterations of a stage in one compute pass instead of six full passes (the same computation; off: as before)")));
+        // P724: each band of a banded pass scissored to its viewport (the same pixels; a tiling GPU loads and stores only the band)
+        k.add(s(post, "post_scissor", true, Lang.t("Полосы обработки с ножницами по своей области (те же пиксели, тайловый GPU не перечитывает весь кадр на каждую полосу; выкл — как раньше)",
+                "Processing bands scissored to their own area (the same pixels; a tiling GPU does not reload the whole frame for every band; off: as before)")));
         k.add(s(post, "hybrid_why_rim_support", true, Lang.t("Пропуск пустых областей защиты граней перед тонмапингом", "Skip empty light-rim support before tone mapping")));
         k.add(s(post, "hybrid_why_edge_luma_cache", true, Lang.t("Кэш исходной яркости для защиты резких границ", "Cache scene luminance for sharp-edge protection")));
         // P671: the photo's combine reads its one-channel windows as textureGather blocks (bit for bit, tools/check_combine_gather.py)

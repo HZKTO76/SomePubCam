@@ -187,13 +187,17 @@ public class HybridFinalResize extends Node {
     /** Rows {@code y0} .. {@code y0 + count - 1} of the bound target, in the paced bands of GLProg.drawBlocks. */
     private void rows(int y0, int count) {
         final String name = shaderProg.activeName;
-        for (int y = y0, end = y0 + count; y < end; ) {
-            final int r = Math.min(end - y, com.scamera.app.processing.opengl.GpuPace.bandRows(name, target.x,
-                    com.scamera.app.processing.opengl.GLDrawParams.TILE_ROWS));
-            android.opengl.GLES30.glViewport(0, y, target.x, r);
-            shaderProg.draw();
-            com.scamera.app.processing.opengl.GpuPace.flushBlock(name, (long) target.x * r);
-            y += r;
+        try {
+            for (int y = y0, end = y0 + count; y < end; ) {
+                final int r = Math.min(end - y, com.scamera.app.processing.opengl.GpuPace.bandRows(name, target.x,
+                        com.scamera.app.processing.opengl.GLDrawParams.TILE_ROWS, com.scamera.app.processing.opengl.GpuPace.WIDE_BAND_ROWS));
+                com.scamera.app.processing.opengl.GLProg.band(0, y, target.x, r);
+                shaderProg.draw();
+                com.scamera.app.processing.opengl.GpuPace.flushBlock(name, (long) target.x * r);
+                y += r;
+            }
+        } finally {
+            com.scamera.app.processing.opengl.GLProg.bandsDone();
         }
     }
 }

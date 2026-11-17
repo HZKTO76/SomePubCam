@@ -3807,6 +3807,7 @@ public class CaptureController {
         if (mFullResSession && NubiaRemosaicProbe.running(physicalID)) NubiaFullRes.watchMaxRes(physicalID, nubiaPerShot()); // P626
         else NubiaFullRes.watchSession(physicalID, modePick);
         // P586: the OnePlus 16's sessions watch their reported mode too (an ISZ / DCG / DAG row, a native FULLRES mode, or the own one)
+        OplusIsz.exposureFloor(characteristics); // P722: an ISZ row's results below the sensor's shortest exposure fail it
         OplusIsz.watchSession(physicalID, modePick, sdkFullRes && VivoSdkFullRes.oppo() ? VivoSdkFullRes.profile(mVivoSdkCameraId) : null);
         // P593: a DCG / DAG row has to prove its depth by its frames (the tele's row 2 ran as a plain 10-bit row, log 2026-11-09)
         OplusDcg.watchSession(physicalID, modePick, characteristics);

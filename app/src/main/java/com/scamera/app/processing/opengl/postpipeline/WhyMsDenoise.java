@@ -325,12 +325,16 @@ public final class WhyMsDenoise extends Node {
      * GPU gets bands of ~10 ms of its measured time of {@code pass}).
      */
     private void pacedRows(String pass, int y, int rows, int w) {
-        for (int r = 0; r < rows; ) {
-            final int n = Math.min(rows - r, com.scamera.app.processing.opengl.GpuPace.bandRows(pass, w, rows - r));
-            android.opengl.GLES30.glViewport(0, y + r, w, n);
-            shaderProg.draw();
-            com.scamera.app.processing.opengl.GpuPace.flushBlock(pass, (long) w * n);
-            r += n;
+        try {
+            for (int r = 0; r < rows; ) {
+                final int n = Math.min(rows - r, com.scamera.app.processing.opengl.GpuPace.bandRows(pass, w, rows - r));
+                com.scamera.app.processing.opengl.GLProg.band(0, y + r, w, n);
+                shaderProg.draw();
+                com.scamera.app.processing.opengl.GpuPace.flushBlock(pass, (long) w * n);
+                r += n;
+            }
+        } finally {
+            com.scamera.app.processing.opengl.GLProg.bandsDone();
         }
     }
 
@@ -368,10 +372,18 @@ public final class WhyMsDenoise extends Node {
 
     private void drawRegion(GLTexture target, int y, int height) {
         target.renderInto();
-        for (int row = 0; row < height; row += 256) {
-            android.opengl.GLES30.glViewport(0, y + row, target.size.x, Math.min(256, height - row));
-            shaderProg.draw();
-            com.scamera.app.processing.opengl.GpuPace.block(); // P616: a submission per block while paced
+        try {
+            final String pass = shaderProg.activeName;
+            for (int row = 0; row < height; ) {
+                // P724: sized by the program's GPU time once measured (256 rows before, and without the pacer)
+                final int n = Math.min(height - row, com.scamera.app.processing.opengl.GpuPace.bandRows(pass, target.size.x, 256, com.scamera.app.processing.opengl.GpuPace.WIDE_BAND_ROWS));
+                com.scamera.app.processing.opengl.GLProg.band(0, y + row, target.size.x, n);
+                shaderProg.draw();
+                com.scamera.app.processing.opengl.GpuPace.block(pass, (long) target.size.x * n); // P616: a submission per block while paced
+                row += n;
+            }
+        } finally {
+            com.scamera.app.processing.opengl.GLProg.bandsDone();
         }
         android.opengl.GLES30.glFlush();
     }
