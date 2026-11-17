@@ -4,7 +4,7 @@ umask 077
 
 # Published as ci/public-build.sh in Xxdl, outside the private source checkout.
 mode=${1:-}
-case "$mode" in resolve|checkout|host|build|stage|release|telegram|cleanup|self-test) ;; *) exit 2 ;; esac
+case "$mode" in resolve|checkout|host|build|stage|release|await-host|telegram|cleanup|self-test) ;; *) exit 2 ;; esac
 
 check_stage() {
     python3 - "$1" <<'PY'
@@ -174,6 +174,13 @@ if [[ "$mode" == stage || "$mode" == release ]]; then
             --title "PronCam $SCAMERA_VERSION_CODE" --notes 'Изменение названия и оптимизация приложения.' "$output"/*
         printf 'Checked APK published in Releases.\n' >&9
     fi
+    exit
+fi
+
+if [[ "$mode" == await-host ]]; then
+    check_stage "$output"
+    python3 "$GITHUB_WORKSPACE/ci/await-host.py" 9>&-
+    printf 'All host checks approved APK publication.\n' >&9
     exit
 fi
 

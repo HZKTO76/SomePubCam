@@ -42,6 +42,7 @@ jobs:
         run: |
           bash ci/public-build.sh self-test
           python3 ci/telegram-build.py --self-test
+          python3 ci/await-host.py --self-test
       - id: source
         name: Select source revision
         env:
@@ -91,11 +92,12 @@ jobs:
         run: bash ci/public-build.sh cleanup
 
   build:
-    needs: [source, host]
+    needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -128,6 +130,10 @@ jobs:
           SCAMERA_KEYSTORE_PASSWORD: ${{ secrets.SCAMERA_SIGNING_PASSWORD }}
           GRADLE_ACTIONS_SKIP_BUILD_RESULT_CAPTURE: 'true'
         run: bash ci/public-build.sh build
+      - name: Require successful host verification before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ci/public-build.sh await-host
       - name: Check publication files
         run: bash ci/public-build.sh stage
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
