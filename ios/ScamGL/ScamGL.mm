@@ -114,6 +114,7 @@ struct Context {
     id<MTLCommandBuffer> cb = nil;
     id<MTLComputeCommandEncoder> compute = nil;
     std::vector<id<MTLCommandBuffer>> inFlight;
+    int encoded = 0;                    // dispatches / draws in the open command buffer (kCommitEvery)
     GLenum error = GL_NO_ERROR;
     GLuint program = 0;
     std::unordered_map<GLenum, GLuint> bound;
@@ -151,8 +152,13 @@ void fail(GLenum error) {
 
 // ---- command stream ----
 
-// SCAMGL_SERIAL_DISPATCH (replays): the serial encoder of before, for an A/B of the concurrent one
-const bool kConcurrentDispatch = getenv("SCAMGL_SERIAL_DISPATCH") == nullptr;
+// The serial compute encoder (GL's order: every dispatch after the previous one) - the concurrent one (batch 10) left the shared
+// merge's passes that lean on that order racing on the iPhone 15 Pro (owner 2026-11-17: «Качество» photos with coloured columns at a
+// tile's period); SCAMGL_CONCURRENT_DISPATCH (replays) for the A/B
+const bool kConcurrentDispatch = getenv("SCAMGL_CONCURRENT_DISPATCH") != nullptr;
+// A command buffer is committed after this many dispatches / draws: one buffer holding a whole merge ran past the GPU's time limit
+// on the iPhone 15 Pro («HYBRID GPU strip 0 not written: a dropped or faulted GPU job»); the queue keeps their order
+constexpr int kCommitEvery = 16;
 // SCAMGL_SYNC_MAPS (replays): an unsynchronised write map waits for the buffer's last use as a synchronised one does
 const bool kSyncMaps = getenv("SCAMGL_SYNC_MAPS") != nullptr;
 
@@ -225,6 +231,7 @@ void submit(Context& c, bool wait) {
         [c.cb commit];
         c.inFlight.push_back(c.cb);
         c.cb = nil;
+        c.encoded = 0;
     }
     if (wait) {
         for (id<MTLCommandBuffer> b : c.inFlight) {
@@ -923,6 +930,7 @@ void dispatch(Context& c, GLuint gx, GLuint gy, GLuint gz, Buffer* indirect, GLi
         if (gx == 0 || gy == 0 || gz == 0) return;
         [e dispatchThreadgroups:MTLSizeMake(gx, gy, gz) threadsPerThreadgroup:local];
     }
+    if (++c.encoded >= kCommitEvery) submit(c, false);
 }
 
 GLuint newName() { return gNextName++; }
@@ -1590,6 +1598,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     const MTLPrimitiveType type = mode == GL_TRIANGLE_STRIP ? MTLPrimitiveTypeTriangleStrip : MTLPrimitiveTypeTriangle;
     [e drawPrimitives:type vertexStart:NSUInteger(first) vertexCount:NSUInteger(count)];
     [e endEncoding];
+    if (++c->encoded >= kCommitEvery) submit(*c, false);
 }
 
 // ---- shaders and programs ----

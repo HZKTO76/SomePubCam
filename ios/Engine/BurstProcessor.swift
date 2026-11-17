@@ -330,6 +330,7 @@ enum BurstProcessor {
             var extra: [String: Any] = LensShading.wire(lscKey).map { ["ios_lsc_map": ["s", $0]] } ?? [:]
             if let diagnostics { extra.merge(ShotDiagnostics.extra(diagnostics)) { _, new in new } }
             prepMs = ms(since: started) // SHOT SUMMARY prep: the levels, the NCH's end, the facts, the lab files, the faces
+            SCAMShot.breadcrumb("merge (\(frames.count) frames \(burst.width)x\(burst.height))")
             photo = try Perf.interval("merge + post") {
                 try SCAMShot.processBurst(atPath: nch.path, dng: burst.dng, settings: PostSettings.json(extra: extra),
                                           faces: faces.boxes.map { NSNumber(value: $0) }, facesDetected: faces.detected, front: burst.front,

@@ -33,6 +33,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// The Android photo route of an SHDR shot (Engine/post/ShotRun.hpp): the merge and the post pipeline on the GPU (ScamGL).
 @interface SCAMShot : NSObject
+/// The processing's breadcrumb (Documents/Log/.inflight: the stage, the time, the footprint and the memory left), written as each stage
+/// starts and removed when the shot is done (empty stage): a run that ends without removing it (a crash, iOS ending the app for its
+/// memory) is found at the next launch (CameraModel: «the previous run ended during …»)
++ (void)breadcrumb:(NSString *)stage;
 /// burst: the NCH file of the frames; dng: the first frame's DNG; settings: the app's preferences as the lab json's
 /// {"prefs": {key: [type, value]}, "dev": {key: number}}; faces: «Портрет»'s face boxes as Android's Parameters.portraitFaces
 /// (left, top, right, bottom, normalised, in the unrotated RAW buffer; four numbers a face, at most five faces), facesDetected:

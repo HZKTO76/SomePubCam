@@ -10,6 +10,9 @@
 #include "post/ShotRun.hpp"
 
 #import <CoreGraphics/CoreGraphics.h>
+#include <mach/mach.h>
+#include <os/proc.h>
+#include <unistd.h>
 #import <ImageIO/ImageIO.h>
 
 #include <EGL/egl.h>
@@ -194,6 +197,19 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
 
 @implementation SCAMShot
 
++ (void)breadcrumb:(NSString *)stage {
+    static NSString *path = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+                              stringByAppendingPathComponent:@"Log"] stringByAppendingPathComponent:@".inflight"];
+    if (stage.length == 0) { unlink(path.fileSystemRepresentation); return; }
+    task_vm_info_data_t info;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    const unsigned long long footprint = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) == KERN_SUCCESS
+        ? (unsigned long long)(info.phys_footprint >> 20) : 0;
+    NSString *line = [NSString stringWithFormat:@"%@ (%@, footprint %llu MB, %llu MB left to the app)", stage, [NSDate date], footprint,
+                      (unsigned long long)(os_proc_available_memory() >> 20)];
+    [line writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:nil];
+}
+
 + (SCAMPhoto *)processBurstAtPath:(NSString *)burst dng:(NSData *)dng settings:(NSString *)settings
                             faces:(NSArray<NSNumber *> *)faces facesDetected:(BOOL)facesDetected front:(BOOL)front
                          dngFacts:(NSDictionary<NSString *, id> *)dngFacts rawOnly:(BOOL)rawOnly
@@ -270,6 +286,7 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
             }
             *nodeStart = {name, now};
             scamgl_label(name.c_str());
+            if (!name.empty()) [SCAMShot breadcrumb:[NSString stringWithFormat:@"post node %s", name.c_str()]];
         };
         struct StageReset { ~StageReset() { scam_post::postStageHook() = nullptr; scamgl_label(""); scamgl_gpu_timing(0); } } stageReset;
         scam_post::ShotOutput out = scam_post::runShot(burst.UTF8String, dngBytes, job.UTF8String, shaders.UTF8String, log, makePostContext,

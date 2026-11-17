@@ -540,6 +540,8 @@ final class CameraModel {
             SessionLog.i("SHDR", "processing resumes: the app is on screen")
         }
         setStage(id, .processing)
+        SCAMShot.breadcrumb("processing: prep (\(memoryFootprint()))")
+        defer { SCAMShot.breadcrumb("") }
         meters.startProcessing()
         defer { meters.endProcessing() }
         do {

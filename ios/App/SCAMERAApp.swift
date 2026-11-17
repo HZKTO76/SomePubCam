@@ -20,6 +20,13 @@ struct SCAMERAApp: App {
                         SettingsStore.shared.set("scamera_full_debug", true)
                     }
                     SessionLog.applySetting()
+                    // a shot's processing that never finished: the app was ended in it (a crash or iOS taking the memory back)
+                    let inflight = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                        .appendingPathComponent("Log").appendingPathComponent(".inflight")
+                    if let last = try? String(contentsOf: inflight, encoding: .utf8) {
+                        SessionLog.w("App", "the previous run ended during a shot's processing: \(last)")
+                        try? FileManager.default.removeItem(at: inflight)
+                    }
                     DeviceTurn.shared.start()
                     await camera.start()
                     // P470: the GPU programs before the first shot (a dialog after an install or an update)

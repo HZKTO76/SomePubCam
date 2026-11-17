@@ -1065,3 +1065,10 @@ stays a replay switch (off in the app).
   4032-wide RAW (192 zero columns at the right); the zero padding is cut off. (4) ProRAW at «Детально · 48 Мп»: isAppleProRAWEnabled was
   never on after the preset change (enabled=false), and the shot went through the 12 MP SHDR merge; now ProRAW follows the RAW kind on
   every configuration and full resolution + ProRAW takes one ProRAW frame at the full size (the agreed route; Bayer RAW is 12 MP).
+- Owner's iPhone 15 Pro logs 2026-11-15 (build e774fde6): «Качество» shots failed with «HYBRID GPU strip N not written: a dropped or faulted
+  GPU job» / «readback GL error=1285», one photo had coloured columns at a tile's period, and the app ended 4 times 5-8 s after a shot
+  was queued (during its merge; 3 of them right after a launch or a return from the background). ScamGL changes: a command buffer is
+  committed every 16 dispatches / draws (a whole merge in one buffer can pass the GPU's time limit), the compute encoder is serial again
+  (batch 10's concurrent encoder: the shared merge's passes that lean on GL's order may race on the A17; SCAMGL_CONCURRENT_DISPATCH for
+  the A/B). A failed command buffer's Metal reason is in the shot's error (9e2ff479). A processing breadcrumb (Documents/Log/.inflight:
+  stage, post node, footprint, memory left) is reported at the next launch when a run ended inside a shot.
