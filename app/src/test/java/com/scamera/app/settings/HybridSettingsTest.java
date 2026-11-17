@@ -1781,7 +1781,7 @@ public class HybridSettingsTest {
         for (String line : new String[]{"2 0.65", "3 0.65", "4 0.65", "8 0.45", "16 0.22", "32 0.08", "64 0.0"})
             assertTrue(tuning, tuning.contains("\nfastMotionDenoise" + line + "\n"));
 
-        manager.set("default_scope", prefix + "3", 73);
+        manager.set("default_scope", prefix + "3", "73");
         tuning = PreferenceKeys.hybridTuningText();
         assertTrue(tuning, tuning.contains("\nfastMotionDenoise3 0.73\n"));
         assertEquals(tuning.indexOf("fastMotionDenoise3 "), tuning.lastIndexOf("fastMotionDenoise3 "));
