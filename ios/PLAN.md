@@ -1046,3 +1046,8 @@ stays a replay switch (off in the app).
   gain for the four sites). To check on the phone: an evenly lit plain surface, corners against the centre.
 - Plan (owner): manual ISO: the shutter follows the light (as wanted); manual shutter: the ISO does not follow - it should (shutter
   priority, as Android's ParamController).
+- Owner's log 2026-11-15 19:41 («звук затвора, склейка через ~4 с и не то, на что навёл»): press -> last frame 7.2 s = 50 N in 2.3 s + extras
+  0.6 s + ~4 s waiting for the discarded NCH writes (fixed in df41feb9); the AE followed the camera as it moved and the ring rule kept the
+  8 newest N - the series' end, where the camera had gone. Fixed: the N frames' times are mirrored about the first one (the newest N is the
+  press's, as Android's ring), the first 4 N are taken before the ultrashort / bracketed frames (Android's order around the base), the
+  rest after; the AE is held for the series (df41feb9). Without RAW zero shutter lag the N still span ~1-2.5 s after the press.

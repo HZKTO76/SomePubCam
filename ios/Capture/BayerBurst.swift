@@ -134,39 +134,21 @@ extension PhotoCapture {
             }
         } else {
             // the camera's auto exposure, one RAW frame a request, no bracket: the requests zero shutter lag may serve with frames
-            // exposed before the press (isZeroShutterLagEnabled; brackets and manual exposures never get it)
-            burst.report.append("N plan: \(count) single auto-exposure RAW requests, \(ZslSingles.window) in flight, zero shutter lag "
+            // exposed before the press (isZeroShutterLagEnabled; brackets and manual exposures never get it). The press's moment
+            // first (ZslSingles.head frames: the base's candidates), the ultrashort / bracketed frames right after them, then the
+            // rest of the N - Android's order around its base (the ring's newest frame at the press, the brackets after it)
+            burst.report.append("N plan: \(count) single auto-exposure RAW requests, \(ZslSingles.window) in flight, the first \(min(count, ZslSingles.head)) "
+                                + "before the ultrashort / bracketed frames, zero shutter lag "
                                 + (output.isZeroShutterLagSupported ? (output.isZeroShutterLagEnabled ? "on" : "off") : "not supported")
                                 + ", responsive capture " + (output.isResponsiveCaptureEnabled ? "on" : "off"))
-            let got = try await captureSingles(count: count, bayer: bayer, device: device, burst: &burst, clock: &clock, wide: wide)
+            let got = try await captureSingles(count: min(count, ZslSingles.head), withHevc: true, bayer: bayer, device: device,
+                                               burst: &burst, clock: &clock, wide: wide)
             lost += got.lost
-            lastN = got.newest
-        }
-        burst.report.append(ZslSingles.timing(burst.frames, pressNs: pressNs))
-        burst.report.append("N delivered: " + Self.exposures(burst.frames))
-        let delivered = burst.frames.count
-        // Android's ring selection on the delivered N frames (the camera may give another exposure than asked)
-        let selection = NormalSelect.select(burst.frames.enumerated().map {
-            NormalSelect.Frame(index: $0.offset, timestampNs: $0.element.timestampNs, exposureNs: $0.element.exposureNs, iso: Int($0.element.iso))
-        }, requested: count)
-        burst.report += selection.log
-        if selection.keep.count < burst.frames.count {
-            burst.frames = selection.keep.map { burst.frames[$0] }
-            burst.stream?.discard() // the planes of the frames left out are in it: the NCH is written after the capture
-            burst.stream = nil
-        }
-        // the base's metadata (Android: levels, neutral, matrices, noise of the base): the newest N frame's DNG, the base's
-        // candidates are the newest N (HybridSelect)
-        if let lastN, burst.frames.count > 1, let newest = burst.frames.indices.max(by: { burst.frames[$0].timestampNs < burst.frames[$1].timestampNs }),
-           burst.frames[newest].timestampNs == Self.stampNs(lastN), newest != 0, let dng = lastN.fileDataRepresentation() {
-            burst.dng = dng
-            burst.dngFrame = newest
-            burst.report.append("metadata (DNG) of N frame \(newest), the newest")
         }
         lastN = nil
-        let normals = burst.frames.count
+        // the ultrashort / bracketed frames (HybridPlan from the newest N frame so far: the press's moment)
         var extras = ExtrasTally()
-        if normals > 0, let plan = extrasPlan(for: burst, device: device, limits: limits) {
+        if !burst.frames.isEmpty, let plan = extrasPlan(for: burst, device: device, limits: limits) {
             burst.report.append(plan.description)
             extras.planned = plan.requests.count
             if !plan.requests.isEmpty {
@@ -174,13 +156,47 @@ extension PhotoCapture {
                                     limits: limits, burst: &burst, clock: &clock, wide: wide, tally: &extras, log: &log)
             }
         }
+        // the rest of the N frames
+        let headDone = burst.frames.filter { $0.role == NchWriter.roleNormal }.count
+        if ettr == nil && count > ZslSingles.head && headDone > 0 {
+            let got = try await captureSingles(count: count - min(count, ZslSingles.head), withHevc: false, bayer: bayer, device: device,
+                                               burst: &burst, clock: &clock, wide: wide)
+            lost += got.lost
+        }
         let lastFrameMs = ms(since: pressed)
+        let nFrames = burst.frames.filter { $0.role == NchWriter.roleNormal }
+        burst.report.append(ZslSingles.timing(nFrames, pressNs: pressNs))
+        burst.report.append("N delivered: " + Self.exposures(nFrames))
+        // every frame's time mirrored about the first N frame (the press's moment): as on Android the newest N frame is the press's,
+        // so the ring rule (NormalSelect: the newest exposure) and the merge's base (HybridSelect: the sharpest of the newest four N
+        // within 205 ms) take the frames at the press, not the series' end (owner 2026-11-15: the camera moved after the sound and
+        // the merge showed where it went)
+        if let pivot = burst.frames.first(where: { $0.role == NchWriter.roleNormal })?.timestampNs {
+            for i in burst.frames.indices { burst.frames[i].timestampNs = 2 * pivot - burst.frames[i].timestampNs }
+        }
+        let delivered = nFrames.count
+        // Android's ring selection on the delivered N frames (the camera may give another exposure than asked); the others stay
+        let nIndices = burst.frames.indices.filter { burst.frames[$0].role == NchWriter.roleNormal }
+        let selection = NormalSelect.select(nIndices.map {
+            NormalSelect.Frame(index: $0, timestampNs: burst.frames[$0].timestampNs, exposureNs: burst.frames[$0].exposureNs,
+                               iso: Int(burst.frames[$0].iso))
+        }, requested: count)
+        burst.report += selection.log
+        if selection.keep.count < nIndices.count {
+            let keep = Set(selection.keep)
+            let dngKept = keep.contains(0)
+            burst.frames = burst.frames.indices.filter { burst.frames[$0].role != NchWriter.roleNormal || keep.contains($0) }.map { burst.frames[$0] }
+            burst.stream?.discard() // the planes of the frames left out are in it: the NCH is written after the capture
+            burst.stream = nil
+            if !dngKept { burst.report.append("metadata (DNG) of the first N frame, left out of the merge") }
+        }
+        if burst.dng.isEmpty { burst.report.append("the first frame gave no DNG: the shot's metadata is missing") }
+        let normals = burst.frames.filter { $0.role == NchWriter.roleNormal }.count
         burst.report += log
         finish(&burst)
         let es = burst.frames.filter { $0.role == NchWriter.roleUltrashort }.count
         let l = burst.frames.filter { $0.role == NchWriter.roleBracketed }.count
-        let n = burst.frames.filter { $0.role == NchWriter.roleNormal }.count
-        burst.report.append("capture summary: N \(n) of \(count) (\(lost) lost, \(delivered - normals) left out), "
+        burst.report.append("capture summary: N \(normals) of \(count) (\(lost) lost, \(delivered - normals) left out), "
                             + "ES \(es), L \(l) (planned \(extras.planned): \(extras.lost) lost, \(extras.reassigned) reassigned, \(extras.dropped) dropped), "
                             + "press -> last frame \(lastFrameMs) ms" + (ettr != nil ? " (ETTR meter frame first)" : ""))
         burst.report.append("burst \(burst.frames.count) frames (\(normals) N, \(burst.frames.count - normals) ultrashort / bracketed) in \(ms(since: started)) ms, per request \(perRequest)"
@@ -196,8 +212,8 @@ extension PhotoCapture {
     /// once; the frames enter the burst in request order, a frame stamped as one already taken (the same ZSL frame twice) is
     /// dropped. The first request carries the HEVC photo (the EXIF, the merge-failure fallback). Returns the lost requests and the
     /// newest frame's photo (its DNG is the base's metadata).
-    private func captureSingles(count: Int, bayer: OSType, device: AVCaptureDevice, burst: inout BayerBurst, clock: inout BurstClock,
-                                wide: Bool) async throws -> (lost: Int, newest: AVCapturePhoto?) {
+    private func captureSingles(count: Int, withHevc: Bool, bayer: OSType, device: AVCaptureDevice, burst: inout BayerBurst,
+                                clock: inout BurstClock, wide: Bool) async throws -> (lost: Int, newest: AVCapturePhoto?) {
         func request(withProcessed: Bool) -> AVCapturePhotoSettings {
             let processed: [String: Any]? = withProcessed ? [AVVideoCodecKey: AVVideoCodecType.hevc] : nil
             let settings = AVCapturePhotoSettings(rawPixelFormatType: bayer, processedFormat: processed)
@@ -223,7 +239,7 @@ extension PhotoCapture {
         let started = Date()
         var first: [AVCapturePhoto]
         do {
-            first = try await capturePhotos(request(withProcessed: true), timeout: timeout)
+            first = try await capturePhotos(request(withProcessed: withHevc), timeout: timeout)
         } catch CameraError.captureException(let reason) {
             burst.report.append("N: the RAW + HEIC request refused (\(reason)), RAW only")
             first = try await capturePhotos(request(withProcessed: false), timeout: timeout)
@@ -525,8 +541,8 @@ extension PhotoCapture {
 
     /// The newest frame is 0 ms, earlier ones negative (as Android's orderMs; the merge's own orderMs come from HybridSelect)
     private func finish(_ burst: inout BayerBurst) {
-        if let newest = burst.frames.map(\.orderMs).max() {
-            for i in burst.frames.indices { burst.frames[i].orderMs -= newest }
+        if let newest = burst.frames.map(\.timestampNs).max() {
+            for i in burst.frames.indices { burst.frames[i].orderMs = Float(Double(burst.frames[i].timestampNs - newest) / 1e6) }
         }
     }
 }
@@ -585,6 +601,8 @@ enum NoiseEstimate {
 /// The N frames as single auto-exposure RAW requests (captureSingles): how many are issued at once, and the frames' times
 enum ZslSingles {
     static let window = 4
+    /// The N frames taken before the ultrashort / bracketed ones (the press's moment: HybridSelect's base candidates)
+    static let head = 4
 
     final class Photos: @unchecked Sendable {
         let photos: [AVCapturePhoto]

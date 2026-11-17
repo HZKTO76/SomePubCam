@@ -2,6 +2,10 @@
 
 English copy of ios/CHANGELOG.md; the build post carries both, section for section (same version, same place).
 
+## 0.3.5 — the shot at the press
+- The shot is built on the frames at the press, not at the series' end: moving the camera during the capture keeps what was aimed at.
+- Lens vignetting is corrected from the camera's data.
+
 ## 0.3.4 — capture fixes
 - «Спорт»: the shutter is again no longer than the one set (with «Мерцание ламп: Авто» it was rounded to 1/100).
 - The exposure no longer changes in the middle of a series; the series no longer hangs for seconds.
