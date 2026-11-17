@@ -13,7 +13,7 @@ report_failure() {
         IFS= read -r phase < "$1" || true
     fi
     case "$phase" in
-        controller|source|checkout|preflight|gradle|native-packaging|packaging|signature|host|host-gate|publication|telegram) ;;
+        controller|source|checkout|preflight|gradle|native-packaging|native-elf|native-xml|native-r8|packaging|signature|host|host-gate|publication|telegram) ;;
         *) phase=controller ;;
     esac
     if [[ ! "$result" =~ ^[1-9][0-9]{0,2}$ ]] || (( result > 255 )); then result=1; fi
@@ -98,7 +98,7 @@ MOCK
     if grep -q PRIVATE_SOURCE_CANARY "$fixture/public.log"; then exit 1; fi
     grep -q PRIVATE_SOURCE_CANARY "$fixture/proncam-private-host.log"
     grep -Fxq '::error::PronCam stage failed (phase=host; exit=17); private diagnostics were not published.' "$fixture/public.log"
-    for phase in controller source checkout preflight gradle native-packaging packaging signature host host-gate publication telegram; do
+    for phase in controller source checkout preflight gradle native-packaging native-elf native-xml native-r8 packaging signature host host-gate publication telegram; do
         printf '%s\n' "$phase" > "$fixture/phase"
         report_failure "$fixture/phase" 19 > "$fixture/phase-public.log"
         grep -Fxq "::error::PronCam stage failed (phase=$phase; exit=19); private diagnostics were not published." "$fixture/phase-public.log"
