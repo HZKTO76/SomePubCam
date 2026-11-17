@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/prctl.h>
 #include <signal.h>
 #include <stdio_ext.h> // __fpending (bionic API 23+)
 #include <iostream>
@@ -40,6 +41,9 @@ int main(int argc,char** argv) {
     // A fatal signal writes "WORKER CRASH: ..." lines (signal, thread, stage, pc / lr with library offsets) before the worker dies
     // (vivo X200 Pro, owner's log 2026-10-07: 14 SIGSEGV exits, none naming the crash site).
     worker_crash::install();
+    // P730: a 50 us timer slack whatever the spawning thread had (forked from a thread in Android's background group: 40 ms,
+    // every short sleep of the worker's waits that long)
+    if(prctl(PR_SET_TIMERSLACK,50000UL,0,0,0)!=0){} // best effort
     try {
         worker_log("SCAM Neural native executable v31 (SHDR merge; CPU/GPU); root="+std::to_string(geteuid()));
         if(argc==2 && std::string(argv[1])=="--transport-check") {

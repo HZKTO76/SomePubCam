@@ -406,9 +406,11 @@ public class CaptureController {
     // camera already takes the next one. No count limit: each queued shot holds
     // ~175 MB of RAW, so only free system memory bounds the queue.
     private static final ExecutorService SCAM_PROCESSING = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
-        Thread thread = new Thread(r, "SCAMERA-SCAM-processing");
-        thread.setPriority(Thread.NORM_PRIORITY - 1);
-        return thread;
+        // P730: nice 9 (ProcessingPriority), not Java priority 4 (nice 10, Android's background group: 40 ms timer slack)
+        return new Thread(() -> {
+            com.scamera.app.processing.ProcessingPriority.apply();
+            r.run();
+        }, "SCAMERA-SCAM-processing");
     });
     private static final java.util.concurrent.atomic.AtomicInteger sScamPending = new java.util.concurrent.atomic.AtomicInteger();
     /**

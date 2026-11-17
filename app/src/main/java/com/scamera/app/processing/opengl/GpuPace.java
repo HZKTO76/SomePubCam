@@ -129,6 +129,8 @@ public final class GpuPace {
         private final int minBandRows;
         private final ArrayDeque<Block> pending = new ArrayDeque<>();
         long fences, waits, waitedNs, maxWaitNs, givenUp, finishes, finishNs;
+        /** P730: the polls' sleeps - how many and how long they really took (a timer slack shows here). */
+        long pauses, pausedNs;
         /** P668: when the last block was seen done (its fence signalled), 0 before any. */
         private long lastDoneNs;
         long measured;
@@ -319,7 +321,10 @@ public final class GpuPace {
                     givenUp++;
                     break;
                 }
+                final long p0 = gpu.nanoTime();
                 gpu.pause(POLL_NS);
+                pausedNs += gpu.nanoTime() - p0;
+                pauses++;
             }
             return true;
         }
@@ -341,8 +346,10 @@ public final class GpuPace {
                                 .append(" rows x").append(e.getValue()[1]);
                 }
             }
-            return String.format(Locale.ROOT, "post GPU pace: at most %d blocks in flight, %d fences, %d waits %.0f ms (max %.1f), %d finishes polled %.0f ms%s%s%s",
-                    inFlight, fences, waits, waitedNs / 1e6, maxWaitNs / 1e6, finishes, finishNs / 1e6,
+            return String.format(Locale.ROOT, "post GPU pace: at most %d blocks in flight, %d fences, %d waits %.0f ms (max %.1f), %d finishes polled %.0f ms"
+                            + ", %d poll sleeps of %.2f ms asked: %.2f ms each%s%s%s",
+                    inFlight, fences, waits, waitedNs / 1e6, maxWaitNs / 1e6, finishes, finishNs / 1e6, pauses, POLL_NS / 1e6,
+                    pauses > 0 ? pausedNs / 1e6 / pauses : 0.0,
                     givenUp > 0 ? ", " + givenUp + " fences given up after " + GIVE_UP_NS / 1_000_000 + " ms" : "",
                     unpaced > 0 ? ", " + unpaced + " blocks unpaced (the viewfinder paused, P685)" : "", bands);
         }
@@ -485,6 +492,12 @@ public final class GpuPace {
 
     /** The post run on this thread starts (its context current): pacing on as the setting and the GPU say. */
     public static void begin() {
+        // P730: the post thread's nice value and timer slack (40 ms in Android's background group: every poll sleep that long)
+        try {
+            Log.i(TAG, "post thread nice " + android.os.Process.getThreadPriority(android.os.Process.myTid()) + ", timer slack "
+                    + com.scamera.app.processing.ProcessingPriority.timerSlackNs() / 1000 + " us");
+        } catch (RuntimeException | LinkageError ignored) {
+        }
         final Pacer old = CURRENT.get();
         if (old != null) old.close();
         CURRENT.remove();

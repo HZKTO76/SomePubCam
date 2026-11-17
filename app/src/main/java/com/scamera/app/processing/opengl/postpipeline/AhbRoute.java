@@ -90,6 +90,7 @@ final class AhbRoute implements Closeable {
     synchronized void start(long bytes) {
         if (sender != null) return;
         sender = new Thread(() -> {
+            com.scamera.app.processing.ProcessingPriority.apply(); // P730: the processing thread's nice 9, not the background group
             final long t0 = System.nanoTime();
             long h = 0;
             try { h = HardwareRgb.allocate(bytes); } catch (LinkageError e) { h = 0; }
@@ -105,7 +106,6 @@ final class AhbRoute implements Closeable {
                     + (t1 - t0) / 1_000_000 + " ms, sent in " + (System.nanoTime() - t1) / 1_000_000 + " ms)";
         }, "SCAMERA-ahb-rgb");
         sender.setDaemon(true);
-        sender.setPriority(4); // the processing thread's (Java 4: nice 10), below the viewfinder
         sender.start();
     }
 

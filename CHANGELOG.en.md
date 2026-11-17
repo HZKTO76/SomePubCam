@@ -2,6 +2,10 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 (7) — Processing without stalls
+
+- Processing threads no longer fall into Android's background group. On some phones (the LG V50, for one) it made processing wait tens of times longer than needed between pieces of work while the GPU sat idle.
+
 ## 2026-11-17 (6) — Processing on older phones
 
 - On phones with Adreno 6xx and older GPUs (the LG V50, for one) sharpening is computed the previous way again: the new one was slower there, and the viewfinder stuttered during processing.

@@ -52,7 +52,7 @@ public final class DevKeys {
      * matrix of the Parameters, hybrid_clip_flags: a flag of the burst); or only the DNG reads them; or nothing does any more.
      */
     static final Set<String> NOT_IN_LAB = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-            "post_priority", "gpu_low_priority", "post_gpu_pace", "post_band_ms", "post_scissor", "lpyr_mrt", "jpeg_threads", "rgba_upload", "gl_warm_up", "gl_warm_up_merge", "release_async", "dng_async", "worker_watchdog",
+            "post_priority", "processing_nice", "gpu_low_priority", "post_gpu_pace", "post_band_ms", "post_scissor", "lpyr_mrt", "jpeg_threads", "rgba_upload", "gl_warm_up", "gl_warm_up_merge", "release_async", "dng_async", "worker_watchdog",
             "gl_warm_up_recipes", "ok_read", "worker_nice", "worker_prespawn", "worker_keep_ready", "thermal_async", "black_scan_bulk", "zero_copy_read", // P371: speed only
             "raw_crop_in_place", "prep_warm", // P625: speed only (the same samples)
             "oldstyle_threads", "oldstyle_read16", "exif_beside_encode", // P636: speed only (the same bytes)
@@ -507,6 +507,9 @@ public final class DevKeys {
         // P399: the lens's purple fringe on the dark side of an edge against a bright light
         k.add(n(post, "hybrid_highlight_purple", "1.0", Lang.t("Пересветы: фиолетовая и пурпурная кайма объектива на тёмной стороне края у яркого света (рамы окон, предметы на фоне неба) становится нейтральной; цветные источники (фиолетовые вывески, LED) и всё дальше 6 px от края как раньше; 0 — выкл.",
                 "Highlights: the lens's violet and magenta fringe on the dark side of an edge against a bright light (window frames, objects against the sky) goes neutral; coloured lights (violet signs, LEDs) and everything beyond 6 px of the edge as before; 0: off")));
+        // P730: the processing threads' nice value (9: out of Android's background group and its 40 ms timer slack)
+        k.add(n(post, "processing_nice", "9", Lang.t("Приоритет (nice) потоков обработки: 9 — вне фоновой группы Android (её таймер спит до 40 мс на каждый короткий сон); 10 — как раньше",
+                "Nice value of the processing threads: 9 keeps them out of Android's background group (its timer sleeps up to 40 ms for every short sleep); 10: as before")));
         k.add(n(post, "post_priority", null, Lang.t("Приоритет потока обработки (nice; пусто — не менять)", "Priority of the processing thread (nice; empty: unchanged)")));
         k.add(n(post, "gpu_low_priority", "2", Lang.t("Приоритет GPU-контекста обработки: 2 — средний, 1 — низкий, 0 — обычный", "Priority of the processing GPU context: 2 medium, 1 low, 0 normal")));
         // P616: GpuPace (the post's GPU queue a few blocks deep, so the viewfinder's draws are not stuck behind it)
