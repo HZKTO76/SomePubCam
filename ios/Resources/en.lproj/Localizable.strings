@@ -310,7 +310,7 @@
 "config.reset_note" = "Every setting goes back to the defaults. Saved profiles and curves are not deleted.";
 "config.reset_confirm" = "Reset";
 "os.button" = "ScamMaster style";
-"os.button_help" = "ScamMaster style: the «Tone» and «Color» palette and the advanced settings. The photo takes them.";
+"os.button_help" = "ScamMaster style: the «Tone» and «Color» palette and advanced settings. Shown live in the viewfinder, the same on the photo.";
 "os.close" = "Close";
 "os.palette" = "Palette";
 "os.advanced" = "Advanced";
@@ -320,6 +320,7 @@
 "os.reset_message" = "The palette and every advanced setting go back to zero.";
 "os.reset" = "Reset";
 "os.reset_done" = "Style restored to default";
+"os.cancel" = "Cancel";
 "os.tone" = "Tone: ";
 "os.help" = "Help";
 "os.base" = "Base";

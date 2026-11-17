@@ -135,6 +135,7 @@ final class CameraModel {
         } else {
             store.set("pref_oldstyle_mode", false)
             OldstyleModel.shared.open = false
+            OldstyleModel.shared.pushViewfinder()
         }
         seenModes = (!keepOldstyle, keepOldstyle)
         let mode: CameraChrome.Mode = keepOldstyle ? .oldstyle : .sport

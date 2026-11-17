@@ -3,6 +3,8 @@
 //  - the lens filter's diffusion (the only filters offered: Glimmerglass, Black Pro-Mist, Pro-Mist, CineBloom, and the film's own
 //    diffusion) from the half-size blur pyramid, with DiffusionModel's level weights (Viewfinder/ViewfinderLook.mm);
 //  - the film / LUT table (FilmChain) on the display values, mixed by its strength;
+//  - the «Oldstyle» mode's style (utils/import_oldstyle_adjust.glsl oldstyleStyle, spliced into main_fs by MainRenderer), the same
+//    function, order and taps as Android's viewfinder;
 //  - focus peaking on the camera's frame itself.
 // The frame arrives upright (the output connection's rotation) and mirrored for the front lens (its mirroring), as Android's
 // texture after uTexRotateMatrix / mirror.
@@ -23,7 +25,9 @@ struct VfOut {
 // u[4]: x LUT on, y lens filter levels (0: no pyramid), z peaking, w lens filter on
 // u[5]: x lens filter strength, y 1: the frame is Display P3 (brought to sRGB, as Android's ISP frame and the LUT's input)
 // u[6]: the frame's own diffusion weight (W0), u[7..18]: the weights of mip levels 0..11
+// u[19]: x 1 with the «Oldstyle» style on (main_fs uOsOn); u[20..23]: uOs0..uOs3 (OldstyleStyle.uniforms)
 constant int VF_U_W0 = 6;
+constant int VF_U_OS = 19;
 
 vertex VfOut vf_vertex(uint vid [[vertex_id]], constant float4 *u [[buffer(0)]]) {
     const float2 corners[4] = {float2(-1, -1), float2(1, -1), float2(-1, 1), float2(1, 1)};
@@ -78,6 +82,119 @@ static float3 frameColor(float3 c, constant float4 *u) {
     return srgbEncode(l);
 }
 
+// ---- «Oldstyle» (P630c): utils/import_oldstyle_adjust.glsl ported line for line. main_fs's OS_TAP(off): the frame at whole screen
+// pixels (px, py: a screen pixel in uv), moved by what the filter / LUT did to this pixel (shift). Uniforms (-1..1, discrete steps
+// 0, 1/3, 2/3, 1): uOs0 tone, colour, exposure, warmth; uOs1 hue, highlights, shadows, warm boost; uOs2 cool boost, sharpness,
+// vignette, aura; uOs3 halo, grain.
+struct OsTaps {
+    float2 uv;
+    float2 px;
+    float2 py;
+    float3 shift;
+};
+
+static float3 osTap(texture2d<float> frame, sampler s, constant float4 *u, OsTaps t, float2 off) {
+    return frameColor(frame.sample(s, t.uv + off.x * t.px + off.y * t.py).rgb, u) + t.shift;
+}
+
+static float osY(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+
+static float3 osSat(float3 c, float s) {
+    const float y = osY(c);
+    return float3(y) + (c - float3(y)) * s;
+}
+
+// a hash of a whole cell position, 0..1
+static float osHash(float2 p) {
+    float3 q = fract(float3(p.xyx) * 0.1031);
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+// the mean of eight samples on a ring of radius r (whole pixels)
+static float3 osRing(texture2d<float> frame, sampler s, constant float4 *u, OsTaps t, float r) {
+    float3 sum = float3(0.0);
+    for (int i = 0; i < 8; i++) {
+        const float a = float(i) * 0.7853982;
+        sum += osTap(frame, s, u, t, floor(float2(cos(a), sin(a)) * r + 0.5));
+    }
+    return sum * 0.125;
+}
+
+static float3 oldstyleStyle(texture2d<float> frame, sampler s, constant float4 *u, OsTaps t, float3 c, float2 pos, float2 size) {
+    const float4 os0 = u[VF_U_OS + 1], os1 = u[VF_U_OS + 2], os2 = u[VF_U_OS + 3], os3 = u[VF_U_OS + 4];
+    const float tone = os0.x, colour = os0.y, expo = os0.z, warmth = os0.w;
+    const float hue = os1.x, hl = os1.y, sh = os1.z, warmB = os1.w;
+    const float coolB = os2.x, sharp = os2.y, vig = os2.z, aura = os2.w;
+    const float halo = os3.x, grain = os3.y;
+    const float longSide = max(size.x, size.y);
+    // sharpness: away from the 3 x 3 binomial at the picture's step (OldstyleStyle.sharpStep), the blur itself at -100
+    if (sharp != 0.0) {
+        const float st = floor(max(1.0, longSide / 1600.0) + 0.5);
+        const float3 blur = (4.0 * c + 2.0 * (osTap(frame, s, u, t, float2(st, 0.0)) + osTap(frame, s, u, t, float2(-st, 0.0))
+                                            + osTap(frame, s, u, t, float2(0.0, st)) + osTap(frame, s, u, t, float2(0.0, -st)))
+                             + osTap(frame, s, u, t, float2(st, st)) + osTap(frame, s, u, t, float2(-st, st))
+                             + osTap(frame, s, u, t, float2(st, -st)) + osTap(frame, s, u, t, float2(-st, -st))) / 16.0;
+        c = clamp(c + (sharp > 0.0 ? 1.5 * sharp : sharp) * (c - blur), 0.0, 1.0);
+    }
+    // aura: a wide soft glow of the light (two rings, 1.5 % and 3 % of the long side), screened over the picture
+    if (aura > 0.0) {
+        const float3 w = 0.5 * (osRing(frame, s, u, t, longSide * 0.015) + osRing(frame, s, u, t, longSide * 0.03));
+        c = 1.0 - (1.0 - c) * (1.0 - 0.75 * aura * w * smoothstep(0.5, 1.0, osY(w)));
+    }
+    // halo: a tight glow round bright edges (a ring at 0.6 % of the long side brighter than the pixel)
+    if (halo > 0.0) {
+        const float3 m = osRing(frame, s, u, t, longSide * 0.006);
+        c += halo * 0.9 * max(m - c, float3(0.0)) * smoothstep(0.5, 0.95, osY(m));
+    }
+    // exposure: +-1.5 EV on the linearised picture
+    if (expo != 0.0) c = pow(clamp(pow(max(c, float3(0.0)), float3(2.2)) * exp2(1.5 * expo), 0.0, 1.0), float3(1.0 / 2.2));
+    // the palette's «Тон»: up lighter and softer, down darker and denser
+    if (tone != 0.0) {
+        c = pow(max(c, float3(0.0)), float3(exp2(-0.7 * tone)));
+        c = c - 0.35 * tone * c * (1.0 - c) * (2.0 * c - 1.0);
+    }
+    // the palette's «Цвет»: left a cool grey, right a warm salmon colour
+    if (colour != 0.0) {
+        c = osSat(c, colour < 0.0 ? 1.0 + 0.95 * colour : 1.0 + 0.55 * colour);
+        c *= colour > 0.0 ? float3(1.0 + 0.07 * colour, 1.0 + 0.01 * colour, 1.0 - 0.06 * colour)
+                          : float3(1.0 + 0.025 * colour, 1.0, 1.0 - 0.035 * colour);
+    }
+    // warmth of the light: the highlights towards warm (+) or cold (-)
+    if (warmth != 0.0) c += float3(0.09, 0.015, -0.09) * warmth * smoothstep(0.35, 1.0, osY(c));
+    // hue offset: the colours turned round the grey axis, up to 35 degrees
+    if (hue != 0.0) {
+        const float a = hue * 0.61, cs = cos(a), sn = sin(a);
+        const float3 k = float3(0.5773503);
+        c = c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
+    }
+    // highlights and shadows
+    if (hl != 0.0) {
+        const float w = smoothstep(0.45, 1.0, osY(c));
+        c = hl > 0.0 ? c + hl * w * 0.35 * (1.0 - c) : c * (1.0 + hl * w * 0.45);
+    }
+    if (sh != 0.0) {
+        const float w = 1.0 - smoothstep(0.0, 0.55, osY(c));
+        c = sh > 0.0 ? c + sh * w * 0.3 * (1.0 - c) : c * (1.0 + sh * w * 0.6);
+    }
+    // warm / cool boost: the saturation of the warm (red over blue) or the cool colours
+    if (warmB != 0.0 || coolB != 0.0) {
+        const float d = c.r - c.b;
+        c = osSat(c, max(0.0, 1.0 + 0.9 * warmB * clamp(d * 4.0, 0.0, 1.0) + 0.9 * coolB * clamp(-d * 4.0, 0.0, 1.0)));
+    }
+    // vignette: the corners darker (+) or lighter (-), round in the picture whatever its orientation
+    if (vig != 0.0) {
+        const float f = smoothstep(0.35, 1.0, length(pos - 0.5 * size) / (0.5 * length(size)));
+        c = vig > 0.0 ? c * (1.0 - 0.7 * vig * f * f) : c - vig * 0.4 * f * f * (1.0 - c);
+    }
+    // grain: a cell of 1 / OldstyleStyle.GRAIN_CELLS of the long side, strongest in the mid-tones
+    if (grain > 0.0) {
+        const float y = osY(c);
+        c += (osHash(floor(pos / max(1.0, longSide / 1200.0))) - 0.5) * grain * 0.09 * (0.25 + 3.0 * y * (1.0 - y));
+    }
+    return clamp(c, 0.0, 1.0);
+}
+
 // lensfilter_prep.glsl's second target: the linear frame with its highlights' headroom, at half the viewport's size (half floats:
 // no square roots); its mip levels are the pyramid
 fragment float4 vf_prep(VfOut in [[stage_in]], texture2d<float> frame [[texture(0)]], constant float4 *u [[buffer(0)]]) {
@@ -93,10 +210,13 @@ fragment float4 vf_main(VfOut in [[stage_in]], texture2d<float> frame [[texture(
                         texture2d<float> pyramid [[texture(2)]], constant float4 *u [[buffer(0)]]) {
     constexpr sampler s(filter::linear, address::clamp_to_edge);
     constexpr sampler sm(filter::linear, mip_filter::linear, address::clamp_to_edge);
+    // main_fs: the screen's pixel steps in uv, taken before any branch (the «Oldstyle» style's taps)
+    const float2 px = dfdx(in.uv), py = dfdy(in.uv);
     if (!inside(in.uv)) return float4(0, 0, 0, 1);
     const float2 resolution = max(u[1].xy, float2(1.0));
     const float4 framePx = frame.sample(s, in.uv);
-    float3 color = frameColor(framePx.rgb, u);
+    const float3 base = frameColor(framePx.rgb, u);
+    float3 color = base;
     // lensFilter(): the diffusion filters (uLf 1..6) - the frame times W0 plus the pyramid's levels times their weights
     const int levels = int(u[4].y);
     if (u[4].w > 0.5 && u[5].x > 0.0 && levels > 0) {
@@ -114,6 +234,15 @@ fragment float4 vf_main(VfOut in [[stage_in]], texture2d<float> frame [[texture(
         const float size = u[1].z;
         const float3 lc = (clamp((clamp(color, 0.0, 1.0) - u[2].xyz) * u[3].xyz, 0.0, 1.0) * (size - 1.0) + 0.5) / size;
         color = mix(color, lut.sample(s, lc).rgb, u[1].w);
+    }
+    // the «Oldstyle» style (main_fs uOsOn): its taps the frame moved by what the filter / LUT did to this pixel
+    if (u[VF_U_OS].x > 0.5) {
+        OsTaps t;
+        t.uv = in.uv;
+        t.px = px;
+        t.py = py;
+        t.shift = color - base;
+        color = oldstyleStyle(frame, s, u, t, clamp(color, 0.0, 1.0), floor(in.position.xy), resolution);
     }
     // focus peaking on the camera's frame itself (the filter and the LUT are no edges)
     if (u[4].z > 0.5) {

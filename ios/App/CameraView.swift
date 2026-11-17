@@ -202,7 +202,7 @@ struct CameraView: View {
             bottomBar(compact: s.compact)
                 .frame(width: s.column, height: s.barHeight)
                 .offset(y: size.height - s.barHeight)
-            panels(width: s.column)
+            panels(width: s.column, height: size.height - s.barHeight)
                 .frame(width: s.column, height: size.height - s.barHeight, alignment: .bottom)
             if shade.level != .hidden {
                 QuickShade(camera: camera, chrome: chrome, maxHeight: min(s.vfHeight * 0.86, size.height - s.barHeight),
@@ -238,18 +238,33 @@ struct CameraView: View {
         }
     }
 
-    /// The Pro panel, the LUT tray in its place and the «Oldstyle» controls over them, 8 pt in from the sides, 12 pt over the bar
-    private func panels(width: CGFloat) -> some View {
+    /// The Pro panel, the LUT tray in its place and the «Oldstyle» controls over them, 8 pt in from the sides, 12 pt over the bar.
+    /// «Oldstyle» (Android's oldstyle_controls, 8 dp over pro_panel): the round style button 8 pt over the manual row's right end
+    /// (4 pt in); its open panel takes the row's place (bottoms aligned, the row hidden), as Android moves the controls down by the
+    /// row's height. Everything is sized from the column the stage gives (`width`, `height`: the room over the bar), so a size change
+    /// (an iPad window, Split View, a folding phone folded or unfolded) lays it out again; the panel's state is OldstyleModel's.
+    private func panels(width: CGFloat, height: CGFloat) -> some View {
         let oldstyle = chrome.mode == .oldstyle
         let shadeDown = shade.level == .hidden
         let styleOpen = oldstyle && OldstyleModel.shared.open
+        let styleShown = shadeDown && !lut.open
         return VStack(spacing: 8) {
-            if oldstyle {
-                HStack { Spacer(); OldstyleControls(camera: camera, shown: shadeDown && !lut.open) }
+            if oldstyle && !styleOpen {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    OldstyleButton(shown: styleShown).padding(.trailing, 4)
+                }
+                .frame(height: 44)
+                .transition(.opacity.combined(with: .scale(scale: 0.6, anchor: .trailing)))
             }
             ZStack(alignment: .bottom) {
                 ManualPanel(camera: camera, expanded: Binding(get: { oldstyle || proOpen }, set: { proOpen = $0 }),
                             shown: shadeDown && !lut.open && !styleOpen)
+                if styleOpen {
+                    OldstylePanel(shown: styleShown, maxHeight: height - 12)
+                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 28)).combined(with: .scale(scale: 0.96)),
+                                                removal: .opacity.combined(with: .offset(y: 20))))
+                }
                 if lut.open && shadeDown {
                     LutTray(onAll: { lutPage = $0; lut.open = false })
                         .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
@@ -283,8 +298,10 @@ struct CameraView: View {
             .overlay { focusLayer(in: size) }
             .overlay(alignment: .topTrailing) { lockPill }
             .overlay(alignment: .top) {
-                if chrome.mode == .oldstyle && OldstyleModel.shared.open && OldstyleModel.shared.tab == 0 {
-                    OldstyleHud().padding(.top, 12)
+                // «Oldstyle»: the palette's HUD 14 pt under the preview's top while its panel is open on «Палитра», the shade down
+                if chrome.mode == .oldstyle && OldstyleModel.shared.open && OldstyleModel.shared.tab == 0 && shade.level == .hidden && !lut.open {
+                    OldstyleHud().padding(.top, 14).padding(.horizontal, 8)
+                        .transition(.opacity.animation(.easeOut(duration: 0.22)))
                 }
             }
             .overlay {
@@ -658,6 +675,7 @@ struct CameraView: View {
             Haptics.tick()
             withAnimation(CameraMotion.glide) { chrome.mode = mode }
             if mode != .oldstyle { OldstyleModel.shared.open = false }
+            OldstyleModel.shared.pushViewfinder()   // the viewfinder's style on / off with the mode (MainRenderer.setOldstyleAdjust)
             camera.say(mode.title)
             Task { await camera.modeChanged() }
         } label: {

@@ -7,7 +7,9 @@ import UIKit
 /// The live viewfinder's look (Android MainRenderer's ISP path: shaders/preview/main_fs.glsl + LiveLensFilter) on the camera's
 /// AVCaptureVideoDataOutput frames, drawn with Metal (Viewfinder.metal) into a CAMetalLayer over the AVCaptureVideoPreviewLayer:
 /// the film / LUT table the photo gets (FilmChain.current, mixed by its strength), the lens filter's or the film's diffusion
-/// (DiffusionModel's level weights on a half-size mip pyramid) and focus peaking (pref_peak_method_key: 1 on, 2 with manual focus).
+/// (DiffusionModel's level weights on a half-size mip pyramid), the «Oldstyle» mode's style (MainRenderer.setOldstyleAdjust: the
+/// photo's oldstyleStyle on the display values after the LUT, live as the controls move) and focus peaking (pref_peak_method_key: 1
+/// on, 2 with manual focus).
 /// The settings are read again twice a second (LiveLensFilter.REFRESH_MS). With nothing to add the frames stop (the output's
 /// connection off) and the plain preview layer shows the camera's picture, as Android's pass draws the frame unchanged then.
 /// Android's developed-RAW viewfinder (pref_live_viewfinder_raw_key, off by default) has no counterpart: the iPhone streams no RAW.
@@ -40,7 +42,11 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         var weights: [SIMD3<Float>] = []
         var peaking = false
         var zoomed = false   // a digital zoom to show (digitalZoom): the frames drawn even without a look
-        var active: Bool { lut != nil && strength > 0 || filter > 0 && filterStrength > 0 && !weights.isEmpty || peaking || zoomed }
+        /// «Oldstyle»'s style: OldstyleStyle.uniforms (uOs0..uOs3, 16 floats), nil outside the mode or with the style neutral
+        var oldstyle: [Float]?
+        var active: Bool {
+            lut != nil && strength > 0 || filter > 0 && filterStrength > 0 && !weights.isEmpty || peaking || zoomed || oldstyle != nil
+        }
     }
     private var drawn = Drawn()
     private var zoomOverride: Float = 1
@@ -61,6 +67,22 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
     }
     private var pyramid: MTLTexture?
     private var shownActivation = false
+
+    /// When the controls last pushed the style (queue): a refresh read before that push does not undo it
+    private var oldstylePushed: CFTimeInterval = 0
+
+    /// MainRenderer.setOldstyleAdjust: the «Oldstyle» style to draw (OldstyleParam.viewfinderUniforms; nil off - another mode, or
+    /// everything at 0, when the frames go back to the plain preview unless another look draws). Any thread.
+    func setOldstyle(_ uniforms: [Float]?) {
+        let value = uniforms.flatMap { $0.count >= 16 ? Array($0.prefix(16)) : nil }
+        queue.async { [self] in
+            oldstylePushed = CACurrentMediaTime()
+            guard drawn.oldstyle != value else { return }
+            drawn.oldstyle = value
+            let active = drawn.active && mainPipeline != nil
+            lookQueue.async { [self] in setFrames(active) }
+        }
+    }
 
     /// Shared with the main thread (lock)
     private let lock = NSLock()
@@ -191,6 +213,8 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         lock.unlock()
         guard attached else { return }
         let peaking = Self.peaking
+        // the «Oldstyle» style as stored (the controls also push it at once: setOldstyle); a mode switched elsewhere is seen here
+        let oldstyle = OldstyleParam.viewfinderUniforms(UserDefaults.standard.dictionary(forKey: PostSettings.prefsKey) ?? [:])
         let key = settingsKey(size: size)
         var look: ViewfinderNative.Look?
         if key != lookKey {
@@ -214,12 +238,14 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
                 drawn.weights = look.weights
             }
             drawn.peaking = peaking
+            if CACurrentMediaTime() - oldstylePushed > 2 * Self.refreshInterval { drawn.oldstyle = oldstyle }
             let active = drawn.active && mainPipeline != nil
             lookQueue.async { [self] in setFrames(active) }
         }
         if let look {
             SessionLog.i("Viewfinder", "look: table \(look.key.isEmpty ? "none" : "\(look.size)^3 at \(look.strength)")"
-                         + " filter \(look.filter) at \(look.filterStrength) levels \(look.weights.count) peaking \(peaking)")
+                         + " filter \(look.filter) at \(look.filterStrength) levels \(look.weights.count) peaking \(peaking)"
+                         + " oldstyle \(oldstyle == nil ? "off" : "on")")
         }
     }
 
@@ -369,6 +395,12 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         for k in 0...12 {
             let weight = k < drawn.weights.count ? drawn.weights[k] : SIMD3<Float>(k == 0 ? 1 : 0, k == 0 ? 1 : 0, k == 0 ? 1 : 0)
             u.append(SIMD4(weight, 0))
+        }
+        // u[19]: x 1 with the «Oldstyle» style on (main_fs uOsOn); u[20..23]: uOs0..uOs3
+        let os = drawn.oldstyle ?? []
+        u.append(SIMD4(os.count >= 16 ? 1 : 0, 0, 0, 0))
+        for i in 0..<4 {
+            u.append(os.count >= 16 ? SIMD4(os[i * 4], os[i * 4 + 1], os[i * 4 + 2], os[i * 4 + 3]) : SIMD4<Float>(0, 0, 0, 0))
         }
         let length = MemoryLayout<SIMD4<Float>>.stride * u.count
         // LiveLensFilter.prepass: the linear frame at half size, then its mip levels (the blur pyramid)
