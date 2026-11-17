@@ -196,9 +196,18 @@ def has_p733(src: str) -> bool:
     return P733_CACHE.search(src) is not None and 'sceneLinearHere(xy, size)' in src
 
 
+P733_LOW_DEFINE = re.compile(r'// P733 \(owner, 2026-11-17.*?\n#define COLOUR_IS_LOW 0\n', re.S)
+P733_LOW_TAPS = re.compile(r'#if COLOUR_IS_LOW == 1\n.*?origS \+= finiteTap\(lowTap\) \* \(wx\[dx \+ 1\] \* wy\[dy \+ 1\]\);\n#endif\n', re.S)
+P733_OWN_TAPS = re.compile(r'#if COLOUR_IS_LOW == 0\n(.*?)#endif\n(#if P3_OUT == 1\n {8}if \(signedColourU != 0\) orig = clampP3\(orig\);)', re.S)
+
+
 def without_p733(src: str) -> str:
-    """The shader before P733's sceneLinear cache: the cache function out, its calls back to sceneLinear (the same values)."""
+    """The shader before P733: the sceneLinear cache out (its calls back to sceneLinear, the same values) and COLOUR_IS_LOW
+    out (0: the colour's own 4 x 4 taps as before; 1 takes the low loop's same taps and weights)."""
     src = P733_CACHE.sub('', src.replace('\r\n', '\n'), count=1)
+    src = P733_LOW_DEFINE.sub('', src, count=1)
+    src = P733_LOW_TAPS.sub('', src, count=2)
+    src = P733_OWN_TAPS.sub(lambda m: m.group(1) + m.group(2), src, count=1)
     return src.replace('sceneLinearHere(xy, size)', 'sceneLinear(xy, size)')
 
 
@@ -430,7 +439,8 @@ def shader_part(strict: bool) -> None:
     # P672b: DETAIL_SPLIT 0 (the token stream below is the shader before it); 1 carries the detail as «Why тон» V2
     check('#define DETAIL_SPLIT 0' in new and 'sharpDelta = clamp(cbrtp(max(yS0, 0.000001)) - lU, -min(0.035, lU * 0.25), 0.050);' in new
           and 'toneSlopeAt(post.x)' in new, 'combine.glsl lost P672b\'s DETAIL_SPLIT (V1\'s detail into the photo as V2\'s)')
-    n = without_p441(new)
+    check(has_p733(new) and 'COLOUR_IS_LOW' in new, 'combine.glsl lost P733 (the sceneLinear cache, COLOUR_IS_LOW)')
+    n = without_p441(without_p733(new))
     check('float lightRimDelta(' in n and all(e[0] in n for e in P311_RIM_EDITS),
           'combine.glsl lost the P311 rim rule of the detail delta (the dark / crimson line beside LED rings comes back)')
     check(P315_RAIL_LINE in n, 'combine.glsl lost the P315 rail rule of the detail delta (two lines along LED rings come back)')
