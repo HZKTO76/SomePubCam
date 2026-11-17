@@ -366,7 +366,7 @@ public class WatermarkLayoutTest {
         if (!f.exists()) f = new File("app/src/main/res/xml/preferences.xml");
         String xml = new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8);
         String[][] defaults = {{WatermarkSpec.KEY_LAYOUT, "text"}, {WatermarkSpec.KEY_POSITION, "bl"}, {WatermarkSpec.KEY_SHOW_TEXT, "true"},
-                {WatermarkSpec.KEY_TEXT, "SCAMERA"}, {WatermarkSpec.KEY_SHOW_DEVICE, "false"}, {WatermarkSpec.KEY_SHOW_LENS, "false"},
+                {WatermarkSpec.KEY_TEXT, "SomeCam"}, {WatermarkSpec.KEY_SHOW_DEVICE, "false"}, {WatermarkSpec.KEY_SHOW_LENS, "false"},
                 {WatermarkSpec.KEY_SHOW_APERTURE, "false"}, {WatermarkSpec.KEY_SHOW_SHUTTER, "false"}, {WatermarkSpec.KEY_SHOW_ISO, "false"},
                 {WatermarkSpec.KEY_SHOW_TIME, "false"}, {WatermarkSpec.KEY_DATE_FORMAT, "datetime"}, {WatermarkSpec.KEY_LOGO, "true"},
                 {WatermarkSpec.KEY_FONT, "scam"}, {WatermarkSpec.KEY_SIZE, "7"}, {WatermarkSpec.KEY_COLOR, "auto"},
