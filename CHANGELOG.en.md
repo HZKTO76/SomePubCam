@@ -2,6 +2,12 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 — Motion in Fast merge
+
+- Reduced ghosting and retained more texture on moving subjects.
+- Added an adjustable motion denoise SNR curve in Noise reduction and merge.
+- The viewfinder stays full width on displays with a small cutout.
+
 ## 2026-11-17 — Viewfinder and saving
 
 - The viewfinder leaves the lens controls clear in compact windows.

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/motion_denoise_curve_host"
+    android:layout_width="match_parent"
+    android:layout_height="144dp"
+    android:layout_marginTop="@dimen/settings_card_gap"
+    android:layout_marginBottom="@dimen/settings_card_gap"
+    android:background="@drawable/settings_card"
+    android:importantForAccessibility="no" />

@@ -74,6 +74,10 @@ inline std::array<int,2> hybridFastOut(const HybridInput& in,const HybridTuning&
 constexpr uint64_t kFastStripBytes=uint64_t(256)<<20;
 // P685: the first band's effective-map code scale (hybridFastMerge sets it; the row bands hand it to the bands after it)
 inline float& fastEffScaleOut(){static float s=0.f;return s;}
+inline bool fastMotionDenoiseEnabled(const HybridInput& in,const HybridTuning& tune){
+    return tune.denoise!=0&&!in.mergedDng&&!in.linearDng
+        &&std::any_of(tune.fastMotionDenoise.begin(),tune.fastMotionDenoise.end(),[](float v){return v>0.f;});
+}
 // P685 (owner, 2026-11-14: «200мп при обработке вылетают»; vivo X200 Ultra, 16320x12288 Tetra, 3 N + 1 ultrashort: «row strips may
 // need ~9547 MB, above 60 % of MemAvailable 6337 MB; taken anyway», the phone swapped to a halt and the system killed the app during
 // the merge). The memory of one fast merge of a w x h burst (or row band), as hybridFastMerge makes it: every GPU object (the RAW
@@ -86,7 +90,7 @@ struct FastMemShape {
     bool bento=false,quad=false,flowPick=true;
     bool floats=true;  // the float result held (a Quad / Tetra result for its chroma median, no stream, a merged DNG)
     bool frameMap=false; // the HALF frame map read back as floats (an effective map or the Tetra few-frame pass)
-    bool effMap=false,hlMask=false,clipFlags=false;
+    bool effMap=false,hlMask=false,clipFlags=false,motionDenoise=false;
     int stripRows=-1; // -1: the strips hybridFastMerge takes at this size (fastStripRowsFor); 0: none; > 0 (SCAM_FM_STRIP_ROWS)
 };
 inline int fastStripRowsFor(int W,int H,int OW,int OH){ // the strip height hybridFastMerge takes (0: one pass)
@@ -102,7 +106,7 @@ inline uint64_t fastMergeGpuBytes(const FastMemShape& s){
     double b=half*(8+8+(s.quad?8+4:0));  // the base's and the current frame's unpacked RAW (RGBA16F), the Quad / Tetra unpack target
     // (and P712's guide cells, R32F)
     b+=half*(8+4+8+4+8+2);             // the guides (RGBA16F), covariances (RGB10_A2), the reference colour and its luma
-    b+=half*8;                         // the rejection chain and the accumulated frame weights
+    b+=half*(s.motionDenoise?10:8);      // the rejection chain, frame weights and optional motion evidence
     b+=double(std::max(1,w2/8))*std::max(1,h2/8)*4; // the unblocker
     int lw=w2,lh=h2;const int tile[5]={16,16,16,8,8};double grid0=0;
     for(int l=0;l<5;++l){ // gray pyramids (R16F x 2), the 8-bit L1 guides, the LK grids (5 RGBA32F / R32F textures a level)
@@ -116,7 +120,9 @@ inline uint64_t fastMergeGpuBytes(const FastMemShape& s){
     b+=double(s.shorts)*(half*20+grid0*16); // a short frame keeps its Bayer, guide, covariance and flow
     if(stripRows>0)b+=double(s.loopFrames)*(half*2+(s.flowPick?pick*16:grid0*16)); // row strips: every frame's flow and rejection
     if(s.bento)b+=half*24+2.0*std::max(1,w2/8)*std::max(1,h2/8)*8; // the highlight chain
-    b+=double(s.ow)*(stripRows>0?stripRows:s.oh)*(16+7); // the accumulators, the output readback (halves and flags)
+    const int outRows=stripRows>0?stripRows:s.oh;
+    const int accumRows=s.motionDenoise&&stripRows>0?std::min(s.oh,stripRows+4):outRows;
+    b+=double(s.ow)*(accumRows*16+outRows*7); // the accumulators (optional NR halo), the output readback
     b+=3.0*s.w*s.h*2;                  // the RAW upload ring (3 frames)
     b+=half*4+(s.hlMask&&s.bento?half*2:0.0); // the frame map's readback, the highlight mask's
     return uint64_t(b);
@@ -544,6 +550,13 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     // gradient; shrink and stretch keep the reference's 2.2 / 0.25 x the base precision before it); 1 = the reference values
     // P647: x the automatic factors of the SNR key (hybridKernelFootprintSnr; the block of the stream: the app's, else measured)
     const int mosaicBlock=input.mosaic!=0?input.mosaic:hybridMosaicBlock(input,tune,report);
+    // A strong signal lets the Photo bracket reject moving edges without mistaking sensor noise for motion.
+    const bool photoMotion=tune.daylightPhotoMotion>0&&tune.fastMergeSport==0&&tune.boostEnable>0.5f
+        &&snr>=30.f&&!longs.empty()&&!input.dcg&&(mosaicBlock==1||mosaicBlock==2);
+    const bool sportMotion=(tune.fastMergeSport&1)!=0;
+    const float motionBoost=photoMotion?14.f:(sportMotion?10.f:6.f);
+    const float motionDetail=photoMotion&&mosaicBlock==1&&!sabre?0.35f:0.f;
+    const bool motionDenoise=!donors.empty()&&fastMotionDenoiseEnabled(input,tune);
     std::string snrFootLine;
     HybridKernelFootprint footprint=hybridKernelFootprintSnr(tune,snr,mosaicBlock,true,&snrFootLine,1+int(donors.size())); // P647b: the frames merged
     report("HYBRID FAST MERGE: "+snrFootLine);
@@ -614,6 +627,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
             tiles[0],tiles[1],tiles[2],tiles[3],tiles[4],gx[0],gy[0],wb[0],wb[2],clipFraction,bento?"on":"off",selectMs,thumbsMs);
         report(line);
         report("HYBRID FAST MERGE "+selectLine+(dropped?"":"; no donor dropped")+((tune.fastMergeSport&1)?"; sport rejection (P488): boost 10, pixel difference 0.35":""));
+        if(photoMotion)report("HYBRID FAST MERGE: daylight photo motion rejection (boost "+std::to_string(int(motionBoost))+", pixel difference 0.35)");
     }
     // ---- page faults of the mapped burst ahead of the uploads (the frames in merge order)
     std::atomic<bool> stopTouch{false};
@@ -687,6 +701,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         stripRows=int(std::max<int64_t>(64,std::min<int64_t>(OH,int64_t(kFastStripBytes)/(23*int64_t(OW)))));
     if(stripRows>0)stripRows=std::min(OH,std::max(64,stripRows&~15));
     const bool stripMode=stripRows>0&&(stripRows<OH||std::getenv("SCAM_FM_STRIP_ROWS"));
+    const int motionNrHalo=motionDenoise&&stripMode?(OW+W-1)/W:0;
+    const int accumRows=stripMode?std::min(OH,stripRows+2*motionNrHalo):OH;
     // ---- the context (prewarmed during the burst's delivery, else made here)
     const auto gpuStarted=Clock::now();
     std::string prewarmWhy;
@@ -843,7 +859,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     GLuint flowBg=flowPick?g.texture(GL_RGBA32F,gx[0],gy[0],lin32):0,pickFit=flowPick?g.texture(GL_RG16F,pgx,pgy,true):0;
     const GLuint fFlowBg=flowPick?g.fbo({flowBg}):0;
     GLuint rejRaw=g.texture(GL_RG8,w2,h2,true),rejF=g.texture(GL_R8,w2,h2,true),rejD=g.texture(GL_R8,w2,h2,true),rejW=g.texture(GL_RG8,w2,h2,true);
-    GLuint accW=g.texture(GL_R16F,w2,h2,true);
+    GLuint accW=g.texture(motionDenoise?GL_RG16F:GL_R16F,w2,h2,true);
     // P675: the night motion test's donor level (kFastRejection's level pass on a 32 x 32 grid, its mean by the mip chain)
     constexpr int kNmLevelSize=32,kNmLevelMips=6;
     GLuint nmLevel=0,fNmLevel=0;
@@ -854,7 +870,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
         fNmLevel=g.fbo({nmLevel});
     }
-    GLuint acc0=g.texture(GL_RGBA16F,OW,stripMode?stripRows:OH,true),acc1=g.texture(GL_RGBA16F,OW,stripMode?stripRows:OH,true);
+    GLuint acc0=g.texture(GL_RGBA16F,OW,accumRows,true),acc1=g.texture(GL_RGBA16F,OW,accumRows,true);
     if(stripMode){ // the strips' limits: the viewport moved up by a strip spans the frame, the upload ring holds a whole frame
         GLint vp[2]={0,0},blk=0;glGetIntegerv(GL_MAX_VIEWPORT_DIMS,vp);glGetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE,&blk);
         if(const char* e=std::getenv("SCAM_FM_MAX_BLOCK_MB"))blk=std::min<GLint>(blk>0?blk:INT32_MAX,std::atoi(e)<<20); // host checks
@@ -1023,7 +1039,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         // P685: a row band keeps the whole frame's HALF height in these size-relative thresholds
         const float rejH=float(tune.fastBandHalfH>0?tune.fastBandHalfH:h2);
         g.u1f(A::pReject,"unblocker_reduction_threshold",0.003f*(2016.f/rejH));
-        g.u1f(A::pReject,"extra_motion_robustness_boost",(tune.fastMergeSport&1)?10.f:6.f);g.u1f(A::pReject,"motion_robustness_boost_variance_threshold",25.f);
+        g.u1f(A::pReject,"extra_motion_robustness_boost",motionBoost);g.u1f(A::pReject,"motion_robustness_boost_variance_threshold",25.f);
         g.u1f(A::pReject,"extra_motion_robustness_motion_threshold",1e-4f*(2016.f/rejH));
         g.u1i(A::pReject,"enable_photometric_correction",0);
         if(nightMotion){ // P675
@@ -1032,7 +1048,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         }
         g.u2i(A::pRejFilter,"u_size",w2,h2);g.u1i(A::pRejFilter,"u_radius",3);g.u1f(A::pRejFilter,"u_sigma_spatial",1.5f);
         g.u1f(A::pRejFilter,"u_color_sigma",0.05f);g.u1f(A::pRejFilter,"u_color_sigma_boost",2.f);g.u1i(A::pRejFilter,"u_clip_rejection",0);
-        g.u1f(A::pRejFilter,"u_pixel_difference_threshold",(tune.fastMergeSport&1)?0.35f:0.5f);g.u1f(A::pRejFilter,"u_clipped_threshold",0.f);
+        g.u1f(A::pRejFilter,"u_pixel_difference_threshold",(photoMotion||sportMotion)?0.35f:0.5f);g.u1f(A::pRejFilter,"u_clipped_threshold",0.f);
         g.u4f(A::pDilate,"tex_size",float(w2),float(h2),1.f/float(w2),1.f/float(h2));g.u1f(A::pDilate,"u_rejection_dilate_div",3.5f);
         g.u4f(A::pCyclops,"tex_size",float(w2),float(h2),1.f/float(w2),1.f/float(h2));g.u1f(A::pCyclops,"u_rejection_dilate_div",3.5f);
         g.u4f(A::pBlendEq,"tex_size",float(w2),float(h2),1.f/float(w2),1.f/float(h2));
@@ -1055,7 +1071,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         for(int p:{PMB,PMA}){
             g.u4f(p,"tex_size",float(w2),float(h2),1.f/float(w2),1.f/float(h2));
             g.uMat4(p,"mvp_matrix_tex",identity);
-            g.u4f(p,"kernel_blurring_params",4.5f,1.5f,sabre?1.f:0.f,0.f); // [UNCERTAIN] §11.7: z = 0 at sabre_scale 1 (P501: 1 above, the reference's)
+            g.u4f(p,"kernel_blurring_params",4.5f,1.5f,sabre?1.f:0.f,p==PMA?motionDetail:0.f); // z switches on the area upscale (P501)
             g.u1f(p,"accumulated_weight_scale",1.f);g.u1i(p,"u_cfa_pattern",cfa);
             g.u2f(p,"u_ca_k_r",0.f,0.f);g.u2f(p,"u_ca_k_b",0.f,0.f);
             // (gains / black_levels_times_gains / u_ev_scale: the frame's, set per merge)
@@ -1064,6 +1080,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
             g.u1i(p,"u_source_clip_guard",0);
             g.u4f(p,"highlight_params",0.f,1.f,bento?1.f:0.f,float(shorts.size()));
         }
+        if(motionDetail>0.f)g.u2f(PMA,"u_motion_noise",S,O);
         g.u4f(PMB,"flow_scale_offset",dso[0],dso[1],dso[2],dso[3]);
         g.u1f(PMB,"u_source_clipping_point",blackMean+(input.white-blackMean)*0.95f);g.u2f(PMB,"u_long_frame_params",0.f,1.f);
 
@@ -1351,6 +1368,8 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     // row strips: every frame's own flow (L0 grid) and rejection map (frame weight, blend_eq) for phase B, its long-frame weights
     std::vector<GLuint> kFlow(loop.size(),0),kFlowFbo(loop.size(),0),kRejW(loop.size(),0),kRejWFbo(loop.size(),0);
     std::vector<float> kWeightA(loop.size(),0.f),kCovMul(loop.size(),1.f);std::vector<char> kMerged(loop.size(),0);
+    int motionNrDonors=0;
+    g.u1i(FastMergeGpu::pAccum,"u_measure_motion",0);
     for(size_t k=0;k<loop.size();++k){
         const LoopFrame& lf=loop[k];const int f=lf.f;const HybridFrame& fr=input.frames[size_t(f)];
         const bool isShort=lf.cls==1,isLong=lf.cls==2;
@@ -1573,6 +1592,13 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         // [NOT DONE] the long frame's pedestal and motion scope (§5.5): the scope is 1 everywhere
         g.u1f(A::pAccum,"u_long_weight_A",weightA);g.u1f(A::pAccum,"u_ev_scale",lf.ev);
         g.tex(A::pAccum,"u_rejection",0,rejWK);g.tex(A::pAccum,"u_base_guide",1,refColor);g.tex(A::pAccum,"u_long_scope",2,oneScope);
+        if(motionDenoise){
+            g.u1i(A::pAccum,"u_measure_motion",!isLong);
+            if(!isLong){
+                g.tex(A::pAccum,"u_raw_rejection",3,rejRaw);
+                ++motionNrDonors;
+            }
+        }
         glEnable(GL_BLEND);glBlendEquation(GL_FUNC_ADD);glBlendFunc(GL_ONE,GL_ONE);
         g.draw(A::pAccum,fAccW,w2,h2);
         glDisable(GL_BLEND);
@@ -1613,6 +1639,15 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     // sabre step is within the tile's halo (2); else kFastOutput
     const bool outTiled=tune.fmOutTile!=0&&(moire>0.f||(quadLift&&validShorts>0))&&OW<=2*W&&g.outputTiledReady();
     const int PO=outTiled?int(A::pOutputTiled):int(A::pOutput);
+    g.u1i(PO,"u_acc_row0",0);
+    const auto& nr=tune.fastMotionDenoise;
+    g.u2f(PO,"u_motion_nr_control",nr[6],float(motionNrDonors));
+    if(motionNrDonors>0){
+        g.u2f(PO,"u_motion_nr_low",nr[0],nr[1]);
+        g.u4f(PO,"u_motion_nr_curve",nr[2],nr[3],nr[4],nr[5]);
+        g.u4f(PO,"u_motion_nr_noise",S,O,dcgZones?base.dcgKnee:0.f,dcgZones?base.dcgOffsetLcg:O);
+        report("HYBRID FAST MERGE MOTION NR: "+std::to_string(motionNrDonors)+" normal donors, local SNR curve");
+    }
     // P634: the Tetra few-frame pass reads the frame map even if the app does not request an effective-map trailer.
     const bool tetraPost=quad&&sensorType==2&&tune.fastTetraPost!=0&&OW==W&&OH==H;
     const bool needEff=effMap||tetraPost;
@@ -1663,6 +1698,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         std::vector<GLuint> bRgb(static_cast<size_t>(bands)),bFlags(static_cast<size_t>(bands));
         bEff=needEff?g.readBuffer(size_t(w2)*h2*4):unusedOutput;
         g.tex(PO,"u_accum_color_r",0,acc0);g.tex(PO,"u_accum_weights_gb",1,acc1);g.tex(PO,"u_frame_weights",2,accW);
+        if(motionNrDonors>0)g.tex(PO,"u_motion_nr_clip_mask",6,bento?hlBase:zeroMask);
         g.u2i(PO,"u_size",OW,OH);g.u2i(PO,"u_half",w2,h2);
         g.u3f(PO,"u_inv_wb",1.f/wb[0],1.f/wb[1],1.f/wb[2]);g.u1f(PO,"u_clip",0.94f);g.u1f(PO,"u_clip_short",validShorts>0?clipShort():0.f);g.u1i(PO,"u_fill",validShorts>0?outFill:0);g.u1f(PO,"u_fill_light",std::clamp(tune.fastLightFill,0.f,1.f));g.u1f(PO,"u_quad_lift",quadLift&&validShorts>0?1.f:0.f);g.u1f(PO,"u_moire",moire);g.u1f(PO,"u_step",float(OW)/float(W));g.tex(PO,"u_hl_base",3,bento?hlBase:zeroMask);g.tex(PO,"u_hl_final",4,hlMaskTex);g.tex(PO,"u_base_bayer",5,bayerBase);g.u1i(PO,"u_block",hlBlock);g.u4f(PO,"u_black",blackSensor);g.u1f(PO,"u_white",input.white);
         // P596: the de-grid's «flat» from the merged noise, its line notch where few frames merged (Quad; Tetra as before)
@@ -1853,11 +1889,15 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     int strips=0;std::vector<int> winRows;
     for(int y0=0;y0<OH;y0+=stripRows,++strips){
         // the strip's HALF rows (P501: OUT rows y over OH -> y h2 / OH; at sabre_scale 1 y / 2 and (y1 + 1) / 2 as before)
-        const int y1=std::min(OH,y0+stripRows),rows=y1-y0,ca=int(int64_t(y0)*h2/OH),cb=std::min<int>(h2,int((int64_t(y1)*h2+OH-1)/OH));
+        const int y1=std::min(OH,y0+stripRows),rows=y1-y0;
+        const int ay0=std::max(0,y0-motionNrHalo),ay1=std::min(OH,y1+motionNrHalo);
+        const int ca=int(int64_t(ay0)*h2/OH),cb=std::min<int>(h2,int((int64_t(ay1)*h2+OH-1)/OH));
         {const float z[4]={0,0,0,0};glBindFramebuffer(GL_FRAMEBUFFER,fStrip);glClearBufferfv(GL_COLOR,0,z);glClearBufferfv(GL_COLOR,1,z);}
         auto mergeDraw=[&](int mp){
             glEnable(GL_BLEND);glBlendEquation(GL_FUNC_ADD);glBlendFunc(GL_ONE,GL_ONE);
-            g.drawAt(mp,fStrip,0,-y0,OW,OH);
+            if(motionNrHalo>0){glEnable(GL_SCISSOR_TEST);glScissor(0,0,OW,ay1-ay0);}
+            g.drawAt(mp,fStrip,0,-ay0,OW,OH);
+            if(motionNrHalo>0)glDisable(GL_SCISSOR_TEST);
             glDisable(GL_BLEND);
         };
         for(size_t k=0;k<loop.size();++k){ // the merges in the loop's order (the whole-frame branch's order of the sums)
@@ -1906,8 +1946,9 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         mergeDraw(PMA);
         // the strip's output pass and its readback
         g.tex(PO,"u_accum_color_r",0,acc0);g.tex(PO,"u_accum_weights_gb",1,acc1);g.tex(PO,"u_frame_weights",2,accW);
+        if(motionNrDonors>0)g.tex(PO,"u_motion_nr_clip_mask",6,bento?hlBase:zeroMask);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER,0,bRgbS);glBindBufferBase(GL_SHADER_STORAGE_BUFFER,1,bFlagsS);glBindBufferBase(GL_SHADER_STORAGE_BUFFER,2,bEff);
-        g.u1i(PO,"u_row0",y0);g.u1i(PO,"u_rows",rows);g.u1i(PO,"u_acc_row0",y0);
+        g.u1i(PO,"u_row0",y0);g.u1i(PO,"u_rows",rows);g.u1i(PO,"u_acc_row0",ay0);
         g.dispatch(PO,outTiled?(OW+31)/32:(OW/4+63)/64,outTiled?(rows+7)/8:rows);
         glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);
         FastMergeGpu::check("strip");
@@ -2233,6 +2274,7 @@ inline std::vector<float> hybridFastMergeBands(const HybridInput& input,const Hy
     std::vector<FastThumb> thumbs(input.frames.size());int baseIdx=0,dropped=0;std::vector<int> donors;std::string selectLine;
     fastSelectFrames(input,tune,normals,longs,thumbs,baseIdx,donors,dropped,selectLine);
     HybridTuning bt=tune;bt.fastPick.clear();bt.fastPick.push_back(baseIdx);for(int f:donors)bt.fastPick.push_back(f);
+    if(!fastMotionDenoiseEnabled(input,tune))bt.fastMotionDenoise.fill(0.f);
     {char t[300];std::snprintf(t,sizeof(t),"HYBRID FAST MERGE BANDS: %dx%d in %d column bands of <= %d RAW px (+%d px margins, %d px blends): "
         "the GPU's limit (%d px wide at this height); %s",W,H,nb,core,kFastBandMargin,kFastBandBlend,maxW,selectLine.c_str());report(t);}
     std::vector<float> out(size_t(OW)*size_t(OH)*3,0.f);
@@ -2340,6 +2382,7 @@ inline FastMemShape fastShapeOf(const HybridInput& in,const HybridTuning& tune,i
     s.floats=floats||(s.quad&&tune.fastMosaicChroma!=0&&tune.mosaicChroma);
     s.frameMap=effMap||(block==4&&tune.fastTetraPost!=0&&o[0]==in.w&&o[1]==in.h);
     s.effMap=effMap;s.clipFlags=clipFlags;s.hlMask=hybridHighlightMaskOut()!=nullptr;
+    s.motionDenoise=loopFrames>0&&fastMotionDenoiseEnabled(in,tune);
     return s;
 }
 inline FastRowPlan fastRowPlan(const HybridInput& in,const HybridTuning& tune,int block,bool mergedDng,bool effMap,bool clipFlags){
@@ -2445,6 +2488,7 @@ inline std::vector<float> hybridFastMergeRowBands(const HybridInput& input,const
         left+=")";donors.resize(size_t(plan.keepDonors));
     }
     HybridTuning bt=tune;bt.fastPick.clear();bt.fastPick.push_back(baseIdx);for(int f:donors)bt.fastPick.push_back(f);
+    if(!fastMotionDenoiseEnabled(input,tune))bt.fastMotionDenoise.fill(0.f);
     const HybridFrame& base=input.frames[size_t(baseIdx)];
     const bool quad=block==2||block==4;
     bt.fastBandWb=fastMergeWb(input,tune,base,quad,block==4?2:1);

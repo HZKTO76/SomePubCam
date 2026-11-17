@@ -2733,10 +2733,18 @@ in highp vec2 tex_coord;
 uniform sampler2D u_rejection;
 uniform sampler2D u_base_guide;
 uniform sampler2D u_long_scope;
+uniform sampler2D u_raw_rejection;
+uniform bool u_measure_motion;
 uniform float u_long_weight_A;
 uniform float u_ev_scale;
 void main() {
     float r = texture(u_rejection, tex_coord).r;
+    float motion = 0.0;
+    if (u_measure_motion && r < 0.85) {
+        // Count evidence present before spatial dilation and still rejected by the merge.
+        float raw = texture(u_raw_rejection, tex_coord).r;
+        motion = smoothstep(0.10, 0.50, raw) * smoothstep(0.15, 0.75, 1.0 - r);
+    }
     if (u_long_weight_A > 0.0) {
         float base_sqrt_luma = texture(u_base_guide, tex_coord).x;
         float base_lin = base_sqrt_luma * base_sqrt_luma;
@@ -2745,7 +2753,7 @@ void main() {
         float scope_w = texture(u_long_scope, tex_coord).r;
         r *= u_long_weight_A * shadow_t * scope_w;
     }
-    o_frag_color = vec4(r, 0.0, 0.0, 0.0);
+    o_frag_color = vec4(r, motion, 0.0, 0.0);
 }
 )FM";
 // sh002: merge variant B (+0xc0): ordinary Bayer donors
@@ -3040,7 +3048,8 @@ uniform float u_source_clipping_point;
 uniform int u_cfa_pattern;
 
 uniform mat4 mvp_matrix_tex;
-uniform vec4 kernel_blurring_params; // x = coverage threshold, y = covariance multiplier
+uniform vec4 kernel_blurring_params; // x = coverage threshold, y = covariance multiplier, z = upscale, w = motion detail
+uniform vec2 u_motion_noise; // slope and offset for the base frame
 uniform sampler2D accumulated_frame_weights;
 uniform float accumulated_weight_scale;
 
@@ -3218,6 +3227,7 @@ void SampleNeighborhoodRBF(in vec2 sampl_uv,
                            in vec3 covariance,
                            in float linear_kernel_mix,
                            in float blend_eq,
+                           in float motion_detail,
                            out vec3 accumulatedIntensities,
                            out vec3 accumulatedWeights,
                            out vec2 clipWeights) {
@@ -3479,7 +3489,28 @@ void SampleNeighborhoodRBF(in vec2 sampl_uv,
                                 accumulatedIntensities.g +
                                 (accumulatedIntensities.b * wc_b - out_diff_bg * eff_wb)) / tot_w;
 
-            float base_g = mix(avg_base_g, g_c, 0.50);
+            // Retain the directional green detail in the base when temporal support is low.
+            float center_share = 0.50;
+            if (motion_detail > 0.0 && sample_clip_w == 0.0) {
+                float sigma = sqrt(max(u_motion_noise.x * g_c + u_motion_noise.y, 1.0e-9));
+                float contrast = smoothstep(3.0, 8.0, (dH + dV) / sigma);
+                // Saturated light sources can lose donor support to flicker.
+                float peak = max(rbf_rgb.r, max(rbf_rgb.g, rbf_rgb.b));
+                float floor_color = min(rbf_rgb.r, min(rbf_rgb.g, rbf_rgb.b));
+                float saturation = (peak - floor_color) / max(peak, 0.008);
+                float neutral = 1.0 - smoothstep(0.35, 0.60, saturation);
+                // Recover shadow texture above the sensor noise floor. Bright neighbours limit the refinement.
+                float local_peak = max(max(max(tl, tr), max(bl, br)),
+                    max(vc, max(max(top, bot), max(left, right))));
+                float shadow = (1.0 - smoothstep(0.10, 0.20, local_peak))
+                    * (1.0 - smoothstep(0.010, 0.026, g_c));
+                float luma_detail = smoothstep(0.007, 0.020, g_c);
+                // With full shadow support, raise the additional center share from 0.35 to 0.50.
+                float noise_detail = 1.4285714 * smoothstep(7.0, 15.0, g_c / sigma);
+                float detail = mix(luma_detail, max(luma_detail, noise_detail), shadow);
+                center_share += motion_detail * contrast * neutral * detail;
+            }
+            float base_g = mix(avg_base_g, g_c, center_share);
             vec3 fb_rgb = max(vec3(0.0), vec3(base_g + out_diff_rg, base_g, base_g + out_diff_bg));
 
 
@@ -3529,6 +3560,7 @@ void main() {
   float linear_kernel_mix = 0.0;
   float hole_fill_mix = 0.0;
   float blend_eq = 0.0;
+  float motion_detail = 0.0;
   if (is_short_frame) {
     covariance = mix(covariance, vec3(0.5, 0.5, 0.0), 0.5);
     linear_kernel_mix = 0.5;
@@ -3537,6 +3569,9 @@ void main() {
     float weight_so_far = texture(accumulated_frame_weights, zoomed_tc).x * accumulated_weight_scale;
     float expected_donors = max(1.0, frame_info.z - 1.0);
     float donor_ratio = weight_so_far / expected_donors;
+    if (kernel_blurring_params.w > 0.0) {
+        motion_detail = kernel_blurring_params.w * (1.0 - smoothstep(0.25, 4.0, weight_so_far));
+    }
 
     // Aggressive transition: any drop below 98% donors quickly activates weight equalization
     hole_fill_mix = clamp((0.98 - donor_ratio) / 0.28, 0.0, 1.0);
@@ -3572,7 +3607,7 @@ void main() {
   vec3 accum_weights;
   vec2 clip_weights;
 
-  SampleNeighborhoodRBF(sampl_uv, covariance, linear_kernel_mix, blend_eq, accum_intensities, accum_weights, clip_weights);
+  SampleNeighborhoodRBF(sampl_uv, covariance, linear_kernel_mix, blend_eq, motion_detail, accum_intensities, accum_weights, clip_weights);
 
   if (u_long_frame_params.x > 0.0) {
     if (accum_weights.r < 1.0e-5 || accum_weights.g < 1.0e-5 || accum_weights.b < 1.0e-5) {

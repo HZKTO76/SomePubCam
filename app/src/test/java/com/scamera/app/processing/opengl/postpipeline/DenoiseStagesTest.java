@@ -209,7 +209,10 @@ public class DenoiseStagesTest {
         assertTrue(at > 0);
         final String body = h.substring(at, h.indexOf("\n}\n", at));
         assertTrue(body, body.contains("if(t.denoise!=0)return false;") && body.contains("t.denoise=-1;"));
-        for (String k : worker) assertTrue(k + " is not turned off", Pattern.compile("t\\." + k + "=0(\\.f)?;").matcher(body).find());
+        for (String k : worker) {
+            assertTrue(k + " is not turned off",
+                    Pattern.compile("t\\." + k + "(?:=0(?:\\.f)?|\\.fill\\(0(?:\\.f)?\\));").matcher(body).find());
+        }
         // the tuning file's line is read and applied after every line; a tuning built in code is applied at the merge's entry
         assertTrue(h.contains("||set(\"denoise\",nullptr,&t.denoise)"));
         assertTrue(h.contains("hybridDenoiseSwitch(t,report); // P600: after every line"));

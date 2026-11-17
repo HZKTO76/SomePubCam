@@ -397,6 +397,18 @@ public class PreferenceKeys {
      * {@link #hybridValue}, {@link #hybridSwitch}, {@link #hybridString} or {@link #hybridList}.
      */
     public static final String HYBRID_PREFIX = ScamHybridKeys.PREFIX;
+    public static final String FAST_MOTION_DENOISE_PREFIX = "fast_motion_denoise_";
+    private static final int[] FAST_MOTION_DENOISE_SNR = {2, 3, 4, 8, 16, 32, 64};
+    private static final int[] FAST_MOTION_DENOISE_DEFAULT = {65, 65, 65, 45, 22, 8, 0};
+
+    public static int fastMotionDenoisePoints() { return FAST_MOTION_DENOISE_SNR.length; }
+    public static int fastMotionDenoiseSnr(int point) { return FAST_MOTION_DENOISE_SNR[point]; }
+    public static float fastMotionDenoisePercent(int point) {
+        final int fallback = FAST_MOTION_DENOISE_DEFAULT[point];
+        final float value = hybridValue(FAST_MOTION_DENOISE_PREFIX + fastMotionDenoiseSnr(point), fallback);
+        return Float.isFinite(value) ? Math.max(0f, Math.min(100f, value)) : fallback;
+    }
+
     /** The merge route selector (hybrid | scamhdr), see {@link #mergeRoute()}. */
     public static final String ROUTE_KEY = ScamHybridKeys.ROUTE;
     /** Hybrid defaults that differ from the fallback the shared nodes pass; any other key keeps the caller's fallback. */
@@ -706,6 +718,8 @@ public class PreferenceKeys {
         TUNING_EXTRA.put("bentoBlend", "bento_blend");
         TUNING_EXTRA.put("mosaicUsFill", "us_fill");
         TUNING_EXTRA.put("mosaicWindowFull", "mosaic_window_full");
+        for (int snr : FAST_MOTION_DENOISE_SNR)
+            TUNING_EXTRA.put("fastMotionDenoise" + snr, FAST_MOTION_DENOISE_PREFIX + snr);
     }
 
     /**
@@ -730,7 +744,7 @@ public class PreferenceKeys {
     public static boolean mergeTuningKey(String key) {
         if (key == null || !key.startsWith(HYBRID_PREFIX)) return false;
         final String suffix = key.substring(HYBRID_PREFIX.length());
-        if ("highlight_merge".equals(suffix)) return true;
+        if ("highlight_merge".equals(suffix) || suffix.startsWith(FAST_MOTION_DENOISE_PREFIX)) return true;
         for (String[] k : TUNING_KEYS) if (k[1].equals(suffix)) return true;
         return false;
     }
@@ -1017,8 +1031,18 @@ public class PreferenceKeys {
         final int fastSport = Math.round(hybridValue("fast_merge_sport", sport ? 3f : 0f));
         if (pixDiff > 0f) out.append("rejPixDiff ").append(Math.min(1f, pixDiff)).append('\n');
         if (shiftMax > 0f) out.append("donorShiftMax ").append(shiftMax).append('\n');
-        if (fastSport > 0 && fastProcessing()) out.append("fastMergeSport ").append(fastSport & 3).append('\n');
-        if (fastProcessing()) out.append(FAST_TUNING); // P474: last, over the lines above
+        final boolean fast = fastProcessing();
+        if (fast && !sport && scamDevValue("hybrid_fast_merge_sport") == null) out.append("daylightPhotoMotion 1\n");
+        if (fastSport > 0 && fast) out.append("fastMergeSport ").append(fastSport & 3).append('\n');
+        if (fast) {
+            if (hybridSwitch(FAST_MOTION_DENOISE_PREFIX + "enabled", true)) {
+                for (int i = 0; i < fastMotionDenoisePoints(); i++) {
+                    out.append("fastMotionDenoise").append(fastMotionDenoiseSnr(i)).append(' ')
+                            .append(fastMotionDenoisePercent(i) / 100f).append('\n');
+                }
+            }
+            out.append(FAST_TUNING); // P474: last, over the lines above
+        }
         // P600: «Все шумодавы» off - the worker's own denoise stages off too ("denoise 0", applied after every line); on: no line
         out.append(com.scamera.app.processing.opengl.postpipeline.DenoiseStages.workerTuning());
         return out.toString();

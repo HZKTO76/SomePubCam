@@ -98,6 +98,11 @@ uniform float u_quad_lift; // P506: > 0 = a Quad stream with short frames merged
 // a slanted edge across 4 px) to its [1 2 2 2 1] / 8; the site response's static lattice is the lattice pass's (P566 / P571).
 // 0 = as before.
 uniform vec4 u_flat_noise;
+uniform vec4 u_motion_nr_noise; // slope, HCG offset, DCG knee (or 0), LCG offset
+uniform vec2 u_motion_nr_low; // local SNR 2, 3
+uniform vec4 u_motion_nr_curve; // local SNR 4, 8, 16, 32
+uniform vec2 u_motion_nr_control; // strength at 64, number of normal donors (0: off)
+uniform highp sampler2D u_motion_nr_clip_mask;
 layout(std430,binding=0) writeonly buffer Rgb{uint rgb[];};
 layout(std430,binding=1) writeonly buffer Flags{uint flags[];};
 layout(std430,binding=2) writeonly buffer Eff{float eff[];};
@@ -110,6 +115,65 @@ vec3 at(ivec2 p){
 // their flow missed, SCA_20261104_073400: a pink band beside the wire (G at the base's clip, R and B measured) in a recovered window
 vec2 halfUv(ivec2 p){return (vec2(p)+0.5)/vec2(u_size);}
 float baseMask(ivec2 p){return textureLod(u_hl_base,halfUv(p),0.0).r;}
+vec3 motionNrSample(ivec2 p){return at(p);}
+vec3 motionDenoise(ivec2 p,vec3 v,float clipShare){
+    float donors=u_motion_nr_control.y;
+    float peak=max(v.r,max(v.g,v.b));
+    if(peak>=0.85||clipShare>=0.02)return v;
+    vec2 cover=textureLod(u_frame_weights,halfUv(p),0.0).rg;
+    float motion=smoothstep(0.22,0.58,cover.y/donors);
+    motion*=1.0-smoothstep(max(1.0,0.30*donors),max(2.0,0.70*donors),cover.x);
+    if(motion<=0.0||textureLod(u_motion_nr_clip_mask,halfUv(p),0.0).r>0.02)return v;
+
+    const vec3 luma=vec3(0.25,0.50,0.25);
+    float y=dot(v,luma);
+    float offset=u_motion_nr_noise.y;
+    if(u_motion_nr_noise.z>0.0){
+        float knee=u_motion_nr_noise.z;
+        offset=mix(offset,u_motion_nr_noise.w,smoothstep(0.9*knee,1.1*knee,y));
+    }
+    // Use the noise remaining after locally accepted frames. Long donors may increase that support.
+    float sigma=sqrt(max(u_motion_nr_noise.x*y+offset,1.0e-9)/(1.0+cover.x));
+    float snr=y/sigma;
+    float logSnr=log2(max(snr,2.0));
+    float x=clamp(logSnr-2.0,0.0,4.0);
+    vec4 ramps=clamp(vec4(x)-vec4(0.0,1.0,2.0,3.0),0.0,1.0);
+    float curve=u_motion_nr_curve.x
+        +dot(ramps,vec4(u_motion_nr_curve.yzw,u_motion_nr_control.x)-u_motion_nr_curve);
+    if(logSnr<2.0){
+        const float log3=log2(3.0);
+        float t2=clamp((logSnr-1.0)/(log3-1.0),0.0,1.0);
+        float t3=clamp((logSnr-log3)/(2.0-log3),0.0,1.0);
+        curve=u_motion_nr_low.x+t2*(u_motion_nr_low.y-u_motion_nr_low.x)
+            +t3*(u_motion_nr_curve.x-u_motion_nr_low.y);
+    }
+    float strength=motion*clamp(curve,0.0,1.0)*smoothstep(0.5,2.0,snr);
+    if(strength<=0.0)return v;
+
+    ivec2 lo=ivec2(0,u_acc_row0);
+    ivec2 hi=ivec2(u_size.x-1,min(u_size.y,u_acc_row0+textureSize(u_accum_color_r,0).y)-1);
+    ivec2 taps[4]=ivec2[4](sc(-1,0),sc(1,0),sc(0,-1),sc(0,1));
+    vec3 sum=vec3(0.0);
+    float wsum=0.0;
+    for(int i=0;i<4;++i){
+        ivec2 q=p+taps[i];
+        if(any(lessThan(q,lo))||any(greaterThan(q,hi)))continue;
+        vec3 a=motionNrSample(q);
+        vec3 d=a-v;
+        float dy=dot(d,luma);
+        float dc=max(abs(d.r-d.g),abs(d.b-d.g));
+        // A tap across a brightness or colour edge cannot add to the estimate.
+        float ndy=dy/(2.5*sigma),ndc=dc/(4.0*sigma);
+        float w=max(0.0,1.0-ndy*ndy-ndc*ndc);
+        w*=w;
+        sum+=w*d;
+        wsum+=w;
+    }
+    vec3 delta=sum/(1.0+wsum);
+    float dy=dot(delta,luma);
+    return max(vec3(0.0),v+strength*(clamp(dy,-0.6*sigma,0.6*sigma)
+        +clamp(delta-vec3(dy),vec3(-1.4*sigma),vec3(1.4*sigma))));
+}
 // how far the short frames were refused here (bilinear: no half-res steps along a slanted wire)
 float refusal(ivec2 p){
     vec2 uv=halfUv(p);float b=textureLod(u_hl_base,uv,0.0).r;
@@ -288,6 +352,7 @@ void main(){
         vec4 b=texelFetch(u_accum_weights_gb,p-ivec2(0,u_acc_row0),0);
         vec3 wt=max(vec3(a.a,b.r,b.g),vec3(1.0e-6));
         vec3 v=max(a.rgb/wt*u_inv_wb,vec3(0.0));
+        if(u_motion_nr_control.y>0.0)v=motionDenoise(p,v,b.z/max(b.w,1.0e-6));
         float af=0.0; // P686: how far the fill below replaced this pixel
         if(u_fill>0){
             float rf=refusal(p); // P686: the base's cells read only where the short frames were refused
@@ -364,6 +429,7 @@ inline std::string fastOutputTiledText(){
     once("float lumaAt(ivec2 p, ivec2 lo, ivec2 hi) { return dot(at(clamp(p, lo, hi)), vec3(0.25, 0.5, 0.25)); }",
          "float lumaAt(ivec2 p, ivec2 lo, ivec2 hi) { return lumT(p); }",1);
     once("at(clamp(p + sc(dx, dy), lo, hi))","atT(p + sc(dx, dy))",2);
+    once("vec3 motionNrSample(ivec2 p){return at(p);}","vec3 motionNrSample(ivec2 p){return atT(p);}",1);
     once("void main(){\n    int q=int(gl_GlobalInvocationID.x);\n    int yb=int(gl_GlobalInvocationID.y);\n",
          "void main(){\n"
          "    ivec2 lid=ivec2(gl_LocalInvocationID.xy);\n"

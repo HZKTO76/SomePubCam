@@ -1774,4 +1774,22 @@ public class HybridSettingsTest {
         manager.set("default_scope","pref_scam_hybrid_processing","fast");
         assertTrue(PreferenceKeys.hybridTuningText().endsWith(PreferenceKeys.FAST_TUNING));
     }
+
+    @Test public void motionDenoiseCurveReachesOnlyTheFastMerge() {
+        final String prefix = PreferenceKeys.HYBRID_PREFIX + PreferenceKeys.FAST_MOTION_DENOISE_PREFIX;
+        String tuning = PreferenceKeys.hybridTuningText();
+        for (String line : new String[]{"2 0.65", "3 0.65", "4 0.65", "8 0.45", "16 0.22", "32 0.08", "64 0.0"})
+            assertTrue(tuning, tuning.contains("\nfastMotionDenoise" + line + "\n"));
+
+        manager.set("default_scope", prefix + "3", 73);
+        tuning = PreferenceKeys.hybridTuningText();
+        assertTrue(tuning, tuning.contains("\nfastMotionDenoise3 0.73\n"));
+        assertEquals(tuning.indexOf("fastMotionDenoise3 "), tuning.lastIndexOf("fastMotionDenoise3 "));
+
+        manager.set("default_scope", prefix + "enabled", false);
+        assertFalse(PreferenceKeys.hybridTuningText().contains("fastMotionDenoise"));
+        manager.set("default_scope", prefix + "enabled", true);
+        manager.set("default_scope", PreferenceKeys.HYBRID_PREFIX + "processing", "quality");
+        assertFalse(PreferenceKeys.hybridTuningText().contains("fastMotionDenoise"));
+    }
 }

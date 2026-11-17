@@ -1,6 +1,7 @@
 package com.scamera.app.ui.camera;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
@@ -9,6 +10,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.graphics.Insets;
+import androidx.core.view.DisplayCutoutCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
@@ -58,11 +60,23 @@ public class CameraLayout extends ConstraintLayout {
         if (isInEditMode()) {
             CameraFragment.preparePreviewLayout(this);
         } else {
+            final int gripWidth = findViewById(R.id.top_row_grabber).getLayoutParams().width;
             ViewCompat.setOnApplyWindowInsetsListener(this, (view, insets) -> {
                 Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-                if (getPaddingLeft() != safe.left || getPaddingTop() != safe.top
+                int top = insets.getInsets(WindowInsetsCompat.Type.systemBars()).top;
+                // A small camera hole fits in the immersive top chrome. A wide notch needs space above the row.
+                DisplayCutoutCompat cutout = insets.getDisplayCutout();
+                if (cutout != null && top < safe.top) {
+                    for (Rect bounds : cutout.getBoundingRects()) {
+                        if (bounds.top < safe.top && bounds.width() >= gripWidth) {
+                            top = safe.top;
+                            break;
+                        }
+                    }
+                }
+                if (getPaddingLeft() != safe.left || getPaddingTop() != top
                         || getPaddingRight() != safe.right || getPaddingBottom() != safe.bottom) {
-                    setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                    setPadding(safe.left, top, safe.right, safe.bottom);
                 }
                 return insets;
             });
@@ -80,12 +94,13 @@ public class CameraLayout extends ConstraintLayout {
         // The first pass may already have clipped the shutter row to the room below the preview.
         int minShutter = shutterBox.getLayoutParams().width + modeSwitch.getLayoutParams().height
                 + ((ViewGroup.MarginLayoutParams) bottomRow.getLayoutParams()).topMargin;
-        int controls = Math.max(shutter.getMeasuredHeight(), minShutter) + grabber.getLayoutParams().height
-                + sheetHandle.getLayoutParams().height;
+        int fixedControls = Math.max(shutter.getMeasuredHeight(), minShutter) + grabber.getLayoutParams().height;
+        int handleRoom = sheetHandle.getLayoutParams().height;
         if (lenses.getVisibility() != GONE) {
-            controls += lenses.getMeasuredHeight() + ((ViewGroup.MarginLayoutParams) lenses.getLayoutParams()).bottomMargin;
-            controls += Math.round(BottomChrome.CLEARANCE_DP * getResources().getDisplayMetrics().density);
+            fixedControls += lenses.getMeasuredHeight() + ((ViewGroup.MarginLayoutParams) lenses.getLayoutParams()).bottomMargin;
+            handleRoom += Math.round(BottomChrome.CLEARANCE_DP * getResources().getDisplayMetrics().density);
         }
+        final int controls = fixedControls + handleRoom;
         final int stageHeight = stage.getMeasuredHeight();
         final int column = wideWindow(width, height) ? cameraColumnWidth(width, stageHeight, controls,
                 com.scamera.app.circularbarlib.ui.UiScale.dp(getContext(), 360)) : 0;
@@ -96,8 +111,10 @@ public class CameraLayout extends ConstraintLayout {
             stage.requestLayout();
             topRow.requestLayout();
         }
-        // Reserve room for the controls. The preview keeps the sensor aspect.
-        final int limit = compactAnchorHeight(column > 0 ? column : width, stageHeight, controls, anchor.dimensionRatio);
+        // Keep the full preview when the fixed rows fit. BottomChrome can float the sheet handle in that case.
+        final int previewWidth = column > 0 ? column : width;
+        final int limit = compactAnchorHeight(previewWidth, stageHeight, fixedControls, anchor.dimensionRatio) == 0
+                ? 0 : compactAnchorHeight(previewWidth, stageHeight, controls, anchor.dimensionRatio);
         final boolean previewChanged = preview.setHeightLimit(limit);
         final boolean anchorChanged = anchor.height != limit;
         if (anchorChanged) {

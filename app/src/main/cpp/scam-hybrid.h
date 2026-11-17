@@ -1297,6 +1297,10 @@ struct HybridTuning {
     // Sport frame selector's donor gate (translation <= 15 thumbnail px for 35, sharpness >= 0.75 x the base's for 0.6; the base
     // stays the app's frames[0], the press moment, not the reference's sharpest frame); 0 = photo (replays unchanged)
     int fastMergeSport=0;
+    // Fast merge: stronger local rejection in well-exposed Photo bursts with long donors.
+    int daylightPhotoMotion=0;
+    // Fast motion-only denoise strength at local SNR 2, 3, 4, 8, 16, 32 and 64. Saved jobs without a curve stay off.
+    std::array<float,7> fastMotionDenoise{};
     // P488 rejPixDiff (> 0): the reference's guarded rejection post-filter in kHybDilate before the spread (its rejection_filter's
     // u_pixel_difference_threshold: the reference's Sport 0.35, photo 0.5); 0 = off (the dilate program as before)
     float rejPixDiff=0.f;
@@ -1317,7 +1321,7 @@ struct HybridTuning {
 
 // P600: the worker's denoise stages, as hybridDenoiseSwitch turns them off (tools/check_denoise_switch.cpp and the app's
 // DenoiseStagesTest read this list: a new stage goes here, into the switch below and into the app's DenoiseStages).
-static const char* const kHybridDenoiseStages[]={"plainChromaMedian","bentoBlendChroma","mosaicTetraMotionSmooth"};
+static const char* const kHybridDenoiseStages[]={"plainChromaMedian","bentoBlendChroma","mosaicTetraMotionSmooth","fastMotionDenoise"};
 // P600: denoise 0 -> every stage of kHybridDenoiseStages off and denoise -1 (applied); true when it changed the tuning. The report
 // names them (the log line the app's switch is checked by); a second call does nothing.
 inline bool hybridDenoiseSwitch(HybridTuning& t,const std::function<void(const std::string&)>& report){
@@ -1326,7 +1330,8 @@ inline bool hybridDenoiseSwitch(HybridTuning& t,const std::function<void(const s
     t.plainChromaMedian=0;
     t.bentoBlendChroma=0.f;
     t.mosaicTetraMotionSmooth=0.f; // P603
-    if(report)report("HYBRID DENOISE: off (the app's «All denoisers»): plainChromaMedian 0, bentoBlendChroma 0, mosaicTetraMotionSmooth 0; kept: the merge, "
+    t.fastMotionDenoise.fill(0.f);
+    if(report)report("HYBRID DENOISE: off (the app's «All denoisers»): plainChromaMedian 0, bentoBlendChroma 0, mosaicTetraMotionSmooth 0, fastMotionDenoise 0; kept: the merge, "
         "the mosaic lattice / moire passes, hot pixels, CA, highlights");
     return true;
 }
@@ -1664,6 +1669,7 @@ inline void hybridQuadTexture(HybridKernelFootprint& fp,const HybridTuning& t,fl
 }
 inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::function<void(const std::string&)>& report) {
     HybridTuning t;
+    bool motionNr2=false,motionNr3=false;
     const std::string paths[]={jobDir+"/hybrid_tuning.txt","/sdcard/Download/SCAMERA/hybrid_tuning.txt","/data/local/tmp/hybrid_tuning.txt"};
     for(const std::string& path:paths){
         std::ifstream f(path);if(!f)continue;
@@ -1674,6 +1680,8 @@ inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::functi
             applied+=" "+key+"="+std::to_string(v);return true;
         };
         while(f>>key>>v){
+            if(set("fastMotionDenoise2",&t.fastMotionDenoise[0])){motionNr2=true;continue;}
+            if(set("fastMotionDenoise3",&t.fastMotionDenoise[1])){motionNr3=true;continue;}
             set("cdm",&t.cdm)||set("boost",&t.boost)||set("boostEnable",&t.boostEnable)||set("rejPrior",&t.rejPrior)||set("clipReject",&t.clipReject)||set("rejPool",&t.rejPool)||set("rejPoolT",&t.rejPoolT)
             ||set("rejVarExact",&t.rejVarExact)||set("rejPerChannel",&t.rejPerChannel)||set("rejMeanDiff",&t.rejMeanDiff)||set("rejMeanTex",&t.rejMeanTex)
             ||set("rejKneeLo",&t.rejKneeLo)||set("rejKneeHi",&t.rejKneeHi)||set("rejBinLo",&t.rejBinLo)||set("rejBinHi",&t.rejBinHi)||set("rejClipSym",&t.rejClipSym)||set("rejSkipUs",nullptr,&t.rejSkipUs)||set("rejNoiseCdm",&t.rejNoiseCdm)||set("rejMatchBlur",&t.rejMatchBlur)||set("rejRelFloor",&t.rejRelFloor)||set("rejMeanFloor",&t.rejMeanFloor)
@@ -1759,9 +1767,13 @@ inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::functi
             ||set("fastFlowPick",nullptr,&t.fastFlowPick) // P601
             ||set("fastLightFill",&t.fastLightFill) // P607
             ||set("fastNightMotion",&t.fastNightMotion) // P675
+            ||set("fastMotionDenoise4",&t.fastMotionDenoise[2])||set("fastMotionDenoise8",&t.fastMotionDenoise[3])
+            ||set("fastMotionDenoise16",&t.fastMotionDenoise[4])||set("fastMotionDenoise32",&t.fastMotionDenoise[5])
+            ||set("fastMotionDenoise64",&t.fastMotionDenoise[6])
             ||set("fmFilterGather",nullptr,&t.fmFilterGather)||set("fmMergeBatch",nullptr,&t.fmMergeBatch)
             ||set("fmOutTile",nullptr,&t.fmOutTile)||set("fmGuideCells",nullptr,&t.fmGuideCells)||set("fmLatticeTiled",nullptr,&t.fmLatticeTiled)||set("fmKeepContext",nullptr,&t.fmKeepContext)||set("fmChromaFused",nullptr,&t.fmChromaFused)||set("fmAhb",nullptr,&t.fmAhb) // P712
-            ||set("fastMergeSport",nullptr,&t.fastMergeSport)||set("rejPixDiff",&t.rejPixDiff)||set("donorShiftMax",&t.donorShiftMax) // P488
+            ||set("fastMergeSport",nullptr,&t.fastMergeSport)||set("daylightPhotoMotion",nullptr,&t.daylightPhotoMotion)
+            ||set("rejPixDiff",&t.rejPixDiff)||set("donorShiftMax",&t.donorShiftMax) // P488
             ||set("denoise",nullptr,&t.denoise); // P600
         }
         if(report&&!applied.empty())report("HYBRID TUNING FILE "+path+":"+applied);
@@ -1769,6 +1781,9 @@ inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::functi
     }
     hybridCellsPlain()=t.cellsPlain!=0;
     hybridBlendStagesOff()=t.blendStages==0;
+    if(!motionNr2)t.fastMotionDenoise[0]=t.fastMotionDenoise[2];
+    if(!motionNr3)t.fastMotionDenoise[1]=t.fastMotionDenoise[2];
+    for(float& strength:t.fastMotionDenoise)strength=std::isfinite(strength)?std::clamp(strength,0.f,1.f):0.f;
     hybridDenoiseSwitch(t,report); // P600: after every line (the master switch wins over a stage's own line, wherever it stands)
     return t;
 }

@@ -80,6 +80,17 @@
     <string name="prefs_scam_hybrid_noise_readout_title">Merge: read noise</string>
     <string name="prefs_scam_hybrid_noise_readout_summary">The same correction for dark places. Higher: smoother shadows, but ghosts may appear. Lower: sharper and noisier.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_title">Noise reduction and merge</string>
+    <string name="prefs_scam_fast_motion_denoise_title">Motion noise reduction</string>
+    <string name="prefs_scam_fast_motion_denoise_summary" formatted="false">Set the strength from 0 to 100% at seven local signal-to-noise ratios (SNR). Applies to rendered photos from Fast RAW processing. DNG saves the merge result before this step.</string>
+    <string name="prefs_scam_fast_motion_denoise_enabled_title">Use the SNR curve</string>
+    <string name="prefs_scam_fast_motion_denoise_graph_title">SNR curve</string>
+    <string name="prefs_scam_fast_motion_denoise_snr2" translatable="false">SNR 2</string>
+    <string name="prefs_scam_fast_motion_denoise_snr3" translatable="false">SNR 3</string>
+    <string name="prefs_scam_fast_motion_denoise_snr4" translatable="false">SNR 4</string>
+    <string name="prefs_scam_fast_motion_denoise_snr8" translatable="false">SNR 8</string>
+    <string name="prefs_scam_fast_motion_denoise_snr16" translatable="false">SNR 16</string>
+    <string name="prefs_scam_fast_motion_denoise_snr32" translatable="false">SNR 32</string>
+    <string name="prefs_scam_fast_motion_denoise_snr64" translatable="false">SNR 64</string>
     <string name="prefs_scam_hybrid_highlight_merge_title">Highlight merge</string>
     <string name="prefs_scam_hybrid_highlight_merge_summary">Adaptive reduces ghosting and noise where the short exposure blends into the base.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_summary">How the burst\'s frames are aligned and added into one, and how the noise is cleaned after the merge. Rows the chosen processing mode does not use are greyed.</string>

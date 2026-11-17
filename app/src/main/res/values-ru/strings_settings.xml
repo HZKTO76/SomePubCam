@@ -80,6 +80,10 @@
     <string name="prefs_scam_hybrid_noise_readout_title">Склейка: шум считывания</string>
     <string name="prefs_scam_hybrid_noise_readout_summary">Та же поправка для тёмных мест. Больше — тени глаже, но могут появиться призраки. Меньше — резче и шумнее.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_title">Шумоподавление и склейка</string>
+    <string name="prefs_scam_fast_motion_denoise_title">Шумоподавление движения</string>
+    <string name="prefs_scam_fast_motion_denoise_summary" formatted="false">Настройте силу от 0 до 100% для семи значений отношения сигнала к шуму (SNR). Кривая действует на готовые фото после быстрой RAW-склейки. DNG сохраняет результат склейки до этого шага.</string>
+    <string name="prefs_scam_fast_motion_denoise_enabled_title">Применять кривую SNR</string>
+    <string name="prefs_scam_fast_motion_denoise_graph_title">Кривая SNR</string>
     <string name="prefs_scam_hybrid_highlight_merge_title">Слияние светов</string>
     <string name="prefs_scam_hybrid_highlight_merge_summary">Адаптивное подавляет двоение и шум в зоне перехода к короткой экспозиции.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_summary">Как кадры серии совмещаются и складываются в один и как после склейки убирается шум. Строки, которые в выбранном режиме обработки не действуют, — серые.</string>
