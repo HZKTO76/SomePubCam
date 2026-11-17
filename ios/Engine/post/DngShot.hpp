@@ -8,7 +8,10 @@
 #include "Settings.hpp"
 #include "color/ShotColour.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -29,6 +32,7 @@ struct DngShot {
     ShotColourTags colour;
     std::vector<double> noiseProfile;  // (S, O) pairs
     std::vector<DngGainMap> gainMaps;
+    std::vector<double> vignette;      // OpcodeList3 FixVignetteRadial: k0..k4, cx, cy (the iPhone's / iPad's DNG); empty: none
     int orientation = 1;
     int width = 0, height = 0;
     int cfa = -1;                      // 0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR
@@ -144,6 +148,32 @@ inline std::vector<DngGainMap> gainMaps(const uint8_t* list, size_t size) {
     return maps;
 }
 
+/// The FixVignetteRadial opcode (id 3) of an opcode list: k0..k4, cx, cy (big endian doubles); empty when there is none
+inline std::vector<double> fixVignetteRadial(const uint8_t* list, size_t size) {
+    const Tiff b{list, size, false};
+    try {
+        size_t o = 0;
+        const uint32_t n = b.u32(o); o += 4;
+        for (uint32_t i = 0; i < n && size - o >= 16; i++) {
+            const uint32_t id = b.u32(o);
+            const uint32_t bytes = b.u32(o + 12);
+            o += 16;
+            if (o + bytes > size) break;
+            if (id == 3 && bytes >= 56) {
+                std::vector<double> v(7);
+                for (int k = 0; k < 7; k++) {
+                    const uint64_t bits = uint64_t(b.u32(o + size_t(k) * 8)) << 32 | b.u32(o + size_t(k) * 8 + 4);
+                    std::memcpy(&v[size_t(k)], &bits, 8);
+                }
+                return v;
+            }
+            o += bytes;
+        }
+    } catch (const std::exception&) {
+    }
+    return {};
+}
+
 } // namespace DngRead
 
 /// The DNG's tags: IFD 0 (colour), the raw IFD (NewSubfileType 0: size, CFA, levels, OpcodeList2) and the EXIF IFD.
@@ -190,6 +220,9 @@ inline DngShot readDng(const uint8_t* data, size_t size) {
                 const auto maps = gainMaps(data + ifd->at(tag).at, ifd->at(tag).count);
                 if (!maps.empty()) { ops = &ifd->at(tag); s.gainMaps = maps; }
             }
+    // OpcodeList3 (0xC74E): Apple's DNG keeps its lens vignetting there as FixVignetteRadial (no GainMap)
+    for (const Ifd* ifd : {static_cast<const Ifd*>(&raw), static_cast<const Ifd*>(&ifd0)})
+        if (s.vignette.empty() && ifd->count(0xC74E)) s.vignette = fixVignetteRadial(data + ifd->at(0xC74E).at, ifd->at(0xC74E).count);
     if (auto e = ifd0.find(0x8769); e != ifd0.end()) {
         const Ifd exif = readIfd(t, t.u32(e->second.at));
         s.iso = int(first(exif, 0x8827, 0));
@@ -224,6 +257,32 @@ inline void shadingMap(const DngShot& s, Parameters& p, const std::function<void
                 log("lens shading map " + std::to_string(w) + "x" + std::to_string(h) + " (stored, the lens's calibration: the DNG has none)");
                 return;
             }
+        }
+        // the DNG's FixVignetteRadial (OpcodeList3: the gain 1 + k0 r^2 + k1 r^4 + k2 r^6 + k3 r^8 + k4 r^10, r the distance from
+        // (cx, cy) over the farthest corner's) as a map of the whole frame, the same gain for the four sites
+        if (s.vignette.size() == 7 && s.width > 1 && s.height > 1) {
+            const int gw = 64, gh = 48;
+            const double W = s.width, H = s.height, cx = s.vignette[5] * W, cy = s.vignette[6] * H;
+            const double m = std::sqrt(std::max(std::max(cx * cx + cy * cy, (W - cx) * (W - cx) + cy * cy),
+                                                std::max(cx * cx + (H - cy) * (H - cy), (W - cx) * (W - cx) + (H - cy) * (H - cy))));
+            std::vector<float> out(size_t(gw) * gh * 4);
+            for (int j = 0; j < gh; j++)
+                for (int i = 0; i < gw; i++) {
+                    const double x = i * W / (gw - 1), y = j * H / (gh - 1);
+                    const double r2 = ((x - cx) * (x - cx) + (y - cy) * (y - cy)) / (m * m);
+                    double g = 1, rp = 1;
+                    for (int k = 0; k < 5; k++) { rp *= r2; g += s.vignette[size_t(k)] * rp; }
+                    for (int c = 0; c < 4; c++) out[(size_t(j) * gw + i) * 4 + size_t(c)] = float(std::max(g, 1e-3));
+                }
+            p.mapSize = Point{gw, gh};
+            p.gainMap = out;
+            p.hasGainMap = true;
+            char line[200];
+            std::snprintf(line, sizeof line, "lens shading: the DNG's FixVignetteRadial (k %.3f %.3f %.3f %.3f %.3f, centre %.3f %.3f) as a %dx%d map, corner gain %.2f",
+                          s.vignette[0], s.vignette[1], s.vignette[2], s.vignette[3], s.vignette[4], s.vignette[5], s.vignette[6], gw, gh,
+                          double(out[0]));
+            log(line);
+            return;
         }
         log("lens shading: no GainMap in the DNG (neutral gains)");
         return;

@@ -1040,3 +1040,9 @@ stays a replay switch (off in the app).
   «Авто» took the region (01e6ef6d). Fixed: only a set «Мерцание ламп» rounds the Sport ceiling.
 - Plan: a flicker detector for «Авто» as Android's MotionShutter (P111 / P496: the AE's shutters vote, row bands on short frames latch,
   six band-free frames clear it) - then «Авто» rounds the Sport ceiling, the L shutters and ETTR only under lamps that flicker.
+- Vignetting (owner: «коррекция виньетки не применяется»): the iPad's / iPhone's DNG has no GainMap; its lens vignetting is OpcodeList3
+  FixVignetteRadial (iPad Air 5: k 1.517 0.804 -1.082 1.414 -0.544, centre 0.505 0.505: x2.2 at the edges' middle, x3.1 in the
+  corners). DngShot reads it and, without a GainMap or a calibration of the lens, makes it the shot's lens shading map (64x48, the same
+  gain for the four sites). To check on the phone: an evenly lit plain surface, corners against the centre.
+- Plan (owner): manual ISO: the shutter follows the light (as wanted); manual shutter: the ISO does not follow - it should (shutter
+  priority, as Android's ParamController).
