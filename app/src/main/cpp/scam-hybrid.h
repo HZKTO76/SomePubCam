@@ -17,6 +17,12 @@
 // one backward homography each (vivo CRE LK/RANSAC or the bundled copy). Output: linear RGB (w*h*3,
 // float) in base units, canonical RGGB geometry (the caller restores the sensor origin), plus the
 // effective-frames map and the merged Bayer RAW for the DNG.
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <os/proc.h>
+#endif
+#endif
 #include "scam-superres-gpu.h"
 #include "scam-merge.h" // mergeRowBands, fastParallelFor; scam-pool.h: scamComputeThreads
 #include "scam-chroma-gpu.h" // P80 mosaicChromaMedian on the GPU
@@ -161,12 +167,17 @@ constexpr int64_t kHybridClassicPixels=16000000;
 // by the app (three N and one ultrashort, the frames it leaves out freed, the camera in its plain session) and merges whole
 constexpr int64_t kHybridHugePixels=100000000;
 constexpr int kHybridHugeFrames=4;
-// MemAvailable of /proc/meminfo in bytes (0: unknown).
+// MemAvailable of /proc/meminfo in bytes (0: unknown). The iOS port (ios/): no /proc; the memory the app may still take before iOS
+// ends it (os_proc_available_memory) is its MemAvailable - unknown (0), a Sabre 2x merge was planned whole and the app was ended.
 inline uint64_t hybridMemAvailable(){
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    return uint64_t(os_proc_available_memory());
+#else
     std::ifstream f("/proc/meminfo");
     std::string key,rest;uint64_t kb=0;
     while(f>>key>>kb){std::getline(f,rest);if(key=="MemAvailable:")return kb*1024;}
     return 0;
+#endif
 }
 inline std::string hybridMB(uint64_t bytes){return std::to_string((bytes+(1u<<19))>>20);}
 // P213a: the worker's resident memory now and its peak so far (VmRSS, VmHWM of /proc/self/status) in MB, 0 = unknown

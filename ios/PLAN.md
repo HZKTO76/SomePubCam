@@ -1072,3 +1072,7 @@ stays a replay switch (off in the app).
   (batch 10's concurrent encoder: the shared merge's passes that lean on GL's order may race on the A17; SCAMGL_CONCURRENT_DISPATCH for
   the A/B). A failed command buffer's Metal reason is in the shot's error (9e2ff479). A processing breadcrumb (Documents/Log/.inflight:
   stage, post node, footprint, memory left) is reported at the next launch when a run ended inside a shot.
+- Owner: the crashes are mostly with Sabre 2x (8448x6048 output). The shared merge plans its memory against hybridMemAvailable
+  (/proc/meminfo MemAvailable), which the iPhone does not have: 0 = unknown, so a Sabre 2x merge never went to row bands (P685) and was
+  merged whole (the strip guard's «MemAvailable 0 MB»). Minimal Apple guard in scam-hybrid.h: on iOS hybridMemAvailable is
+  os_proc_available_memory (the memory the app may still take before iOS ends it); Android unchanged.
