@@ -25,7 +25,7 @@ enum : uint64_t { AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN = 3, AHARDWAREBUFFER_USAG
 #include <condition_variable>
 #include <dirent.h>
 #include <fstream>
-#include <iterator>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sys/stat.h>
@@ -54,6 +54,8 @@ uniform int u_rows;       // rows of this band
 uniform int u_acc_row0;   // the accumulators' first row (row strips; 0 = the whole frame)
 uniform vec3 u_inv_wb;    // 1 / the white balance gains of the merge
 uniform float u_clip;
+uniform bool u_skip_flags;
+uniform bool u_skip_eff;
 // P540 (owner, 2026-11-07: «засветы ... без артефактов»): > 0 = 0.94 x the lowest gain of the valid short frames. Where they
 // carried the light (the final mask, or any value above the base frames' 1) the merge holds measured light up to their clip:
 // flagged there at >= 1 (as before) the app recovered real data channel by channel (lime speckle in a sunlit gilded arch, white
@@ -96,6 +98,11 @@ uniform float u_quad_lift; // P506: > 0 = a Quad stream with short frames merged
 // a slanted edge across 4 px) to its [1 2 2 2 1] / 8; the site response's static lattice is the lattice pass's (P566 / P571).
 // 0 = as before.
 uniform vec4 u_flat_noise;
+uniform vec4 u_motion_nr_noise; // slope, HCG offset, DCG knee (or 0), LCG offset
+uniform vec2 u_motion_nr_low; // local SNR 2, 3
+uniform vec4 u_motion_nr_curve; // local SNR 4, 8, 16, 32
+uniform vec2 u_motion_nr_control; // strength at 64, number of normal donors (0: off)
+uniform highp sampler2D u_motion_nr_clip_mask;
 layout(std430,binding=0) writeonly buffer Rgb{uint rgb[];};
 layout(std430,binding=1) writeonly buffer Flags{uint flags[];};
 layout(std430,binding=2) writeonly buffer Eff{float eff[];};
@@ -108,6 +115,65 @@ vec3 at(ivec2 p){
 // their flow missed, SCA_20261104_073400: a pink band beside the wire (G at the base's clip, R and B measured) in a recovered window
 vec2 halfUv(ivec2 p){return (vec2(p)+0.5)/vec2(u_size);}
 float baseMask(ivec2 p){return textureLod(u_hl_base,halfUv(p),0.0).r;}
+vec3 motionNrSample(ivec2 p){return at(p);}
+vec3 motionDenoise(ivec2 p,vec3 v,float clipShare){
+    float donors=u_motion_nr_control.y;
+    float peak=max(v.r,max(v.g,v.b));
+    if(peak>=0.85||clipShare>=0.02)return v;
+    vec2 cover=textureLod(u_frame_weights,halfUv(p),0.0).rg;
+    float motion=smoothstep(0.22,0.58,cover.y/donors);
+    motion*=1.0-smoothstep(max(1.0,0.30*donors),max(2.0,0.70*donors),cover.x);
+    if(motion<=0.0||textureLod(u_motion_nr_clip_mask,halfUv(p),0.0).r>0.02)return v;
+
+    const vec3 luma=vec3(0.25,0.50,0.25);
+    float y=dot(v,luma);
+    float offset=u_motion_nr_noise.y;
+    if(u_motion_nr_noise.z>0.0){
+        float knee=u_motion_nr_noise.z;
+        offset=mix(offset,u_motion_nr_noise.w,smoothstep(0.9*knee,1.1*knee,y));
+    }
+    // Use the noise remaining after locally accepted frames. Long donors may increase that support.
+    float sigma=sqrt(max(u_motion_nr_noise.x*y+offset,1.0e-9)/(1.0+cover.x));
+    float snr=y/sigma;
+    float logSnr=log2(max(snr,2.0));
+    float x=clamp(logSnr-2.0,0.0,4.0);
+    vec4 ramps=clamp(vec4(x)-vec4(0.0,1.0,2.0,3.0),0.0,1.0);
+    float curve=u_motion_nr_curve.x
+        +dot(ramps,vec4(u_motion_nr_curve.yzw,u_motion_nr_control.x)-u_motion_nr_curve);
+    if(logSnr<2.0){
+        const float log3=log2(3.0);
+        float t2=clamp((logSnr-1.0)/(log3-1.0),0.0,1.0);
+        float t3=clamp((logSnr-log3)/(2.0-log3),0.0,1.0);
+        curve=u_motion_nr_low.x+t2*(u_motion_nr_low.y-u_motion_nr_low.x)
+            +t3*(u_motion_nr_curve.x-u_motion_nr_low.y);
+    }
+    float strength=motion*clamp(curve,0.0,1.0)*smoothstep(0.5,2.0,snr);
+    if(strength<=0.0)return v;
+
+    ivec2 lo=ivec2(0,u_acc_row0);
+    ivec2 hi=ivec2(u_size.x-1,min(u_size.y,u_acc_row0+textureSize(u_accum_color_r,0).y)-1);
+    ivec2 taps[4]=ivec2[4](sc(-1,0),sc(1,0),sc(0,-1),sc(0,1));
+    vec3 sum=vec3(0.0);
+    float wsum=0.0;
+    for(int i=0;i<4;++i){
+        ivec2 q=p+taps[i];
+        if(any(lessThan(q,lo))||any(greaterThan(q,hi)))continue;
+        vec3 a=motionNrSample(q);
+        vec3 d=a-v;
+        float dy=dot(d,luma);
+        float dc=max(abs(d.r-d.g),abs(d.b-d.g));
+        // A tap across a brightness or colour edge cannot add to the estimate.
+        float ndy=dy/(2.5*sigma),ndc=dc/(4.0*sigma);
+        float w=max(0.0,1.0-ndy*ndy-ndc*ndc);
+        w*=w;
+        sum+=w*d;
+        wsum+=w;
+    }
+    vec3 delta=sum/(1.0+wsum);
+    float dy=dot(delta,luma);
+    return max(vec3(0.0),v+strength*(clamp(dy,-0.6*sigma,0.6*sigma)
+        +clamp(delta-vec3(dy),vec3(-1.4*sigma),vec3(1.4*sigma))));
+}
 // how far the short frames were refused here (bilinear: no half-res steps along a slanted wire)
 float refusal(ivec2 p){
     vec2 uv=halfUv(p);float b=textureLod(u_hl_base,uv,0.0).r;
@@ -286,6 +352,7 @@ void main(){
         vec4 b=texelFetch(u_accum_weights_gb,p-ivec2(0,u_acc_row0),0);
         vec3 wt=max(vec3(a.a,b.r,b.g),vec3(1.0e-6));
         vec3 v=max(a.rgb/wt*u_inv_wb,vec3(0.0));
+        if(u_motion_nr_control.y>0.0)v=motionDenoise(p,v,b.z/max(b.w,1.0e-6));
         float af=0.0; // P686: how far the fill below replaced this pixel
         if(u_fill>0){
             float rf=refusal(p); // P686: the base's cells read only where the short frames were refused
@@ -309,14 +376,16 @@ void main(){
         // refused pixels' partial clip back (the fill had no effect on a Quad stream); the filled light is smooth and kept
         if(af>0.0&&(u_quad_lift>0.0||u_moire>0.0))v=mix(v,vf,af);
         c[k]=v;
-        float cf=b.z/max(b.w,1.0e-6);
-        uint f=0u;
-        bool sd=u_clip_short>0.0&&textureLod(u_hl_final,halfUv(p),0.0).r>0.5;
-        if(clipAt(v.r,sd))f|=1u;
-        if(clipAt(v.g,sd))f|=2u;
-        if(clipAt(v.b,sd))f|=4u;
-        if(cf>0.02&&cf<0.98&&!(sd&&max(v.r,max(v.g,v.b))>1.02))f|=8u; // P540: not over the short frames' measured light
-        fl|=f<<(8u*uint(k));
+        if(!u_skip_flags){
+            float cf=b.z/max(b.w,1.0e-6);
+            uint f=0u;
+            bool sd=u_clip_short>0.0&&textureLod(u_hl_final,halfUv(p),0.0).r>0.5;
+            if(clipAt(v.r,sd))f|=1u;
+            if(clipAt(v.g,sd))f|=2u;
+            if(clipAt(v.b,sd))f|=4u;
+            if(cf>0.02&&cf<0.98&&!(sd&&max(v.r,max(v.g,v.b))>1.02))f|=8u; // P540: not over the short frames' measured light
+            fl|=f<<(8u*uint(k));
+        }
     }
     int o=(yb*u_size.x+q*4)*3/2;
     rgb[o+0]=packHalf2x16(c[0].rg);
@@ -325,9 +394,9 @@ void main(){
     rgb[o+3]=packHalf2x16(c[2].rg);
     rgb[o+4]=packHalf2x16(vec2(c[2].b,c[3].r));
     rgb[o+5]=packHalf2x16(c[3].gb);
-    flags[(yb*u_size.x+q*4)/4]=fl;
+    if(!u_skip_flags)flags[(yb*u_size.x+q*4)/4]=fl;
     // P501: each HALF cell once, by the first OUT pixel over it (p = ceil(h OUT / HALF)); at OUT = 2 HALF the even pixels, as before
-    for(int k=0;k<4;++k){
+    if(!u_skip_eff)for(int k=0;k<4;++k){
         ivec2 p=ivec2(q*4+k,y);
         ivec2 h=p*u_half/u_size;
         if(p==(h*u_size+u_half-ivec2(1))/u_half&&h.x<u_half.x&&h.y<u_half.y)eff[h.y*u_half.x+h.x]=texelFetch(u_frame_weights,h,0).r+1.0;
@@ -360,6 +429,7 @@ inline std::string fastOutputTiledText(){
     once("float lumaAt(ivec2 p, ivec2 lo, ivec2 hi) { return dot(at(clamp(p, lo, hi)), vec3(0.25, 0.5, 0.25)); }",
          "float lumaAt(ivec2 p, ivec2 lo, ivec2 hi) { return lumT(p); }",1);
     once("at(clamp(p + sc(dx, dy), lo, hi))","atT(p + sc(dx, dy))",2);
+    once("vec3 motionNrSample(ivec2 p){return at(p);}","vec3 motionNrSample(ivec2 p){return atT(p);}",1);
     once("void main(){\n    int q=int(gl_GlobalInvocationID.x);\n    int yb=int(gl_GlobalInvocationID.y);\n",
          "void main(){\n"
          "    ivec2 lid=ivec2(gl_LocalInvocationID.xy);\n"
@@ -800,6 +870,8 @@ public:
     }
     // GPU objects of one merge (the programs stay)
     void freeObjects(){
+        // The staging future is joined before the merge releases its GPU objects, also on error.
+        if(mappedWrite)unmapWrite(mappedWrite);
         if(!fbos.empty())glDeleteFramebuffers(GLsizei(fbos.size()),fbos.data());
         if(!textures.empty())glDeleteTextures(GLsizei(textures.size()),textures.data());
         if(!buffers.empty())glDeleteBuffers(GLsizei(buffers.size()),buffers.data());
@@ -935,17 +1007,24 @@ public:
     }
     /** An upload buffer for the CPU's writes (the caller waited for the GPU's last read of it): the AHB's view, else the map. */
     void* mapWrite(GLuint b,size_t offset,size_t bytes){
+        if(mappedWrite)throw std::logic_error("FAST MERGE GPU: an upload buffer is still mapped");
         const auto ah=ahbOf.find(b);
+        void* p=nullptr;
         if(ah!=ahbOf.end()){
-            void* p=nullptr;
-            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,-1,nullptr,&p)!=0||!p)return nullptr;
-            return static_cast<char*>(p)+offset;
+            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,-1,nullptr,&p)!=0)return nullptr;
+            if(!p){ahb.unlock(ah->second,nullptr);return nullptr;}
+            p=static_cast<char*>(p)+offset;
+        }else{
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
+            p=glMapBufferRange(GL_SHADER_STORAGE_BUFFER,GLintptr(offset),GLsizeiptr(bytes),GL_MAP_WRITE_BIT|GL_MAP_UNSYNCHRONIZED_BIT|GL_MAP_INVALIDATE_RANGE_BIT);
         }
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
-        return glMapBufferRange(GL_SHADER_STORAGE_BUFFER,GLintptr(offset),GLsizeiptr(bytes),GL_MAP_WRITE_BIT|GL_MAP_UNSYNCHRONIZED_BIT|GL_MAP_INVALIDATE_RANGE_BIT);
+        if(p)mappedWrite=b;
+        return p;
     }
     bool unmapWrite(GLuint b){
+        if(mappedWrite!=b)return false;
         const auto ah=ahbOf.find(b);
+        mappedWrite=0;
         if(ah!=ahbOf.end())return ahb.unlock(ah->second,nullptr)==0;
         glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
         return glUnmapBuffer(GL_SHADER_STORAGE_BUFFER)==GL_TRUE;
@@ -987,42 +1066,62 @@ public:
             }
             if(!waited)glFinish();
             void* p=nullptr;
-            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,-1,nullptr,&p)!=0||!p)throw std::runtime_error("FAST MERGE GPU: readback buffer not locked");
+            if(ahb.lock(ah->second,AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,-1,nullptr,&p)!=0)throw std::runtime_error("FAST MERGE GPU: readback buffer not locked");
+            struct UnlockRead {
+                Ahb& api;
+                AHardwareBuffer* buffer;
+                ~UnlockRead(){if(buffer)api.unlock(buffer,nullptr);}
+            } unlock{ahb,ah->second};
+            if(!p)throw std::runtime_error("FAST MERGE GPU: readback buffer has no CPU view");
             const auto t1=std::chrono::steady_clock::now();
             use(static_cast<const void*>(p));
             const auto t2=std::chrono::steady_clock::now();
-            ahb.unlock(ah->second,nullptr);
+            const int status=ahb.unlock(unlock.buffer,nullptr);
+            unlock.buffer=nullptr;
+            if(status!=0)throw std::runtime_error("FAST MERGE GPU: readback buffer not unlocked");
             mapMs+=std::chrono::duration<double,std::milli>(t1-t0).count();useMs+=std::chrono::duration<double,std::milli>(t2-t1).count();
             unmapMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t2).count();
             return;
         }
+        struct UnmapRead {
+            GLenum target;
+            GLuint temporary=0;
+            bool mapped=false;
+            ~UnmapRead(){
+                if(mapped)glUnmapBuffer(target);
+                if(temporary)glDeleteBuffers(1,&temporary);
+            }
+            bool unmap(){mapped=false;return glUnmapBuffer(target)==GL_TRUE;}
+        };
         glBindBuffer(GL_SHADER_STORAGE_BUFFER,b);
         const void* m=glMapBufferRange(GL_SHADER_STORAGE_BUFFER,0,GLsizeiptr(bytes),GL_MAP_READ_BIT);
         if(!m){glGetError();glFinish();m=glMapBufferRange(GL_SHADER_STORAGE_BUFFER,0,GLsizeiptr(bytes),GL_MAP_READ_BIT);}
         if(m){
+            UnmapRead read{GL_SHADER_STORAGE_BUFFER,0,true};
             const auto t1=std::chrono::steady_clock::now();
             use(m);
             const auto t2=std::chrono::steady_clock::now();
-            if(!glUnmapBuffer(GL_SHADER_STORAGE_BUFFER))throw std::runtime_error("FAST MERGE GPU storage invalidated");
+            if(!read.unmap())throw std::runtime_error("FAST MERGE GPU storage invalidated");
             mapMs+=std::chrono::duration<double,std::milli>(t1-t0).count();useMs+=std::chrono::duration<double,std::milli>(t2-t1).count();
             unmapMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t2).count();
             return;
         }
         glGetError();
-        GLuint tmp=0;glGenBuffers(1,&tmp);
-        glBindBuffer(GL_COPY_READ_BUFFER,b);glBindBuffer(GL_COPY_WRITE_BUFFER,tmp);
+        UnmapRead read{GL_COPY_WRITE_BUFFER};
+        glGenBuffers(1,&read.temporary);
+        glBindBuffer(GL_COPY_READ_BUFFER,b);glBindBuffer(GL_COPY_WRITE_BUFFER,read.temporary);
         glBufferData(GL_COPY_WRITE_BUFFER,GLsizeiptr(bytes),nullptr,GL_DYNAMIC_READ);
         glCopyBufferSubData(GL_COPY_READ_BUFFER,GL_COPY_WRITE_BUFFER,0,0,GLsizeiptr(bytes));
         glFinish();
         m=glMapBufferRange(GL_COPY_WRITE_BUFFER,0,GLsizeiptr(bytes),GL_MAP_READ_BIT);
-        if(!m){glDeleteBuffers(1,&tmp);throw std::runtime_error("FAST MERGE GPU readback failed ("+std::to_string(bytes)+" bytes)");}
+        if(!m)throw std::runtime_error("FAST MERGE GPU readback failed ("+std::to_string(bytes)+" bytes)");
+        read.mapped=true;
         use(m);
-        const bool ok=glUnmapBuffer(GL_COPY_WRITE_BUFFER)!=GL_FALSE;
-        glDeleteBuffers(1,&tmp);
-        if(!ok)throw std::runtime_error("FAST MERGE GPU storage invalidated");
+        if(!read.unmap())throw std::runtime_error("FAST MERGE GPU storage invalidated");
     }
     std::string cacheNote() const {return std::to_string(cacheHits)+"/"+std::to_string(kProgs-1)+" from the cache";} // P480: pHlMaskOut not at init
 private:
+    GLuint mappedWrite=0;
     void cleanup() noexcept {
         if(display==EGL_NO_DISPLAY)return;
         if(context!=EGL_NO_CONTEXT&&eglMakeCurrent(display,surface,surface,context)){
@@ -1048,15 +1147,19 @@ private:
         return cacheDir+"/"+name;
     }
     GLuint loadBinary(const std::string& file){
-        std::ifstream in(file,std::ios::binary);
-        if(!in)return 0;
-        std::vector<char> data((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
-        if(data.size()<=sizeof(GLenum))return 0;
+        std::ifstream in(file,std::ios::binary|std::ios::ate);
+        constexpr std::streamoff header=sizeof(GLenum);
+        const std::streamoff length=in.tellg();
+        if(length<=header||length-header>std::numeric_limits<GLsizei>::max())return 0;
+        in.seekg(0);
+        std::vector<char> data(static_cast<size_t>(length));
+        if(!in.read(data.data(),length))return 0;
         GLenum format=0;std::memcpy(&format,data.data(),sizeof(format));
         GLuint program=glCreateProgram();
         glProgramBinary(program,format,data.data()+sizeof(format),GLsizei(data.size()-sizeof(format)));
         GLint ok=0;glGetProgramiv(program,GL_LINK_STATUS,&ok);
-        if(!ok||glGetError()!=GL_NO_ERROR){glDeleteProgram(program);std::remove(file.c_str());return 0;}
+        const GLenum error=glGetError();
+        if(!ok||error!=GL_NO_ERROR){glDeleteProgram(program);std::remove(file.c_str());return 0;}
         ++cacheHits;
         utime(file.c_str(),nullptr); // P501: a hit is fresh for trimCache (least recently used goes first)
         return program;

@@ -326,21 +326,6 @@ public class PreferenceKeys {
         return settings.getBoolean(SCOPE_GLOBAL, "pref_scamhdr_diagnostics", false);
     }
 
-    /**
-     * Optional root features (off by default; everything works without root):
-     * the vivo stock-AE observer for the SCAM bracket, and su as the fallback
-     * launcher when the worker is not installed as a native library.
-     */
-    public static boolean isRootEnabled() { return settings.getBoolean(SCOPE_GLOBAL, "pref_root_enabled", false); }
-    /**
-     * true: the vivo stock AE solver through the root observer («Стоковый AE vivo»: Root on, vivo X200 Ultra only); false: the
-     * SCAMERA planner (no root, any device; the default since 8 October 2026).
-     */
-    public static boolean useStockBracketPlanner() {
-        // P129: the stock AE observer (root + Frida) planned SCAM HDR's bracket only; SHDR's N frames are the ZSL ring at the
-        // preview exposure, always the SCAMERA plan of that exposure. Its native library and assets are gone.
-        return false;
-    }
     /** SCAM: build L from the ZSL N frames instead of capturing it after the shutter. */
     public static boolean isScamZslLong() {
         if (isHybridShot()) return false; // the hybrid takes no L frame (Shasta brackets after the press instead)
@@ -412,6 +397,18 @@ public class PreferenceKeys {
      * {@link #hybridValue}, {@link #hybridSwitch}, {@link #hybridString} or {@link #hybridList}.
      */
     public static final String HYBRID_PREFIX = ScamHybridKeys.PREFIX;
+    public static final String FAST_MOTION_DENOISE_PREFIX = "fast_motion_denoise_";
+    private static final int[] FAST_MOTION_DENOISE_SNR = {2, 3, 4, 8, 16, 32, 64};
+    private static final int[] FAST_MOTION_DENOISE_DEFAULT = {65, 65, 65, 45, 22, 8, 0};
+
+    public static int fastMotionDenoisePoints() { return FAST_MOTION_DENOISE_SNR.length; }
+    public static int fastMotionDenoiseSnr(int point) { return FAST_MOTION_DENOISE_SNR[point]; }
+    public static float fastMotionDenoisePercent(int point) {
+        final int fallback = FAST_MOTION_DENOISE_DEFAULT[point];
+        final float value = hybridValue(FAST_MOTION_DENOISE_PREFIX + fastMotionDenoiseSnr(point), fallback);
+        return Float.isFinite(value) ? Math.max(0f, Math.min(100f, value)) : fallback;
+    }
+
     /** The merge route selector (hybrid | scamhdr), see {@link #mergeRoute()}. */
     public static final String ROUTE_KEY = ScamHybridKeys.ROUTE;
     /** Hybrid defaults that differ from the fallback the shared nodes pass; any other key keeps the caller's fallback. */
@@ -721,6 +718,8 @@ public class PreferenceKeys {
         TUNING_EXTRA.put("bentoBlend", "bento_blend");
         TUNING_EXTRA.put("mosaicUsFill", "us_fill");
         TUNING_EXTRA.put("mosaicWindowFull", "mosaic_window_full");
+        for (int snr : FAST_MOTION_DENOISE_SNR)
+            TUNING_EXTRA.put("fastMotionDenoise" + snr, FAST_MOTION_DENOISE_PREFIX + snr);
     }
 
     /**
@@ -745,6 +744,7 @@ public class PreferenceKeys {
     public static boolean mergeTuningKey(String key) {
         if (key == null || !key.startsWith(HYBRID_PREFIX)) return false;
         final String suffix = key.substring(HYBRID_PREFIX.length());
+        if ("highlight_merge".equals(suffix) || suffix.startsWith(FAST_MOTION_DENOISE_PREFIX)) return true;
         for (String[] k : TUNING_KEYS) if (k[1].equals(suffix)) return true;
         return false;
     }
@@ -759,6 +759,7 @@ public class PreferenceKeys {
     /** "key value" lines for the worker's hybrid_tuning.txt, from the pref_scam_hybrid_* preferences (scam_dev.txt "hybrid_<key>"). */
     public static String hybridTuningText() {
         StringBuilder out = new StringBuilder();
+        if (adaptiveHighlightMerge()) out.append("adaptiveHighlights 1\n");
         final boolean motion = isMotionMode(), noHdr = noHdrFrames();
         for (String[] k : TUNING_KEYS) {
             Float dev = scamDevValue("hybrid_" + k[1]);
@@ -846,9 +847,9 @@ public class PreferenceKeys {
         if (hybridValue("fm_keep_context", 1f) == 0f) out.append("fmKeepContext 0\n");
         if (hybridValue("fm_chroma_fused", 1f) == 0f) out.append("fmChromaFused 0\n");
         // P712: where the fast merge's readback (bit 1) and RAW upload ring (bit 2) live: hardware buffers (3, the default) or the
-        // driver's own storage - an A/B of the output pass's / the unpack's GPU time ("hybrid_fm_ahb 0..3")
+        // driver's own storage. Bit 4 additionally tests submitting unpack before the next upload's fence wait.
         final float ahb = hybridValue("fm_ahb", 3f);
-        if (ahb != 3f) out.append("fmAhb ").append(Math.round(Math.max(0f, Math.min(3f, ahb)))).append('\n');
+        if (ahb != 3f) out.append("fmAhb ").append(Math.round(Math.max(0f, Math.min(7f, ahb)))).append('\n');
         // P607 «Качество»: an ultrashort frame the GPU homography refused for too few inliers starts its registration from that
         // homography (worker usWeakHom 1), and the Bento blend flags a colour at the ultrashort clip where the frames holding half
         // its weight are clipped (usClipVote 1); "hybrid_us_weak_hom 0" / "hybrid_us_clip_vote 0" = before
@@ -1030,8 +1031,18 @@ public class PreferenceKeys {
         final int fastSport = Math.round(hybridValue("fast_merge_sport", sport ? 3f : 0f));
         if (pixDiff > 0f) out.append("rejPixDiff ").append(Math.min(1f, pixDiff)).append('\n');
         if (shiftMax > 0f) out.append("donorShiftMax ").append(shiftMax).append('\n');
-        if (fastSport > 0 && fastProcessing()) out.append("fastMergeSport ").append(fastSport & 3).append('\n');
-        if (fastProcessing()) out.append(FAST_TUNING); // P474: last, over the lines above
+        final boolean fast = fastProcessing();
+        if (fast && !sport && scamDevValue("hybrid_fast_merge_sport") == null) out.append("daylightPhotoMotion 1\n");
+        if (fastSport > 0 && fast) out.append("fastMergeSport ").append(fastSport & 3).append('\n');
+        if (fast) {
+            if (hybridSwitch(FAST_MOTION_DENOISE_PREFIX + "enabled", true)) {
+                for (int i = 0; i < fastMotionDenoisePoints(); i++) {
+                    out.append("fastMotionDenoise").append(fastMotionDenoiseSnr(i)).append(' ')
+                            .append(fastMotionDenoisePercent(i) / 100f).append('\n');
+                }
+            }
+            out.append(FAST_TUNING); // P474: last, over the lines above
+        }
         // P600: «Все шумодавы» off - the worker's own denoise stages off too ("denoise 0", applied after every line); on: no line
         out.append(com.scamera.app.processing.opengl.postpipeline.DenoiseStages.workerTuning());
         return out.toString();
@@ -1048,10 +1059,10 @@ public class PreferenceKeys {
             + "rejMeanFloor 0\nrejKneeLo 0\nrejKneeHi 0\nlaStride 16\nlaIters 0\nfastMerge 1\n";
 
     /**
-     * P614 (owner, 2026-11-11): «Why тон» (pref_scam_hybrid_tone_version) on the main settings page - "v1" (default, our tone as it
-     * was) or "v2" (the reference tone ported one to one: WhyV2Stats / WhyV2Fusion / WhyV2Tone).
+     * P614 (owner, 2026-11-11): «Why тон» (pref_scam_hybrid_tone_version) on the main settings page - "v1" (our tone as it was) or
+     * "v2" (the reference tone ported one to one: WhyV2Stats / WhyV2Fusion / WhyV2Tone; the default since P721).
      */
-    public static boolean whyToneV2() { return "v2".equals(hybridString("tone_version", "v1")); }
+    public static boolean whyToneV2() { return "v2".equals(hybridString("tone_version", "v2")); } // P721: V2 by default
     /** P718: «Чёрно-белый» (pref_scam_hybrid_colour_mono) is V1's: with it on a shot and the live tone take V1, as a film does. */
     public static boolean monoFilter() {
         return java.util.Arrays.asList(com.scamera.app.processing.color.ColourLook.MONO).indexOf(hybridString("colour_mono", "off")) > 0;
@@ -1070,6 +1081,7 @@ public class PreferenceKeys {
     }
     /** P474: «Быстрый». */
     public static boolean fastProcessing() { return "fast".equals(processingMode()); }
+    public static boolean adaptiveHighlightMerge() { return "adaptive".equals(hybridString("highlight_merge", "classic")); }
     /**
      * P195 (owner, 2026-10-17: «добавь так же возможность отключать наш 2х2 и 4х4 ремозаик чтобы получать фото без него»):
      * pref_scam_hybrid_mosaic_remosaic, the top row of «Мозаика без ремозаика»; on (default) = our remosaic of Quad / Tetra streams

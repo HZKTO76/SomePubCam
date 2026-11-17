@@ -498,6 +498,7 @@ public final class SettingsStyle {
                 || p instanceof com.scamera.app.ui.settings.custompreferences.ShadeTransparencyPreference
                 || p instanceof com.scamera.app.ui.settings.custompreferences.WatermarkPreviewPreference // P628
                 || p instanceof com.scamera.app.ui.settings.custompreferences.ProfilesPreference
+                || p instanceof com.scamera.app.ui.settings.custompreferences.MotionDenoiseCurvePreference
                 || p instanceof com.scamera.app.ui.settings.custompreferences.FormatPickerPreference
                 || p instanceof com.scamera.app.ui.settings.custompreferences.SizePickerPreference;
     }

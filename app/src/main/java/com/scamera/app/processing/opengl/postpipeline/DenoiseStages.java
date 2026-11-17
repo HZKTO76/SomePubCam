@@ -44,7 +44,9 @@ public final class DenoiseStages {
         /** The worker's 5 x 5 chroma smoothing of the gained ultrashort colour in the Bento blend (kHybUsBlend). */
         BENTO_CHROMA(Where.WORKER, "bentoBlendChroma"),
         /** P603: the worker's range-gated 5 x 5 smoothing of a Tetra merge where few frames merged (moving subjects). */
-        TETRA_MOTION_SMOOTH(Where.WORKER, "mosaicTetraMotionSmooth");
+        TETRA_MOTION_SMOOTH(Where.WORKER, "mosaicTetraMotionSmooth"),
+        /** SNR-dependent noise reduction in moving regions of the Fast RAW merge. */
+        FAST_MOTION_DENOISE(Where.WORKER, "fastMotionDenoise");
 
         public final Where where;
         /** The node that asks the switch (POST), the worker's HybridTuning field (WORKER). */

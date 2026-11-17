@@ -54,10 +54,9 @@ public class GLHistogram implements AutoCloseable {
 
     /** The histograms of an image (closed afterwards). */
     public int[][] Compute(GLImage image) {
-        final GLTexture texture = new GLTexture(image);
-        final int[][] counts = Compute(texture);
-        image.close();
-        return counts;
+        try (GLImage pixels = image; GLTexture texture = new GLTexture(pixels)) {
+            return Compute(texture);
+        }
     }
 
     public int[][] Compute(GLTexture input) {

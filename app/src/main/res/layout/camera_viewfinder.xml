@@ -19,12 +19,11 @@
                 android:layout_height="match_parent"
                 android:layout_gravity="center">
 
-            <!-- the camera's frames (GLPreview sizes itself to the stream's aspect), from the top left -->
+            <!-- The camera's frames, centred across the window at the stream's aspect. -->
             <com.scamera.app.ui.camera.views.viewfinder.GLPreview
                     android:id="@+id/texture"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    app:layout_constraintHorizontal_bias="0.0"
                     app:layout_constraintTop_toTopOf="parent"
                     app:layout_constraintStart_toStartOf="parent"
                     app:layout_constraintEnd_toEndOf="parent"/>
@@ -84,7 +83,7 @@
                     android:layout_height="20dp"
                     android:layout_marginTop="12dp"
                     android:layout_marginEnd="8dp"
-                    android:fontFamily="sans-serif-medium"
+                    android:fontFamily="@font/roboto_flex_500"
                     android:gravity="center_vertical"
                     android:maxLines="1"
                     android:textSize="11sp"

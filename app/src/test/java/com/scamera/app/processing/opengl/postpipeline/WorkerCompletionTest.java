@@ -106,13 +106,13 @@ public class WorkerCompletionTest {
 
     /** A real child: the line comes first, the exit (a crash after it) 0.4 s later and is only reaped. */
     @Test public void aRealProcessIsReadAtItsLineAndReapedLater() throws Exception {
-        final com.scamera.app.util.WorkerSpawn.Child child = com.scamera.app.util.WorkerSpawn.Child.of(
-                new ProcessBuilder("sh", "-c", "echo 'SCAM OUTPUT: x'; echo 'SCAM CAPTURE OK'; sleep 0.4; echo late; exit 139")
-                        .redirectErrorStream(true).start());
+        final Process child = new ProcessBuilder("sh", "-c", "echo 'SCAM OUTPUT: x'; echo 'SCAM CAPTURE OK'; sleep 0.4; echo late; exit 139")
+                .redirectErrorStream(true).start();
+        child.getOutputStream().close();
         final WorkerCompletion c = new WorkerCompletion();
         final StringBuilder seen = new StringBuilder();
         final Thread reader = new Thread(() -> {
-            try (BufferedReader lines = new BufferedReader(new InputStreamReader(child.output))) {
+            try (BufferedReader lines = new BufferedReader(new InputStreamReader(child.getInputStream()))) {
                 String line;
                 while ((line = lines.readLine()) != null) {
                     synchronized (seen) { seen.append(line).append('\n'); }
@@ -126,17 +126,17 @@ public class WorkerCompletionTest {
         reader.start();
         final long t0 = System.currentTimeMillis();
         final WorkerWatchdog.Worker w = c.watched(new WorkerWatchdog.Worker() {
-            @Override public boolean waitFor(long ms) throws InterruptedException { return child.waitFor(ms); }
-            @Override public void destroy() { child.destroy(); }
+            @Override public boolean waitFor(long ms) throws InterruptedException { return child.waitFor(ms, java.util.concurrent.TimeUnit.MILLISECONDS); }
+            @Override public void destroy() { child.destroyForcibly(); }
         }, true);
         assertTrue(w.waitFor(10000));
         final long atLine = System.currentTimeMillis() - t0;
         assertTrue(c.ok());
         assertTrue("taken at the line, not at the exit: " + atLine + " ms", atLine < 350);
         final String exit = WorkerCompletion.reap(new WorkerCompletion.Exit() {
-            @Override public boolean waitFor(long ms) throws InterruptedException { return child.waitFor(ms); }
+            @Override public boolean waitFor(long ms) throws InterruptedException { return child.waitFor(ms, java.util.concurrent.TimeUnit.MILLISECONDS); }
             @Override public int exitValue() { return child.exitValue(); }
-            @Override public void destroy() { child.destroy(); }
+            @Override public void destroy() { child.destroyForcibly(); }
         }, 10000);
         assertEquals("WORKER EXIT after the result: signal 11 (the result was complete)", exit);
         reader.join(5000);

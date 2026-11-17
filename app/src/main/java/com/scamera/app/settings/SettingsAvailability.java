@@ -14,7 +14,6 @@ public final class SettingsAvailability {
     private String heic10Unavailable;
     /** Why «HDR в HEIC / AVIF» cannot act on this phone (processing.color.HdrOutput.unavailableReason: Android 13), or null. */
     private String hdrUnavailable;
-    /** The vivo stock AE observer runs on this phone (capture.ScamStockAe.supportedDevice: the vivo X200 Ultra). */
     /** Why «Цветовой метод» does not act here (a tuned / ISP matrix replaces it), null when it does. */
     private String colorMethodOverride;
     /** The tele's smooth optical zoom exists here (capture.XiaomiTeleZoom.phone: the Xiaomi 17 Ultra); assumed unless told otherwise. */
@@ -46,7 +45,6 @@ public final class SettingsAvailability {
     public SettingsAvailability heic10Unavailable(String reason) { heic10Unavailable = reason; return this; }
     /** The device fact behind «HDR в HEIC / AVIF»: the reason it cannot act here (Android version) or null. */
     public SettingsAvailability hdrUnavailable(String reason) { hdrUnavailable = reason; return this; }
-    /** The device fact behind «Стоковый AE vivo»: the stock AE observer exists on this phone. */
     /** The device fact behind «Цветовой метод»: the matrix that replaces the choice on this phone, or null. */
     public SettingsAvailability colorMethodOverride(String reason) { colorMethodOverride = reason; return this; }
     /** The device fact behind «Плавный оптический зум»: hidden on any other phone than the Xiaomi 17 Ultra. */
@@ -158,9 +156,9 @@ public final class SettingsAvailability {
         }
     }
 
-    /** P614: «Why тон» V2 is chosen (pref_scam_hybrid_tone_version; V1 by default). */
+    /** P614: «Why тон» V2 is chosen (pref_scam_hybrid_tone_version; P721: V2 by default). */
     private boolean toneV2() {
-        return text("pref_scam_hybrid_tone_version", "v1").trim().equals("v2");
+        return text("pref_scam_hybrid_tone_version", "v2").trim().equals("v2");
     }
 
     /**
@@ -277,11 +275,14 @@ public final class SettingsAvailability {
             HYB + "mm_motion_boost", HYB + "mm_boost_value", HYB + "mm_motion_threshold",
             // the groups whose rows are all «Качество»'s
             "scam_hybrid_merge_align_category", "scam_hybrid_merge_reject_category", "scam_hybrid_merge_final_category"));
-    /**
-     * P629: the routes {@code key} acts on ({@link #FAST} | {@link #QUALITY}): {@link #QUALITY_ONLY}; every other row (the denoise
-     * after the merge, the burst's frames, «Спорт»'s capture, Quad / Tetra, the kernel's footprints) acts on both.
-     */
+    static boolean fastMotionDenoiseKey(String key) {
+        return "scam_hybrid_fast_motion_denoise_screen".equals(key)
+                || (key != null && key.startsWith(HYB + "fast_motion_denoise_"));
+    }
+
+    /** Processing routes this row acts on. */
     static int routes(String key) {
+        if (fastMotionDenoiseKey(key)) return FAST;
         return QUALITY_ONLY.contains(key) ? QUALITY : ALL;
     }
 
@@ -294,6 +295,8 @@ public final class SettingsAvailability {
     /** P629: why a row or group of «Шумоподавление и склейка» does not act with the chosen processing mode, null when it does. */
     String routeReason(String key) {
         if ((routes(key) & route()) != 0) return null;
+        if (fastMotionDenoiseKey(key))
+            return Lang.t("Только для режима «Быстро» (Режим обработки).", "“Fast” processing mode only (Processing mode).");
         // P627: no mode hands its shots to another mode's merge, so a «Качество» row does nothing in «Быстрый»
         return Lang.t("Только для режима «Качество» (Режим обработки).", "“Quality” processing mode only (Processing mode).");
     }
@@ -323,7 +326,8 @@ public final class SettingsAvailability {
             "scam_hybrid_mosaic_screen", "scam_hybrid_mosaic_native_category", "scam_hybrid_merge_final_category"));
 
     static boolean rawMergeOnly(String key) {
-        return RAW_MERGE_ONLY.contains(key) || QUALITY_ONLY.contains(key) || key.startsWith(HYB + "mm_") || key.startsWith(HYB + "mosaic_");
+        return RAW_MERGE_ONLY.contains(key) || QUALITY_ONLY.contains(key) || fastMotionDenoiseKey(key)
+                || key.startsWith(HYB + "mm_") || key.startsWith(HYB + "mosaic_");
     }
 
     /** P646: why a row or group of «Шумоподавление и склейка» does not act with the current lens's merge route, null when it does. */
@@ -387,7 +391,7 @@ public final class SettingsAvailability {
                         "No effect with a film simulation at 100 %: the film sets the tone, colour and texture. Below 100 % its influence is reduced.");
         }
         // The denoise and watermark switches sit on a parent page of these rows (P6), so the rule replaces android:dependency.
-        if ((key.startsWith("pref_scam_hybrid_dn_") || key.startsWith("pref_scam_hybrid_why_dn_")
+        if ((fastMotionDenoiseKey(key) || key.startsWith("pref_scam_hybrid_dn_") || key.startsWith("pref_scam_hybrid_why_dn_")
                 || key.startsWith("pref_scam_hybrid_why_ms_") || key.startsWith("pref_scam_hybrid_resolve_speckle_")
                 || any(key, "pref_scam_hybrid_why_bracket_denoise", "pref_scam_hybrid_why_chroma_denoise"))
                 && !on("pref_scam_hybrid_denoise", true)) return Lang.t("Включите «Все шумодавы» (Шумоподавление и склейка).",

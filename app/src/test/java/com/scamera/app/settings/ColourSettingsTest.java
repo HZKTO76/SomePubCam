@@ -172,6 +172,7 @@ public class ColourSettingsTest {
         for (String k : acting) assertTrue("a real row: " + k, xml.contains("android:key=\"" + k + "\""));
         final String texture = "pref_scam_hybrid_why_texture", hdr = PhotoFormat.KEY_HDR;
         Map<String, Object> v = new HashMap<>();
+        v.put("pref_scam_hybrid_tone_version", "v1"); // P721: V2 by default; the V1 rows (AgX look) are the point here
         for (String k : bypassed) assertNull("no film: " + k, new SettingsAvailability(v).reason(k));
         assertNull(new SettingsAvailability(v).reason(texture));
         assertNull(new SettingsAvailability(v).reason(hdr));

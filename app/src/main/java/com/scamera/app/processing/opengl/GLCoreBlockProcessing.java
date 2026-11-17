@@ -84,7 +84,7 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
 
     /** P713: an {@link RgbaSink#stream} in progress. */
     public interface RowStream {
-        /** Rows [0, {@code rows}) of the frame are final. */
+        /** Rows [0, {@code rows}) of the frame are final. The readback loop owns the current GL context. */
         void ready(int rows);
 
         /** Every row is final: true - the sink took the frame (no bitmap); false - the bitmap is made from the frame. */
@@ -324,6 +324,8 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
     static final class OutputTiming {
         final boolean sync;
         long pending, render, readback, copy;
+        long submit, map, encode;
+        int pboSlots;
         int tiles;
         private long last = System.nanoTime();
         private final long start = last;
@@ -356,6 +358,8 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
         /** A failed pixel-pack buffer attempt: its time stays in the total only. */
         void reset() {
             render = readback = copy = 0;
+            submit = map = encode = 0;
+            pboSlots = 0;
             tiles = 0;
             lap();
         }
@@ -370,6 +374,9 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
 
         void log(String path, int w, int h) {
             Log.i("SCAM_PIPELINE", line(path, w, h));
+            if (pboSlots != 0) Log.i("PERF", "post output slots=" + pboSlots + " tiles=" + tiles
+                    + " submit_ms=" + submit / 1_000_000 + " map_ms=" + map / 1_000_000
+                    + " copy_ms=" + copy / 1_000_000 + " encoder_tail_ms=" + encode / 1_000_000);
         }
     }
 
@@ -656,6 +663,13 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
     /** P713: the largest frame streamed into the encoder (a 50 MP one: its 200 MB frame buffer instead of the ring's bitmap). */
     static final long STREAM_MAX_PIXELS = 64_000_000L;
 
+    /** post_pbo_ring 2..4 can select a larger ring on an ordinary 8-bit shot. */
+    static int streamedPboSlots(boolean deferred, int tiles, long pixels, float setting) {
+        final int slots = pixels <= PBO_MAX_PIXELS && setting >= 2f && setting <= 4f
+                ? Math.round(setting) : deferred ? 2 : 3;
+        return Math.min(slots, Math.max(1, tiles));
+    }
+
     /**
      * P713: {@link #streamedWanted}'s path. The deferred last pass ({@code deferred}, may be null) draws the lines each tile reads
      * right before the tile; the tile goes into buffer k % ring of the ring and is copied into the frame once the next ring - 1
@@ -684,7 +698,9 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
         final GLBlockDivider divider = new GLBlockDivider(outH, GLDrawParams.TILE_ROWS);
         for (int[] t = new int[2]; divider.nextBlock(t); ) tileList.add(t.clone());
         // a tile is copied once the next one is queued (the GPU busy with it meanwhile); 3 without a deferred pass, as the ring path
-        final int ring = Math.min(deferred != null ? 2 : 3, Math.max(1, tileList.size()));
+        final int ring = streamedPboSlots(deferred != null, tileList.size(), (long) outW * outH,
+                PreferenceKeys.scamDevNumber("post_pbo_ring", 1f));
+        timing.pboSlots = ring;
         final int[] pbo = new int[ring];
         boolean mapped = false;
         boolean done = false;
@@ -713,16 +729,19 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
             }
             if (glGetError() != GL_NO_ERROR) return failStreamed(deferred);
             glBindFramebuffer(GL_FRAMEBUFFER, tileFramebuffer[0]);
+            // The tiles only change viewport, yOffset and pixel-pack buffer; RowStream.ready works on CPU bytes.
+            final GLDeferredDraw.State outputState = deferred != null && mapping != null ? deferred.captureOutputState() : null;
             final boolean invalidate = PostGlMode.invalidate();
             final int[] colour = {GLES30.GL_COLOR_ATTACHMENT0};
             for (int[] step : ringSteps(tileList.size(), ring)) {
                 final int[] tile = tileList.get(step[0]);
                 final int bytes = outW * tile[1] * 4;
                 if (step[1] == 0) {
+                    final long submitAt = System.nanoTime();
                     if (deferred != null && mapping != null) {
                         final int[] lines = GLDeferredDraw.sourceLines(mapping[0], mapping[1] != 0, tile[0], tile[0] + tile[1],
                                 mapping[2], mapping[3], mapping[4]);
-                        deferred.lines(lines[2] != 0, lines[0], lines[1]);
+                        deferred.lines(lines[2] != 0, lines[0], lines[1], outputState);
                     }
                     GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pbo[step[0] % ring]);
                     if (invalidate) GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, colour, 0);
@@ -732,12 +751,15 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
                     timing.rendered();
                     GLES30.glReadPixels(0, 0, outW, tile[1], outFormat.getGLFormatExternal(), outFormat.getGLType(), 0);
                     GpuPace.block(); // P668: a submission per tile on the paced post
+                    timing.submit += System.nanoTime() - submitAt;
                     timing.readBack();
                     timing.tiles++;
                     continue;
                 }
                 GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, pbo[step[0] % ring]);
+                final long mapAt = System.nanoTime();
                 final Buffer view = GLES30.glMapBufferRange(GLES30.GL_PIXEL_PACK_BUFFER, 0, bytes, GLES30.GL_MAP_READ_BIT);
+                timing.map += System.nanoTime() - mapAt;
                 mapped = view != null;
                 if (!(view instanceof ByteBuffer) || view.capacity() < bytes || glGetError() != GL_NO_ERROR) return failStreamed(deferred);
                 timing.readBack(); // the map waits for the GPU's copy of this tile
@@ -765,9 +787,12 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             done = true;
-            final RowStream finishing = stream;
+            final long encodeAt = System.nanoTime();
+            // A failed finish still leaves the encoder to abort before the frame buffer is freed.
+            final boolean encoded = stream.finish();
             stream = null;
-            if (finishing.finish()) {
+            timing.encode = System.nanoTime() - encodeAt;
+            if (encoded) {
                 sinkTook = true;
                 tileBuffer = null;
                 timing.log("pbo ring -> jpeg streamed", outW, outH);
@@ -816,8 +841,10 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
     private Bitmap drawBlocksToBitmap1010102(OutputTiming timing) {
         requireTileBuffer();
         final Bitmap dst = Bitmap.createBitmap(outW, outH, Bitmap.Config.RGBA_1010102);
+        final boolean nativeRows = !PostGlMode.legacy() && !PostGlMode.tileReadback();
+        TileBlitter blitter = null;
         boolean done = false;
-        try (TileBlitter blitter = new TileBlitter(dst, stripRows())) {
+        try {
             glBindFramebuffer(GL_FRAMEBUFFER, tileFramebuffer[0]);
             final GLBlockDivider tiles = new GLBlockDivider(outH, GLDrawParams.TILE_ROWS);
             final int[] tile = new int[2];
@@ -838,7 +865,11 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
                         return drawBlocksToBitmap();
                     }
                 }
-                blitter.blit(tileBuffer, tile[0], tile[1]);
+                // Same packed words as the strip's SRC copy, without the intermediate bitmap copy.
+                if (!nativeRows || blitter != null || !JpegliEncoder.copyRows(tileBuffer, dst, tile[0], tile[1], 1)) {
+                    if (blitter == null) blitter = new TileBlitter(dst, stripRows());
+                    blitter.blit(tileBuffer, tile[0], tile[1]);
+                }
                 timing.copied();
                 timing.tiles++;
             }
@@ -848,6 +879,7 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
             timing.log("tiles 10-bit", outW, outH);
             return dst;
         } finally {
+            if (blitter != null) blitter.close();
             if (!done && !dst.isRecycled()) dst.recycle();
         }
     }
@@ -922,26 +954,22 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
 
     @Override
     public void close() {
-        // the GPU work completes before the EGL state goes
-        quietly(GLES30::glFinish);
         // P353: the tile target goes with the shot (a kept context would hold one per shot otherwise)
         quietly(() -> {
             makeCurrent();
+            GLES30.glFinish();
             GLES30.glDeleteFramebuffers(1, tileFramebuffer, 0);
             GLES30.glDeleteRenderbuffers(1, tileRenderbuffer, 0);
-            // P638: gone - the deletes below are only for a context that could not be made current here (they ran again after
-            // super.close() had released the context: «call to OpenGL ES API with no current context» in every shot's log)
-            tileFramebuffer[0] = 0;
-            tileRenderbuffer[0] = 0;
         });
         quietly(super::close);
+        // GL names are context-local. A failed bind must not delete another context's resources.
+        tileFramebuffer[0] = 0;
+        tileRenderbuffer[0] = 0;
         final GLImage out = outImage;
         outImage = null;
         if (out != null) quietly(out::close);
         final ByteBuffer tile = tileBuffer;
         tileBuffer = null;
         if (tile != null) quietly(tile::clear);
-        if (tileFramebuffer[0] != 0) quietly(() -> GLES30.glDeleteFramebuffers(1, tileFramebuffer, 0));
-        if (tileRenderbuffer[0] != 0) quietly(() -> GLES30.glDeleteRenderbuffers(1, tileRenderbuffer, 0));
     }
 }

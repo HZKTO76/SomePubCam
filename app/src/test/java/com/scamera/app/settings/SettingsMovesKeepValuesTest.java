@@ -48,7 +48,7 @@ public class SettingsMovesKeepValuesTest {
      * tuning rows (its tables, multipliers, noise model and safeguards).
      */
     private static final List<String> REMOVED = java.util.Arrays.asList("pref_scam_hybrid_despeckle", "photo_style_lut", "pref_scam_hybrid_colour_vib_shadows",
-            "pref_scam_hybrid_colour_vib_highlights", "pref_scam_hybrid_colour_skin_protect",
+            "pref_scam_hybrid_colour_vib_highlights", "pref_scam_hybrid_colour_skin_protect", "pref_root_enabled",
             // P421: the hybrid's NLM engine and its two strengths, the manual SNR and «Карта силы» (scam_dev keys now)
             "pref_scam_hybrid_dn_engine", "pref_scam_hybrid_post_luma", "pref_scam_hybrid_post_chroma", "pref_scam_hybrid_dn_snr",
             "pref_scam_hybrid_dn_strength_map",
@@ -134,7 +134,7 @@ public class SettingsMovesKeepValuesTest {
         assertTrue("rows changed: " + changed, changed.isEmpty());
     }
 
-    @Test public void onlyTheEmptyLutLinkWasRemoved() throws Exception {
+    @Test public void explicitlyRemovedRowsStayOutOfPreferences() throws Exception {
         Map<String, String> before = frozen(), now = current();
         for (String key : REMOVED) {
             assertTrue("frozen " + key, before.containsKey(key));

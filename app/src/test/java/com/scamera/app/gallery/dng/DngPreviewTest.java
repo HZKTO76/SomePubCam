@@ -405,6 +405,10 @@ public class DngPreviewTest {
     /** A minimal lossless JPEG encoder (predictor 1, one table: every category 0..16 has a 5-bit code). */
     static final class Lj92TestEncoder {
         static byte[] encode(int[] samples, int width, int height, int precision) {
+            return encode(samples, width, height, precision, 1);
+        }
+
+        static byte[] encode(int[] samples, int width, int height, int precision, int channels) {
             ByteArrayOutputStream o = new ByteArrayOutputStream();
             o.write(0xFF); o.write(0xD8);
             o.write(0xFF); o.write(0xC4);
@@ -412,18 +416,22 @@ public class DngPreviewTest {
             o.write(len >> 8); o.write(len & 0xFF); o.write(0x00);
             for (int l = 1; l <= 16; ++l) o.write(l == 5 ? 17 : 0);
             for (int s = 0; s <= 16; ++s) o.write(s);
-            o.write(0xFF); o.write(0xC3); o.write(0); o.write(11); o.write(precision);
-            o.write(height >> 8); o.write(height & 0xFF); o.write(width >> 8); o.write(width & 0xFF); o.write(1);
-            o.write(1); o.write(0x11); o.write(0);
-            o.write(0xFF); o.write(0xDA); o.write(0); o.write(8); o.write(1); o.write(1); o.write(0x00); o.write(1); o.write(0); o.write(0);
+            o.write(0xFF); o.write(0xC3); o.write(0); o.write(8 + 3 * channels); o.write(precision);
+            o.write(height >> 8); o.write(height & 0xFF); o.write(width >> 8); o.write(width & 0xFF); o.write(channels);
+            for (int c = 1; c <= channels; c++) { o.write(c); o.write(0x11); o.write(0); }
+            o.write(0xFF); o.write(0xDA); o.write(0); o.write(6 + 2 * channels); o.write(channels);
+            for (int c = 1; c <= channels; c++) { o.write(c); o.write(0x00); }
+            o.write(1); o.write(0); o.write(0);
             long acc = 0;
             int n = 0;
             List<Integer> bytes = new ArrayList<>();
+            int rowSamples = width * channels;
             for (int y = 0; y < height; ++y)
-                for (int x = 0; x < width; ++x) {
-                    int v = samples[y * width + x];
-                    int pred = y == 0 ? (x == 0 ? 1 << (precision - 1) : samples[y * width + x - 1])
-                            : (x == 0 ? samples[(y - 1) * width] : samples[y * width + x - 1]);
+                for (int x = 0; x < rowSamples; ++x) {
+                    int at = y * rowSamples + x;
+                    int v = samples[at];
+                    int pred = x >= channels ? samples[at - channels]
+                            : y > 0 ? samples[at - rowSamples] : 1 << (precision - 1);
                     int diff = (v - pred) & 0xFFFF;
                     if (diff >= 32768) diff -= 65536;
                     int s = diff == 0 ? 0 : 32 - Integer.numberOfLeadingZeros(Math.abs(diff));

@@ -34,10 +34,11 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
     private final FloatBuffer quadUV = quad(1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f);
     /** The texture's turn for the camera's orientation (a z rotation; starts at 180 degrees). */
     private final float[] turn = new float[16];
-    private SurfaceTexture ispSurface;
+    private volatile SurfaceTexture ispSurface;
     private boolean glReady;
-    /** A new ISP frame waits to be latched (onFrameAvailable). */
-    private boolean ispPending;
+    /** ISP callback state, guarded by this renderer's monitor. */
+    private boolean ispPending, ispLatchQueued;
+    private Runnable ispLatchTask;
     private Boolean mLastRawActive;
     private volatile boolean mirrored;
     private final GLPreview host;
@@ -74,6 +75,7 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
     private long mRawProgramsAsked;
     /** P312: when an ISP frame was latched last (a RAW-only session - ISZ, FULLRES - never latches one). */
     private long mIspLatchNs;
+    private long mIspSlowLatchLoggedNs;
     /** P312: after this long the draws stop waiting for the background compile (a stuck one: they compile as before P312). */
     static final long RAW_PROGRAMS_WAIT_MS = 8000;
     private int hProgram2d, aXY2d, uPeak2d, uGain2d, uMirror2d, resolution2d;
@@ -245,7 +247,7 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
     private void drawFrame() {
         // GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
-        latchIsp();
+        latchIsp(false);
         applyPendingTransform();
         // Developed RAW takes over the viewfinder when a frame is available, so
         // what is framed is what the pipeline produces rather than the ISP's own
@@ -529,7 +531,8 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
         } catch (RuntimeException e) {
             Log.w("MainRenderer", "viewfinder thread priority not raised: " + e);
         }
-        ispPending = false;
+        mHaveFrame = false;
+        mRawShownNs = Long.MIN_VALUE / 2;
         mRawRenderer.onContextCreated();
         mWhyTone.onContextCreated();
         mToneTimer.onContextCreated(); // P711
@@ -552,14 +555,19 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
             if (waited > 0) Log.i("PERF", "viewfinder texture released after " + waited + " ms for the camera's close");
             old.release();
         }
-        ispSurface = new SurfaceTexture(ispTex);
+        final SurfaceTexture surface = new SurfaceTexture(ispTex);
+        synchronized (this) {
+            ispSurface = surface;
+            ispPending = ispLatchQueued = false;
+            ispLatchTask = () -> latchQueuedIsp(surface);
+        }
         // P90: frame callbacks on their own thread, not the main looper (a SurfaceTexture made on the GL thread, which has no
         // looper, posts them to the main thread: every busy moment of the UI during processing held the viewfinder back)
-        ispSurface.setOnFrameAvailableListener(this, frameHandler());
+        surface.setOnFrameAvailableListener(this, frameHandler());
         // P680 (performance audit: the camera's open waited for the programs below to link): the camera opens on this texture now;
         // a frame that arrives before the programs are linked only marks ispPending - nothing is drawn or latched before glReady,
         // set at the end of this method on this thread (onDrawFrame runs on it after this returns)
-        host.fireOnSurfaceTextureAvailable(ispSurface, 0, 0);
+        host.fireOnSurfaceTextureAvailable(surface, 0, 0);
         final long textureToldMs = (System.nanoTime() - createdStart) / 1_000_000;
 
         String vertexSrc = ScameraApp.getAssetLoader().getString("shaders/preview/main_vs.glsl");
@@ -808,6 +816,10 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
 
     /** P662: the GL context is about to be destroyed (GLPreview's EGLContextFactory, GL thread). */
     void onContextDestroying() {
+        glReady = false;
+        synchronized (this) {
+            ispLatchTask = null;
+        }
         mRawRenderer.onContextDestroying();
     }
 
@@ -1115,55 +1127,69 @@ public class MainRenderer implements GLSurfaceView.Renderer, SurfaceTexture.OnFr
     private float mFrameGain = 1f;
     private int uGain = -1;
 
-    public synchronized void onFrameAvailable(SurfaceTexture st) {
-        ispPending = true;
-        VfDrawMeter.arrived(false); // P616: a gap without a new frame is the camera's
+    public void onFrameAvailable(SurfaceTexture st) {
         // P353: while the developed RAW frame is on screen (drawn less than RAW_SHOWN_NS ago) an ISP frame is only latched (its
         // buffer goes back to the camera) - each such wake-up drew the same RAW frame again, ~25 of the ~55 draws a second on the
         // OPPO, on the GPU the merge needs. The RAW frames ask for their own draws; without one for RAW_SHOWN_NS the ISP frames
         // draw again (the fall-back to the ISP picture). scam_dev vf_isp_latch 0: every ISP frame draws (as before).
         final long now = System.nanoTime();
-        if (now - mRawShownNs < RAW_SHOWN_NS
-                && com.scamera.app.settings.PreferenceKeys.scamDevSwitch("vf_isp_latch", true)) {
-            host.queueEvent(this::latchIsp);
-            return;
+        final boolean latchOnly = (now - mRawShownNs < RAW_SHOWN_NS
+                && com.scamera.app.settings.PreferenceKeys.scamDevSwitch("vf_isp_latch", true)) || seriesHold(now);
+        Runnable latch = null;
+        synchronized (this) {
+            if (st != ispSurface || ispLatchTask == null) return;
+            ispPending = true;
+            if (latchOnly && !ispLatchQueued) {
+                ispLatchQueued = true;
+                latch = ispLatchTask;
+            }
         }
-        // P365 step 7: while the shot's series is taken the last RAW frame stays on the screen (up to SERIES_HOLD_NS)
-        if (seriesHold(now)) {
-            host.queueEvent(this::latchIsp);
-            return;
-        }
-        host.requestRender();
+        VfDrawMeter.arrived(false); // P616: a gap without a new frame is the camera's
+        // GLSurfaceView's context destruction holds its own lock, then calls onContextDestroying().
+        if (latch != null) host.queueEvent(latch);
+        else if (!latchOnly) host.requestRender();
     }
 
     /** P353: when the developed RAW frame was put on screen last (System.nanoTime). */
     private volatile long mRawShownNs = Long.MIN_VALUE / 2;
     static final long RAW_SHOWN_NS = 300_000_000L;
 
-    /**
-     * Whether the pending ISP frame can be latched: one is pending, the context is set up and current - a latch queued by
-     * onFrameAvailable (queueEvent) runs even while the GL thread is paused (GLThread takes its events before the pause check),
-     * with no context: updateTexImage threw there, on the GL thread.
-     */
-    static boolean latchable(boolean update, boolean glInit, boolean contextCurrent) {
-        return update && glInit && contextCurrent;
+    private void latchQueuedIsp(SurfaceTexture surface) {
+        synchronized (this) {
+            if (surface != ispSurface || ispLatchTask == null) return;
+            ispLatchQueued = false;
+        }
+        latchIsp(true);
     }
 
-    /** The pending ISP frame onto the texture (GL thread). */
-    private synchronized void latchIsp() {
-        // no context: ispPending stays, the next draw latches the frame
-        if (!latchable(ispPending, glReady, !android.opengl.EGL14.EGL_NO_CONTEXT.equals(android.opengl.EGL14.eglGetCurrentContext())))
+    /** Latches the newest ISP frame. A queued event can run without EGL while the GL thread is paused. */
+    private void latchIsp(boolean queued) {
+        if (!glReady || (queued && android.opengl.EGL14.EGL_NO_CONTEXT.equals(android.opengl.EGL14.eglGetCurrentContext())))
             return;
+        final SurfaceTexture surface;
+        synchronized (this) {
+            if (!ispPending) return;
+            surface = ispSurface;
+            ispPending = false;
+        }
+        final long started = System.nanoTime();
         try {
-            ispSurface.updateTexImage();
+            surface.updateTexImage();
         } catch (RuntimeException e) {
+            synchronized (this) {
+                ispPending = true;
+            }
             Log.w("MainRenderer", "ISP latch skipped: " + e);
             return;
         }
-        ispPending = false;
         mHaveFrame = true;
         mIspLatchNs = System.nanoTime();
-        final long shown = ispSurface.getTimestamp(); // one JNI read for both
+        final long latchNs = mIspLatchNs - started;
+        if (latchNs > 70_000_000L && mIspLatchNs - mIspSlowLatchLoggedNs > 2_000_000_000L) {
+            mIspSlowLatchLoggedNs = mIspLatchNs;
+            Log.i("VF_DRAW", "ISP texture latch " + latchNs / 1_000_000L + " ms");
+        }
+        final long shown = surface.getTimestamp(); // one JNI read for both
         mFrameGain = ViewfinderGain.gainFor(shown); // P90
         sShownTimestamp = shown; // P111
     }

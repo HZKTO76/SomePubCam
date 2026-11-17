@@ -245,8 +245,9 @@ public final class OcrEngine {
             }
             if (b == null) return null;
             int rotation = 0;
-            try (InputStream in = cr.openInputStream(uri)) {
-                if (in != null) rotation = new ExifInterface(in).getRotationDegrees();
+            try {
+                final ExifInterface exif = com.scamera.app.gallery.helper.ExifRead.open(cr, uri); // P721
+                if (exif != null) rotation = exif.getRotationDegrees();
             } catch (IOException | RuntimeException ignored) {
             }
             float s = Math.min(1f, (float) maxSide / Math.max(b.getWidth(), b.getHeight()));

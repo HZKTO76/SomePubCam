@@ -11,8 +11,11 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
+import android.view.LayoutInflater;
+import android.view.View;
 import android.widget.TextView;
 
+import com.scamera.app.R;
 import com.scamera.app.circularbarlib.ui.UiScale;
 import com.scamera.app.ui.SplashActivity;
 
@@ -138,5 +141,20 @@ public class UiFixedScaleTest {
         Activity a = splash();
         assertEquals(320, a.getResources().getConfiguration().densityDpi);
         assertEquals(1f, a.getResources().getConfiguration().fontScale, 0f);
+    }
+
+    @Test @Config(qualifiers = "w800dp-h1280dp-xhdpi") public void settingsPagesFitTheWindowAndStayCenteredWhenWide() {
+        Activity a = splash();
+        View root = LayoutInflater.from(a).inflate(R.layout.activity_settings, null, false);
+        View pages = root.findViewById(R.id.settings_container);
+        for (int windowDp : new int[]{320, 390, 512, 800, 1100}) {
+            final int width = windowDp * 2, height = 960;
+            root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+            root.layout(0, 0, width, height);
+            assertEquals(Math.min(640, windowDp) * 2, pages.getWidth());
+            assertEquals((width - pages.getWidth()) / 2, pages.getLeft());
+            assertEquals(height, pages.getHeight());
+        }
     }
 }

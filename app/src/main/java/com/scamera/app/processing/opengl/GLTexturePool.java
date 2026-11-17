@@ -19,6 +19,7 @@ public final class GLTexturePool {
     private static String node = "";
     private static long live, peak;
     private static String peakAt = "", peakSnapshot = "";
+    private static boolean peakSnapshotPending;
     /** live textures: name -> {bytes, node, size format} (for the peak's snapshot). */
     private static final Map<Integer, Object[]> ALIVE = new HashMap<>();
 
@@ -28,6 +29,7 @@ public final class GLTexturePool {
         live = peak = 0;
         peakAt = "";
         peakSnapshot = "";
+        peakSnapshotPending = false;
         node = "";
         ALIVE.clear();
     }
@@ -43,21 +45,26 @@ public final class GLTexturePool {
     static void allocated(int id, long bytes, String what) {
         if (!mine()) return;
         live += bytes;
-        ALIVE.put(id, new Object[]{bytes, node, what});
         if (live > peak) {
             peak = live;
             peakAt = node;
-            snapshotNow();
+            peakSnapshotPending = true;
+        } else {
+            savePeakSnapshot();
         }
+        ALIVE.put(id, new Object[]{bytes, node, what});
     }
 
     static void closed(int id, long bytes) {
         if (!mine()) return;
+        savePeakSnapshot();
         live -= bytes;
         ALIVE.remove(id);
     }
 
-    private static void snapshotNow() {
+    /** Consecutive new peaks supersede each other. Save the latest before the inventory changes or is reported. */
+    private static void savePeakSnapshot() {
+        if (!peakSnapshotPending) return;
         final Map<String, long[]> by = new HashMap<>();
         for (Object[] v : ALIVE.values()) {
             final long[] c = by.computeIfAbsent(v[1] + ":" + v[2], k -> new long[2]);
@@ -68,11 +75,13 @@ public final class GLTexturePool {
         by.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue()[1], a.getValue()[1])).limit(12).forEach(e ->
                 sb.append(' ').append(e.getKey()).append(" x").append(e.getValue()[0]).append('=').append(e.getValue()[1] >> 20).append("MB;"));
         peakSnapshot = sb.toString();
+        peakSnapshotPending = false;
     }
 
     /** The run's line (SCAM_PIPELINE): the peak of texture storage, where, and what was alive then. */
     public static void report(String label) {
         if (!mine()) return;
+        savePeakSnapshot();
         com.scamera.app.util.Log.i("SCAM_PIPELINE", "texture memory " + label + ": peak " + (peak >> 20) + " MB at " + peakAt
                 + ":" + peakSnapshot);
     }

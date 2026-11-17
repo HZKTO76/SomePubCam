@@ -95,6 +95,16 @@ public class ScamLabBurstTest {
         assertEquals(px(2, 127, 95), t.getShort(base + ((2 * H + 95) * W + 127) * 2));
     }
 
+    @Test public void performanceReplayOmitsStageDumpsForTheSameRawInput() throws Exception {
+        final File input = burst(12);
+        final ScamLabBurst lab = new ScamLabBurst(input, null, "grid 2\n");
+        final ScamLabBurst timed = new ScamLabBurst(input, null, "grid 2\n", false);
+        assertTrue(lab.stages());
+        assertFalse(timed.stages());
+        assertEquals(lab.burstTuning(), timed.burstTuning());
+        assertEquals(transport(lab), transport(timed));
+    }
+
     @Test public void theKeptBurstLosesOnlyItsDngAndDiagnosticsFlags() throws Exception {
         final File f = burst(11);
         assertTrue(ScamLab.clearReplayFlags(f));

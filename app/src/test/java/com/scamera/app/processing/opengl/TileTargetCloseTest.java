@@ -20,7 +20,7 @@ import java.lang.reflect.Field;
 /**
  * P638: GLCoreBlockProcessing.close() deleted its tile target twice - on its context, and again after super.close() had
  * released that context (the owner's logs: «E libEGL: call to OpenGL ES API with no current context» on the processing thread of
- * every shot). The second delete is for a context that could not be made current at the first one only.
+ * every shot). A failed context bind cannot authorize deletion on whichever context is still current.
  */
 public class TileTargetCloseTest {
     private static GLCoreBlockProcessing processing() throws Exception {
@@ -48,13 +48,15 @@ public class TileTargetCloseTest {
         assertEquals(0, p.tileRenderbuffer[0]);
     }
 
-    @Test public void aContextThatCouldNotBeMadeCurrentStillGetsTheDelete() throws Exception {
+    @Test public void aFailedBindDoesNotDeleteFromAnUnrelatedContext() throws Exception {
         final GLCoreBlockProcessing p = processing();
         doThrow(new IllegalStateException("EGL_BAD_CONTEXT")).when(p).makeCurrent();
         try (MockedStatic<GLES20> gl = Mockito.mockStatic(GLES20.class)) {
             p.close();
-            gl.verify(() -> GLES20.glDeleteFramebuffers(anyInt(), any(int[].class), anyInt()), times(1));
-            gl.verify(() -> GLES20.glDeleteRenderbuffers(anyInt(), any(int[].class), anyInt()), times(1));
+            gl.verify(() -> GLES20.glDeleteFramebuffers(anyInt(), any(int[].class), anyInt()), times(0));
+            gl.verify(() -> GLES20.glDeleteRenderbuffers(anyInt(), any(int[].class), anyInt()), times(0));
         }
+        assertEquals(0, p.tileFramebuffer[0]);
+        assertEquals(0, p.tileRenderbuffer[0]);
     }
 }

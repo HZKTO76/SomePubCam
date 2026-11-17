@@ -25,7 +25,9 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -283,15 +285,23 @@ public final class GalleryMoveCopy {
         return com.scamera.app.gallery.raw.RawFormats.isRawName(f.displayName());
     }
 
-    /** A photo a RAW can sit beside (not a RAW, not a video). */
+    /** Whether a non-RAW file can sit beside a RAW. */
     private static boolean photo(MediaFile f) {
-        return !raw(f) && !GalleryVideo.isVideoName(f.displayName()) && f.displayName() != null && f.displayName().lastIndexOf('.') > 0;
+        String name = f.displayName();
+        return name != null && name.lastIndexOf('.') > 0 && !GalleryVideo.isVideoName(name);
     }
 
-    private static boolean same(MediaFile a, MediaFile b) {
-        if (a == b) return true;
-        if (a.rowId() >= 0 && a.rowId() == b.rowId()) return true;
-        return a.contentUri() != null && a.contentUri().equals(b.contentUri());
+    @Nullable
+    private static String pairKey(MediaFile f, boolean raw) {
+        String dir = dirOf(f.filePath());
+        return dir != null && (raw || photo(f)) ? dir + '\u0000' + baseName(f.displayName()) : null;
+    }
+
+    private static boolean place(MediaFile f, Set<String> paths, Set<Uri> uris, Set<MediaFile> withoutLocator) {
+        String path = f.filePath();
+        if (path != null && !path.isEmpty()) return paths.add(path);
+        Uri uri = f.contentUri();
+        return uri != null ? uris.add(uri) : withoutLocator.add(f);
     }
 
     /**
@@ -301,32 +311,40 @@ public final class GalleryMoveCopy {
      */
     public static List<List<MediaFile>> groups(List<? extends MediaFile> selected, Collection<? extends MediaFile> all) {
         LinkedHashMap<String, List<MediaFile>> byKey = new LinkedHashMap<>();
-        List<MediaFile> placed = new ArrayList<>();
+        Map<String, List<MediaFile>> rawPartners = new HashMap<>(), photoPartners = new HashMap<>();
+        for (MediaFile f : selected) {
+            if (f == null) continue;
+            boolean raw = raw(f);
+            String key = pairKey(f, raw);
+            if (key != null) (raw ? photoPartners : rawPartners).computeIfAbsent(key, k -> new ArrayList<>());
+        }
+        if (!rawPartners.isEmpty() || !photoPartners.isEmpty()) {
+            for (MediaFile f : all) {
+                if (f == null) continue;
+                boolean raw = raw(f);
+                String key = pairKey(f, raw);
+                List<MediaFile> partners = (raw ? rawPartners : photoPartners).get(key);
+                if (partners != null) partners.add(f);
+            }
+        }
+        // The path also identifies a file listed by two MediaStore collections. A row ID alone is not a file identity.
+        Set<String> paths = new HashSet<>();
+        Set<Uri> uris = new HashSet<>();
+        Set<MediaFile> withoutLocator = Collections.newSetFromMap(new IdentityHashMap<>());
         int loose = 0;
         for (MediaFile f : selected) {
-            if (f == null || contains(placed, f)) continue;
-            String dir = dirOf(f.filePath());
-            boolean pairs = dir != null && (raw(f) || photo(f));
-            String key = pairs ? dir + '\u0000' + baseName(f.displayName()) : "\u0001" + (loose++);
-            List<MediaFile> g = byKey.get(key);
-            if (g == null) byKey.put(key, g = new ArrayList<>());
+            if (f == null || !place(f, paths, uris, withoutLocator)) continue;
+            boolean raw = raw(f);
+            String key = pairKey(f, raw);
+            List<MediaFile> g = byKey.computeIfAbsent(key == null ? "\u0001" + (loose++) : key, k -> new ArrayList<>());
             g.add(f);
-            placed.add(f);
-            if (!pairs) continue;
-            for (MediaFile o : all) {
-                if (o == null || contains(placed, o) || !(raw(f) ? photo(o) : raw(o))) continue;
-                if (dir.equals(dirOf(o.filePath())) && baseName(f.displayName()).equals(baseName(o.displayName()))) {
-                    g.add(o);
-                    placed.add(o);
-                }
+            if (key != null) {
+                List<MediaFile> partners = (raw ? photoPartners : rawPartners).remove(key);
+                if (partners != null)
+                    for (MediaFile o : partners) if (place(o, paths, uris, withoutLocator)) g.add(o);
             }
         }
         return new ArrayList<>(byKey.values());
-    }
-
-    private static boolean contains(List<MediaFile> list, MediaFile f) {
-        for (MediaFile o : list) if (same(o, f)) return true;
-        return false;
     }
 
     /** True when {@code f} is in the folder {@code t} already. */
@@ -538,12 +556,12 @@ public final class GalleryMoveCopy {
                  OutputStream os = modern ? resolver.openOutputStream(out, "w") : new FileOutputStream(dst)) {
                 if (in == null || os == null) throw new IOException("cannot open the file");
                 byte[] buf = new byte[1 << 16];
-                for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+                for (int n; (n = in.read(buf)) != -1; ) os.write(buf, 0, n);
             }
             if (modern) {
                 ContentValues done = new ContentValues();
                 done.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                resolver.update(out, done, null, null);
+                if (resolver.update(out, done, null, null) <= 0) throw new IOException("the copied file was not published");
             }
             ok = true;
         } finally {

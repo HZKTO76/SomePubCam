@@ -11,7 +11,7 @@
     <string name="prefs_scam_hybrid_resize_px_title">Own resolution</string>
     <string name="prefs_scam_hybrid_resize_px_hint">Width x height the photo fits in (4000x3000), or its long side (4000)</string>
     <string name="prefs_scam_hybrid_output_title">Resolution</string>
-    <string name="prefs_scam_hybrid_output_summary">How many pixels the photo gets. 2× gives more detail but takes about four times longer to process.</string>
+    <string name="prefs_scam_hybrid_output_summary">Resolution of the merged photo and DNG. At 2×, the merge produces four times as many pixels as at 1×.</string>
     <string name="prefs_scam_hybrid_processing_title">Processing mode</string>
     <string name="prefs_scam_hybrid_processing_summary">How the camera builds a photo from its burst. Fast: the photo is ready noticeably sooner. Quality: slower, but motion, water and fine detail come out cleaner. Every mode always makes the photo its own way and never hands it to another, on any sensor (Quad, Tetra, DCG) and through GPU failures.</string>
     <string name="prefs_scam_hybrid_fringe_method_title">Chromatic aberration</string>
@@ -80,6 +80,19 @@
     <string name="prefs_scam_hybrid_noise_readout_title">Merge: read noise</string>
     <string name="prefs_scam_hybrid_noise_readout_summary">The same correction for dark places. Higher: smoother shadows, but ghosts may appear. Lower: sharper and noisier.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_title">Noise reduction and merge</string>
+    <string name="prefs_scam_fast_motion_denoise_title">Motion noise reduction</string>
+    <string name="prefs_scam_fast_motion_denoise_summary" formatted="false">Set the strength from 0 to 100% at seven local signal-to-noise ratios (SNR). Applies to rendered photos from Fast RAW processing. DNG saves the merge result before this step.</string>
+    <string name="prefs_scam_fast_motion_denoise_enabled_title">Use the SNR curve</string>
+    <string name="prefs_scam_fast_motion_denoise_graph_title">SNR curve</string>
+    <string name="prefs_scam_fast_motion_denoise_snr2" translatable="false">SNR 2</string>
+    <string name="prefs_scam_fast_motion_denoise_snr3" translatable="false">SNR 3</string>
+    <string name="prefs_scam_fast_motion_denoise_snr4" translatable="false">SNR 4</string>
+    <string name="prefs_scam_fast_motion_denoise_snr8" translatable="false">SNR 8</string>
+    <string name="prefs_scam_fast_motion_denoise_snr16" translatable="false">SNR 16</string>
+    <string name="prefs_scam_fast_motion_denoise_snr32" translatable="false">SNR 32</string>
+    <string name="prefs_scam_fast_motion_denoise_snr64" translatable="false">SNR 64</string>
+    <string name="prefs_scam_hybrid_highlight_merge_title">Highlight merge</string>
+    <string name="prefs_scam_hybrid_highlight_merge_summary">Adaptive reduces ghosting and noise where the short exposure blends into the base.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_summary">How the burst\'s frames are aligned and added into one, and how the noise is cleaned after the merge. Rows the chosen processing mode does not use are greyed.</string>
     <string name="prefs_scam_hybrid_cre_source_title">Alignment (CRE)</string>
     <string name="prefs_scam_hybrid_cre_source_summary">What aligns the burst\'s frames: the system module (vivo only) or the one built into the app.</string>
@@ -531,8 +544,6 @@
     <string name="prefs_fullres_hw_remosaic_summary">A 50 MP shot arrives already assembled into an ordinary frame by the sensor itself, as in the stock camera. Off: the camera takes the raw Quad or Tetra mosaic and assembles the frame itself. 200 MP is always assembled by SCAMERA: the sensor cannot do it. On the vivo X100 Ultra and X300 Ultra this applies to the main camera only.</string>
     <string name="prefs_xiaomi_smooth_zoom_title">Smooth optical zoom (Xiaomi 17 Ultra)</string>
     <string name="prefs_xiaomi_smooth_zoom_summary">For the Xiaomi 17 Ultra telephoto: from 3.2x to 4.3x the optics work, then a crop, and from 6.45x the in-sensor zoom. Off: the zoom works without these modes.</string>
-    <string name="prefs_root_enabled_title">Root access</string>
-    <string name="prefs_root_enabled_summary">Not required. Only a build in which the processor is not installed as part of the app needs it: then it starts through su.</string>
     <string name="prefs_scam_diagnostics_screen_title">Logs</string>
     <string name="prefs_scam_diagnostics_screen_summary">The app\'s log, processing stages and reports, to look into a failure or an odd photo.</string>
     <string name="prefs_camera_package_spoof_screen_title">Camera package spoofing</string>

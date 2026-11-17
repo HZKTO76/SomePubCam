@@ -390,9 +390,15 @@ public class ScamLabFragmentTest {
 
     @Test public void aRowSaysWhyItDoesNothingOnThisShot() {
         // AgX's own values act only in the «Custom» look (SettingsAvailability on the shot's values)
-        assertNotNull(ScamLabFragment.inert(context, H + "why_agx_slope", H + "why_agx_slope",
-                Collections.singletonMap(H + "why_agx_look", "1"), new HashMap<>()));
-        assertNull(ScamLabFragment.inert(context, H + "why_agx_slope", H + "why_agx_slope", Collections.emptyMap(), new HashMap<>()));
+        // (P721: V2 by default greys AgX's V1 rows: the shot here is a V1 shot)
+        final Map<String, Object> v1 = new HashMap<>();
+        v1.put(H + "tone_version", "v1");
+        final Map<String, Object> look1 = new HashMap<>(v1);
+        look1.put(H + "why_agx_look", "1");
+        assertNotNull(ScamLabFragment.inert(context, H + "why_agx_slope", H + "why_agx_slope", look1, new HashMap<>()));
+        assertNull(ScamLabFragment.inert(context, H + "why_agx_slope", H + "why_agx_slope", v1, new HashMap<>()));
+        assertNull("a V2 shot: V2 takes AgX's values in any look", ScamLabFragment.inert(context, H + "why_agx_slope",
+                H + "why_agx_slope", Collections.singletonMap(H + "why_agx_look", "1"), new HashMap<>()));
         // a fixed-at-the-shot row is said apart
         assertNull(ScamLabFragment.inert(context, H + "bento_factor", H + "bento_factor", Collections.emptyMap(), new HashMap<>()));
     }

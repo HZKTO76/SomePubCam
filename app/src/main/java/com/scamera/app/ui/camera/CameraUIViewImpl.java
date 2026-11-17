@@ -10,7 +10,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.widget.ImageButton;
 
-import androidx.constraintlayout.widget.ConstraintLayout;
 
 import com.scamera.app.R;
 import com.scamera.app.api.CameraMode;
@@ -170,15 +169,6 @@ public class CameraUIViewImpl implements CameraUIView {
         });
     }
 
-    /** On a screen up to 16:9 the camera block hangs from the top bar. */
-    private void anchorCameraBlock() {
-        if (screen.screenAspect > 16f / 9f) return;
-        final View block = screen.cameraViews.cameraRoot.findViewById(R.id.camera_stage);
-        final ConstraintLayout.LayoutParams anchor = (ConstraintLayout.LayoutParams) block.getLayoutParams();
-        anchor.topToTop = -1;
-        anchor.topToBottom = R.id.top_row;
-    }
-
     @Override
     public void refresh(boolean processing) {
         screen.cameraViews.invalidateAll();
@@ -258,8 +248,6 @@ public class CameraUIViewImpl implements CameraUIView {
      */
     private void wideFrame() {
         final CameraScreenBinding views = screen.cameraViews;
-        final float meanTall = ((4f / 3f) + (16f / 9f)) / 2f;
-        views.getUimodel().setDummyAspectRatio(screen.screenAspect <= 16f / 9f ? "3:4" : String.valueOf(1.0f / meanTall));
         views.bottomBar.bottomBar.setBackgroundResource(R.color.panel_transparency);
         views.getRoot().setBackgroundResource(R.drawable.camera_wide_backdrop);
     }
@@ -267,7 +255,6 @@ public class CameraUIViewImpl implements CameraUIView {
     /** The 3:4 frame on the theme's camera background, the bottom bar without its own. */
     private void plainFrame() {
         final CameraScreenBinding views = screen.cameraViews;
-        views.getUimodel().setDummyAspectRatio("3:4");
         views.bottomBar.bottomBar.setBackground(null);
         views.getRoot().setBackground(Utilities.resolveDrawable(screen.requireActivity(), R.attr.cameraFragmentBackground));
     }
@@ -279,8 +266,17 @@ public class CameraUIViewImpl implements CameraUIView {
     private void photoViews() {
         screen.cameraViews.vfLayer.selfTimerCount.setVisibility(View.GONE);
         shutter.setBackground(shutterRing);
-        if (ScameraApp.getSettings().wide169) wideFrame();
+        final boolean wide = ScameraApp.getSettings().wide169;
+        setFrameAnchor(screen.cameraViews, screen.screenAspect, wide);
+        if (wide) wideFrame();
         else plainFrame();
-        anchorCameraBlock();
+    }
+
+    /** Only wide photos in tall windows need a different frame anchor. */
+    static void setFrameAnchor(CameraScreenBinding views, float windowAspect, boolean wide) {
+        final float meanTall = ((4f / 3f) + (16f / 9f)) / 2f;
+        final String ratio = wide && windowAspect > 16f / 9f ? String.valueOf(1.0f / meanTall) : "3:4";
+        final var model = views.getUimodel();
+        if (!ratio.equals(model.getDummyAspectRatio())) model.setDummyAspectRatio(ratio);
     }
 }

@@ -2733,10 +2733,18 @@ in highp vec2 tex_coord;
 uniform sampler2D u_rejection;
 uniform sampler2D u_base_guide;
 uniform sampler2D u_long_scope;
+uniform sampler2D u_raw_rejection;
+uniform bool u_measure_motion;
 uniform float u_long_weight_A;
 uniform float u_ev_scale;
 void main() {
     float r = texture(u_rejection, tex_coord).r;
+    float motion = 0.0;
+    if (u_measure_motion && r < 0.85) {
+        // Count evidence present before spatial dilation and still rejected by the merge.
+        float raw = texture(u_raw_rejection, tex_coord).r;
+        motion = smoothstep(0.10, 0.50, raw) * smoothstep(0.15, 0.75, 1.0 - r);
+    }
     if (u_long_weight_A > 0.0) {
         float base_sqrt_luma = texture(u_base_guide, tex_coord).x;
         float base_lin = base_sqrt_luma * base_sqrt_luma;
@@ -2745,7 +2753,7 @@ void main() {
         float scope_w = texture(u_long_scope, tex_coord).r;
         r *= u_long_weight_A * shadow_t * scope_w;
     }
-    o_frag_color = vec4(r, 0.0, 0.0, 0.0);
+    o_frag_color = vec4(r, motion, 0.0, 0.0);
 }
 )FM";
 // sh002: merge variant B (+0xc0): ordinary Bayer donors
@@ -3040,7 +3048,8 @@ uniform float u_source_clipping_point;
 uniform int u_cfa_pattern;
 
 uniform mat4 mvp_matrix_tex;
-uniform vec4 kernel_blurring_params; // x = coverage threshold, y = covariance multiplier
+uniform vec4 kernel_blurring_params; // x = coverage threshold, y = covariance multiplier, z = upscale, w = motion detail
+uniform vec2 u_motion_noise; // slope and offset for the base frame
 uniform sampler2D accumulated_frame_weights;
 uniform float accumulated_weight_scale;
 
@@ -3218,6 +3227,7 @@ void SampleNeighborhoodRBF(in vec2 sampl_uv,
                            in vec3 covariance,
                            in float linear_kernel_mix,
                            in float blend_eq,
+                           in float motion_detail,
                            out vec3 accumulatedIntensities,
                            out vec3 accumulatedWeights,
                            out vec2 clipWeights) {
@@ -3479,7 +3489,28 @@ void SampleNeighborhoodRBF(in vec2 sampl_uv,
                                 accumulatedIntensities.g +
                                 (accumulatedIntensities.b * wc_b - out_diff_bg * eff_wb)) / tot_w;
 
-            float base_g = mix(avg_base_g, g_c, 0.50);
+            // Retain the directional green detail in the base when temporal support is low.
+            float center_share = 0.50;
+            if (motion_detail > 0.0 && sample_clip_w == 0.0) {
+                float sigma = sqrt(max(u_motion_noise.x * g_c + u_motion_noise.y, 1.0e-9));
+                float contrast = smoothstep(3.0, 8.0, (dH + dV) / sigma);
+                // Saturated light sources can lose donor support to flicker.
+                float peak = max(rbf_rgb.r, max(rbf_rgb.g, rbf_rgb.b));
+                float floor_color = min(rbf_rgb.r, min(rbf_rgb.g, rbf_rgb.b));
+                float saturation = (peak - floor_color) / max(peak, 0.008);
+                float neutral = 1.0 - smoothstep(0.35, 0.60, saturation);
+                // Recover shadow texture above the sensor noise floor. Bright neighbours limit the refinement.
+                float local_peak = max(max(max(tl, tr), max(bl, br)),
+                    max(vc, max(max(top, bot), max(left, right))));
+                float shadow = (1.0 - smoothstep(0.10, 0.20, local_peak))
+                    * (1.0 - smoothstep(0.010, 0.026, g_c));
+                float luma_detail = smoothstep(0.007, 0.020, g_c);
+                // With full shadow support, raise the additional center share from 0.35 to 0.50.
+                float noise_detail = 1.4285714 * smoothstep(7.0, 15.0, g_c / sigma);
+                float detail = mix(luma_detail, max(luma_detail, noise_detail), shadow);
+                center_share += motion_detail * contrast * neutral * detail;
+            }
+            float base_g = mix(avg_base_g, g_c, center_share);
             vec3 fb_rgb = max(vec3(0.0), vec3(base_g + out_diff_rg, base_g, base_g + out_diff_bg));
 
 
@@ -3529,6 +3560,7 @@ void main() {
   float linear_kernel_mix = 0.0;
   float hole_fill_mix = 0.0;
   float blend_eq = 0.0;
+  float motion_detail = 0.0;
   if (is_short_frame) {
     covariance = mix(covariance, vec3(0.5, 0.5, 0.0), 0.5);
     linear_kernel_mix = 0.5;
@@ -3537,6 +3569,9 @@ void main() {
     float weight_so_far = texture(accumulated_frame_weights, zoomed_tc).x * accumulated_weight_scale;
     float expected_donors = max(1.0, frame_info.z - 1.0);
     float donor_ratio = weight_so_far / expected_donors;
+    if (kernel_blurring_params.w > 0.0) {
+        motion_detail = kernel_blurring_params.w * (1.0 - smoothstep(0.25, 4.0, weight_so_far));
+    }
 
     // Aggressive transition: any drop below 98% donors quickly activates weight equalization
     hole_fill_mix = clamp((0.98 - donor_ratio) / 0.28, 0.0, 1.0);
@@ -3572,7 +3607,7 @@ void main() {
   vec3 accum_weights;
   vec2 clip_weights;
 
-  SampleNeighborhoodRBF(sampl_uv, covariance, linear_kernel_mix, blend_eq, accum_intensities, accum_weights, clip_weights);
+  SampleNeighborhoodRBF(sampl_uv, covariance, linear_kernel_mix, blend_eq, motion_detail, accum_intensities, accum_weights, clip_weights);
 
   if (u_long_frame_params.x > 0.0) {
     if (accum_weights.r < 1.0e-5 || accum_weights.g < 1.0e-5 || accum_weights.b < 1.0e-5) {
@@ -3645,6 +3680,7 @@ uniform sampler2D u_base_bayer;
 uniform vec4 u_tex_size; // xy = (W/2, H/2), zw = (1/(W/2), 1/(H/2))
 uniform vec4 u_black_level;
 uniform float u_white_level;
+uniform int u_adaptive_highlights;
 
 void main() {
     float norm = 1.0 / max(1.0, u_white_level - u_black_level.r);
@@ -3654,6 +3690,15 @@ void main() {
     vec4 center_norm = (center_quad - u_black_level) * norm;
     float center_max = max(max(center_norm.r, center_norm.g), max(center_norm.b, center_norm.a));
     float near_clip = smoothstep(0.70, 0.88, center_max);
+    if (u_adaptive_highlights != 0) {
+        float peak = center_max;
+        for (int dx = -2; dx <= 2; ++dx) {
+            vec4 q = (texture(u_base_bayer, tex_coord + vec2(float(dx) * u_tex_size.z, 0.0)) - u_black_level) * norm;
+            peak = max(peak, max(max(q.x, q.y), max(q.z, q.w)));
+        }
+        o_clip_mask = vec2(smoothstep(0.82, 0.96, peak), smoothstep(0.70, 0.88, peak));
+        return;
+    }
     // P497: the near-clip gate over the 3 x 3 quads around: a thin light (a fan's LED ring, 1 - 2 quads) blurred under the gate's
     // threshold at its own centre point and kept the base's white there
     for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
@@ -3712,16 +3757,23 @@ layout(location = 0) out float o_final_mask;
 
 uniform sampler2D u_input_mask;
 uniform vec4 u_tex_size; // zw = (1/(W/2), 1/(H/2))
+uniform int u_adaptive_highlights;
 
 const float k_w[4] = float[4](0.382928, 0.241732, 0.060598, 0.005977);
 
 void main() {
     vec2 sum = texture(u_input_mask, tex_coord).rg * k_w[0];
+    vec2 peak = sum / k_w[0];
     for (int i = 1; i <= 3; ++i) {
         vec2 off = vec2(0.0, float(i) * u_tex_size.w);
-        sum += (texture(u_input_mask, tex_coord + off).rg +
-                texture(u_input_mask, tex_coord - off).rg) * k_w[i];
+        vec2 a = texture(u_input_mask, tex_coord + off).rg;
+        vec2 b = texture(u_input_mask, tex_coord - off).rg;
+        sum += (a + b) * k_w[i];
+        if (u_adaptive_highlights != 0 && i <= 2) {
+            peak = max(peak, max(a, b) * (i == 1 ? 0.8 : 0.5));
+        }
     }
+    if (u_adaptive_highlights != 0) sum = mix(sum, max(sum, peak), 0.6);
     
     // SCAMERA ??4.4: Near-Clip Gating multiplier
     // Constrains mask dilation to real bright light halos, preventing leakage onto dark borders
@@ -3748,6 +3800,8 @@ uniform float u_white_level;
 uniform float u_ev_scale; // k = 1.0 / exposure_factor
 uniform int u_is_first_short;
 uniform float u_err_thresh;
+uniform int u_adaptive_highlights;
+uniform vec4 u_highlight_noise; // base slope/offset and short slope/offset in their own linear units
 uniform vec3 u_wb; // P497: the white balance gains (the short frame's colour for the strict check)
 // P686 (owner, 2026-11-14, a 50 MP Quad shot: sunlit windows pink with white islands): HALF texels per colour run, 0 = a Bayer quad
 // per texel (as before); 1 = Quad, 2 = Tetra: one colour per texel, the colours alternate every u_block texels. The short frame's
@@ -3862,6 +3916,16 @@ void main() {
     float norm_err = clamp(err / ethresh, 0.0, 1.0);
     // Smooth Cosine Ease-out transition from 1.0 to 0.0 without harsh derivative kinks
     float valid_k = 0.5 * (1.0 + cos(3.14159265 * norm_err));
+    if (u_adaptive_highlights != 0) {
+        vec4 gained = s_norm * u_ev_scale;
+        vec4 delta = gained - b_norm;
+        vec4 error = mix(abs(delta), max(vec4(0.0), -delta), step(0.98, b_norm));
+        vec4 variance = u_highlight_noise.x * b_norm + u_highlight_noise.y
+                      + (u_highlight_noise.z * s_norm + u_highlight_noise.w) * (u_ev_scale * u_ev_scale);
+        vec4 allowance = max(3.0 * sqrt(max(variance, vec4(0.0))), 0.025 + 0.05 * b_norm);
+        vec4 local = 1.0 - smoothstep(allowance, 3.0 * allowance, error);
+        valid_k = min(valid_k, min(min(local.x, local.y), min(local.z, local.w)));
+    }
     // the quarantine's seed as the scheme's (its 0.85 limit): the wider bright check above only refuses the pixel - seeding from it
     // flooded a whole window from its light wire (P497)
     float seed_err = max(dark_err, (max_base < 0.85) ? max(0.0, max_us - max_base) : 0.0);
@@ -4329,11 +4393,14 @@ uniform vec4 u_wb_gains;
 // colours from the nearest cells of each (the runs beside it), the same rule per site of its own colour.
 uniform int u_block;
 uniform int u_row1; // P686: rows from here on were not unpacked (a row strip's end; 0 = u_height)
+uniform float u_adaptive_gain; // 0 = standard; Short to base exposure scale otherwise
+uniform vec2 u_short_noise;
 const int k_sr_cfa[16] = int[16](0, 1, 2, 3, 1, 0, 3, 2, 2, 3, 0, 1, 3, 2, 1, 0);
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy) + ivec2(0, u_row0); // P497: a row strip's rows only
     if (pos.x >= u_width || pos.y >= u_height) return;
+    if (u_adaptive_gain > 0.0 && u_row1 > 0 && pos.y >= u_row1) return;
 
     vec4 quad = texelFetch(u_input_extracted, pos, 0);
 
@@ -4341,6 +4408,31 @@ void main() {
     float norm = 1.0 / max(1.0, u_white_level - bl);
 
     vec4 q_norm = max(vec4(0.0), (quad - u_black_level) * norm);
+    if (u_adaptive_gain > 0.0) {
+        vec4 level = q_norm * u_adaptive_gain;
+        vec4 band = smoothstep(0.70, 0.82, level) * (1.0 - smoothstep(0.88, 0.99, level));
+        band *= 1.0 - step(0.98, q_norm);
+        if (any(greaterThan(band, vec4(0.0)))) {
+            int stride = max(1, u_block * 2);
+            int endRow = u_row1 > 0 ? u_row1 : u_height;
+            vec4 num = q_norm, den = vec4(1.0);
+            vec4 variance = max(u_short_noise.x * q_norm + u_short_noise.y,
+                                vec4(0.000324 / (u_adaptive_gain * u_adaptive_gain)));
+            const ivec2 taps[4] = ivec2[4](ivec2(-1,0),ivec2(1,0),ivec2(0,-1),ivec2(0,1));
+            for (int j = 0; j < 4; ++j) {
+                ivec2 at = pos + taps[j] * stride;
+                if (at.x < 0 || at.x >= u_width || at.y < u_row0 || at.y >= endRow) continue;
+                vec4 v = (texelFetch(u_input_extracted, at, 0) - u_black_level) * norm;
+                vec4 d = v - q_norm, a = max(vec4(0.0), 1.0 - d * d / (9.0 * variance));
+                a = 0.5 * a * a * (1.0 - step(0.98, v));
+                num += a * v;
+                den += a;
+            }
+            vec4 lift = band * (num / den - q_norm);
+            q_norm += lift;
+            quad += lift / norm;
+        }
+    }
 
     if (u_block > 0) { // P686: Quad / Tetra
         int k = u_block, pat = clamp(u_cfa_pattern, 0, 3);

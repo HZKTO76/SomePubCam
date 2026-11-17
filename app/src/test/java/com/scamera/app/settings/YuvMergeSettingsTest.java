@@ -33,6 +33,7 @@ public class YuvMergeSettingsTest {
     private static final String H = "pref_scam_hybrid_";
     /** The rows / groups of the group the YUV route reads (the post pipeline's denoise, the ZSL buffer of its ring capture). */
     private static final Set<String> SHARED = new HashSet<>(Arrays.asList(
+            H + "highlight_merge",
             "scam_hybrid_nr_merge_category", H + "denoise", H + "post_snr", H + "why_dn_luma_revert", H + "why_dn_motion_revert", H + "why_dn_grain",
             "scam_hybrid_resolve_optics_category", H + "resolve_speckle_enable", H + "resolve_speckle_threshold", H + "resolve_speckle_strength",
             "scam_hybrid_ms_general_category", H + "why_ms_denoise", H + "why_ms_model_scale", H + "why_ms_shadow",
@@ -113,6 +114,7 @@ public class YuvMergeSettingsTest {
 
     @Test public void theGroupGreysWhatTheRouteDoesNotRead() throws Exception {
         final Map<String, Boolean> keys = groupKeys();
+        assertEquals(H + "highlight_merge", keys.keySet().iterator().next());
         assertTrue(keys.containsKey(H + "yuv_frames") && keys.containsKey("scam_hybrid_yuv_category"));
         final SettingsAvailability on = new SettingsAvailability(new HashMap<>()).yuvMerge(true);
         final SettingsAvailability off = new SettingsAvailability(new HashMap<>()).yuvMerge(false);

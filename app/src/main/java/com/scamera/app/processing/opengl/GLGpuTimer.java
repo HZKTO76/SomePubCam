@@ -2,9 +2,18 @@ package com.scamera.app.processing.opengl;
 
 import android.opengl.GLES30;
 
+import com.scamera.app.settings.PreferenceKeys;
+import com.scamera.app.util.Log;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+
 /**
  * P479 (speed, profiling only): the GPU time of every program switch of the post pipeline, by GL_EXT_disjoint_timer_query
- * (GL_TIME_ELAPSED_EXT), under scam_dev.txt "post_sync 1" only ({@link PostGlMode#syncNodes()}): one query from each
+ * (GL_TIME_ELAPSED_EXT): one query from each
  * {@link #mark} to the next (a program's draws or dispatches, the uploads and read-backs issued before the next program), the
  * results read once at the end of the run and logged as one SCAM_PIPELINE line per node / program, slowest first. It only
  * measures: no draw, no texture and no uniform changes, so the pixels are those of a run without it. Off: every call returns at
@@ -19,147 +28,187 @@ public final class GLGpuTimer {
     private GLGpuTimer() {}
 
     private static final int TIME_ELAPSED_EXT = 0x88BF, GPU_DISJOINT_EXT = 0x8FBB;
-    private static volatile boolean on;
-    private static boolean active;
-    /** The thread (and so the context) of the run being measured: other threads' programs (the viewfinder) are not. */
-    private static volatile Thread owner;
-    private static String node = "", current;
-    private static final java.util.ArrayList<int[]> queries = new java.util.ArrayList<>();
-    private static final java.util.ArrayList<String> names = new java.util.ArrayList<>();
-    private static int supported; // 0 unknown, 1 yes, -1 no
-    private static boolean adreno; // P671: the default (known with supported)
+    private static final int QUERIES_PER_BATCH = 32;
+    private static final ThreadLocal<Run> CURRENT = new ThreadLocal<>();
+    private static volatile Support support;
 
-    /** The start of a run: on under post_sync where the driver has the extension. */
-    public static void begin() {
-        if (on && active && owner == Thread.currentThread()) GLES30.glEndQuery(TIME_ELAPSED_EXT); // a failed run's
-        queries.clear();
-        names.clear();
-        active = false;
-        current = null;
-        node = "";
-        on = false;
-        allocNs = allocBytes = freeNs = 0;
-        allocs = 0;
-        // P479b: also in a normal run with scam_dev.txt "post_gpu_timer 1" (a query spans from one mark to the next, so there it
-        // holds the GPU's idle time too: where the GPU waits for the CPU)
-        if (supported == 0) {
-            final String ext = GLES30.glGetString(GLES30.GL_EXTENSIONS);
-            supported = ext != null && ext.contains("GL_EXT_disjoint_timer_query") ? 1 : -1;
-            final String gpu = GLES30.glGetString(GLES30.GL_RENDERER);
-            adreno = gpu != null && gpu.contains("Adreno");
-        }
-        if (!PostGlMode.syncNodes() && !com.scamera.app.settings.PreferenceKeys.scamDevSwitch("post_gpu_timer", adreno)) return;
-        owner = Thread.currentThread();
-        on = supported > 0;
-        if (on) {
-            final int[] d = new int[1];
-            GLES30.glGetIntegerv(GPU_DISJOINT_EXT, d, 0); // clears the flag
+    private static final class Support {
+        final boolean timerQueries, adreno;
+
+        Support() {
+            final String extensions = GLES30.glGetString(GLES30.GL_EXTENSIONS);
+            timerQueries = extensions != null && extensions.contains("GL_EXT_disjoint_timer_query");
+            final String renderer = GLES30.glGetString(GLES30.GL_RENDERER);
+            adreno = renderer != null && renderer.contains("Adreno");
         }
     }
 
-    private static long allocNs, allocBytes, freeNs;
-    private static int allocs;
+    private static final class Run {
+        final ArrayList<String> names = new ArrayList<>();
+        int[] queries = new int[QUERIES_PER_BATCH];
+        int reserved;
+        boolean active;
+        String node = "", current;
+        long allocNs, allocBytes, freeNs;
+        int allocs;
+
+        void beginQuery(String name) {
+            if (names.size() == reserved) {
+                if (reserved == queries.length) queries = Arrays.copyOf(queries, queries.length * 2);
+                GLES30.glGenQueries(QUERIES_PER_BATCH, queries, reserved);
+                reserved += QUERIES_PER_BATCH;
+            }
+            GLES30.glBeginQuery(TIME_ELAPSED_EXT, queries[names.size()]);
+            active = true;
+            names.add(node + "/" + name);
+        }
+
+        void endQuery() {
+            if (!active) return;
+            active = false;
+            GLES30.glEndQuery(TIME_ELAPSED_EXT);
+        }
+
+        void release() {
+            try {
+                endQuery();
+            } finally {
+                if (reserved != 0) GLES30.glDeleteQueries(reserved, queries, 0);
+            }
+        }
+    }
+
+    /** This thread's run starts with its GL context current. */
+    public static void begin() {
+        discard();
+        Support device = support;
+        if (device == null) support = device = new Support();
+        if (!device.timerQueries
+                || (!PostGlMode.syncNodes() && !PreferenceKeys.scamDevSwitch("post_gpu_timer", device.adreno))) return;
+        GLES30.glGetIntegerv(GPU_DISJOINT_EXT, new int[1], 0); // clears the flag
+        CURRENT.set(new Run());
+    }
 
     /** Whether this thread's run is measured (for the CPU time of texture storage, {@link #alloc} / {@link #free}). */
     public static boolean measuring() {
-        return on && owner == Thread.currentThread();
+        return CURRENT.get() != null;
     }
 
     /** CPU time of one texture's storage (glTexStorage2D without data) of {@code bytes}. */
     public static void alloc(long ns, long bytes) {
-        allocNs += ns;
-        allocBytes += bytes;
-        allocs++;
+        final Run run = CURRENT.get();
+        if (run == null) return;
+        run.allocNs += ns;
+        run.allocBytes += bytes;
+        run.allocs++;
     }
 
     /** CPU time of one texture's delete. */
     public static void free(long ns) {
-        freeNs += ns;
+        final Run run = CURRENT.get();
+        if (run != null) run.freeNs += ns;
     }
 
     /** The node whose programs follow. */
     public static void node(String name) {
-        if (!on || owner != Thread.currentThread()) return;
-        node = name;
+        final Run run = CURRENT.get();
+        if (run == null) return;
+        run.node = name;
         mark("(node)");
     }
 
     /** From here on the GPU time is {@code what}'s (of the current node); returns the previous name (for {@link #mark} back). */
     public static String mark(String what) {
-        if (!on || owner != Thread.currentThread()) return null;
-        final String previous = current;
-        if (active) GLES30.glEndQuery(TIME_ELAPSED_EXT);
-        final int[] id = new int[1];
-        GLES30.glGenQueries(1, id, 0);
-        GLES30.glBeginQuery(TIME_ELAPSED_EXT, id[0]);
-        queries.add(id);
-        current = what;
-        names.add(node + "/" + what);
-        active = true;
+        final Run run = CURRENT.get();
+        if (run == null) return null;
+        final String previous = run.current;
+        run.endQuery();
+        run.beginQuery(what);
+        run.current = what;
         return previous;
+    }
+
+    /** Releases this run's queries without waiting for results, on a failed pipeline while its context is current. */
+    public static void discard() {
+        final Run run = CURRENT.get();
+        if (run == null) return;
+        CURRENT.remove();
+        release(run);
+    }
+
+    private static void release(Run run) {
+        try {
+            run.release();
+        } catch (RuntimeException | LinkageError e) {
+            Log.w("SCAM_PIPELINE", "GPU timer cleanup: " + e);
+        }
     }
 
     /** The end of a run: every query read (they wait for the GPU) and logged. */
     public static void report(String label) {
-        if (!on || owner != Thread.currentThread()) return;
-        on = false;
-        if (active) GLES30.glEndQuery(TIME_ELAPSED_EXT);
-        active = false;
-        final java.util.LinkedHashMap<String, long[]> sums = new java.util.LinkedHashMap<>();
+        final Run run = CURRENT.get();
+        if (run == null) return;
+        CURRENT.remove();
+        try {
+            report(label, run);
+        } finally {
+            release(run);
+        }
+    }
+
+    private static void report(String label, Run run) {
+        run.endQuery();
+        final LinkedHashMap<String, long[]> sums = new LinkedHashMap<>();
         long total = 0;
         final int[] r = new int[1];
-        for (int i = 0; i < queries.size(); i++) {
-            final int id = queries.get(i)[0];
-            GLES30.glGetQueryObjectuiv(id, GLES30.GL_QUERY_RESULT, r, 0);
-            GLES30.glDeleteQueries(1, queries.get(i), 0);
+        for (int i = 0; i < run.names.size(); i++) {
+            GLES30.glGetQueryObjectuiv(run.queries[i], GLES30.GL_QUERY_RESULT, r, 0);
             final long ns = r[0] & 0xFFFFFFFFL;
             total += ns;
-            final long[] s = sums.computeIfAbsent(names.get(i), k -> new long[2]);
-            s[0] += ns;
-            s[1]++;
+            final long[] sample = sums.computeIfAbsent(run.names.get(i), k -> new long[2]);
+            sample[0] += ns;
+            sample[1]++;
         }
-        final int[] d = new int[1];
-        GLES30.glGetIntegerv(GPU_DISJOINT_EXT, d, 0);
-        final java.util.ArrayList<java.util.Map.Entry<String, long[]>> list = new java.util.ArrayList<>(sums.entrySet());
+        GLES30.glGetIntegerv(GPU_DISJOINT_EXT, r, 0);
+        final boolean disjoint = r[0] != 0;
+        final ArrayList<Map.Entry<String, long[]>> list = new ArrayList<>(sums.entrySet());
         list.sort((a, b) -> Long.compare(b.getValue()[0], a.getValue()[0]));
-        com.scamera.app.util.Log.i("SCAM_PIPELINE", nodeLine(label, sums, total, d[0] != 0));
+        Log.i("SCAM_PIPELINE", nodeLine(label, sums, total, disjoint));
         final StringBuilder sb = new StringBuilder("PERF ").append(label).append(" GPU programs, total ms=")
-                .append(String.format(java.util.Locale.ROOT, "%.1f", total / 1e6)).append(d[0] != 0 ? " (disjoint)" : "")
-                .append(String.format(java.util.Locale.ROOT, " cpu storage ms=%.1f (%d textures, %d MB) delete ms=%.1f",
-                        allocNs / 1e6, allocs, allocBytes >> 20, freeNs / 1e6));
+                .append(String.format(Locale.ROOT, "%.1f", total / 1e6)).append(disjoint ? " (disjoint)" : "")
+                .append(String.format(Locale.ROOT, " cpu storage ms=%.1f (%d textures, %d MB) delete ms=%.1f",
+                        run.allocNs / 1e6, run.allocs, run.allocBytes >> 20, run.freeNs / 1e6));
         sb.append(':');
         // a few long lines (the log quota): "node/program ms xN" by GPU time
-        for (java.util.Map.Entry<String, long[]> e : list) {
+        for (Map.Entry<String, long[]> e : list) {
             if (e.getValue()[0] < 200_000L) continue;
             if (sb.length() > 700) {
-                com.scamera.app.util.Log.i("SCAM_PIPELINE", sb.toString());
+                Log.i("SCAM_PIPELINE", sb.toString());
                 sb.setLength(0);
                 sb.append("PERF ").append(label).append(" GPU programs ...");
             }
-            sb.append(String.format(java.util.Locale.ROOT, " %s %.2f x%d;", e.getKey(), e.getValue()[0] / 1e6, e.getValue()[1]));
+            sb.append(String.format(Locale.ROOT, " %s %.2f x%d;", e.getKey(), e.getValue()[0] / 1e6, e.getValue()[1]));
         }
-        com.scamera.app.util.Log.i("SCAM_PIPELINE", sb.toString());
-        queries.clear();
-        names.clear();
+        Log.i("SCAM_PIPELINE", sb.toString());
     }
 
     /**
      * P671: «PERF post GPU nodes ms total T: node a, node b, ...» - each node's queries summed ("node/program" names; the order of
      * the run), {@code total} in ns; tagged when the driver reported a disjoint (the times are then not to be trusted).
      */
-    static String nodeLine(String label, java.util.Map<String, long[]> sums, long total, boolean disjoint) {
-        final java.util.LinkedHashMap<String, Long> nodes = new java.util.LinkedHashMap<>();
-        for (java.util.Map.Entry<String, long[]> e : sums.entrySet()) {
+    static String nodeLine(String label, Map<String, long[]> sums, long total, boolean disjoint) {
+        final LinkedHashMap<String, Long> nodes = new LinkedHashMap<>();
+        for (Map.Entry<String, long[]> e : sums.entrySet()) {
             final String key = e.getKey();
             final int slash = key.indexOf('/');
             final String node = slash > 0 ? key.substring(0, slash) : slash == 0 ? "(start)" : key;
             nodes.merge(node, e.getValue()[0], Long::sum);
         }
         final StringBuilder sb = new StringBuilder("PERF ").append(label).append(" GPU nodes ms total ")
-                .append(String.format(java.util.Locale.ROOT, "%.1f", total / 1e6)).append(disjoint ? " (disjoint)" : "").append(':');
+                .append(String.format(Locale.ROOT, "%.1f", total / 1e6)).append(disjoint ? " (disjoint)" : "").append(':');
         boolean first = true;
-        for (java.util.Map.Entry<String, Long> e : nodes.entrySet()) {
-            sb.append(first ? " " : ", ").append(e.getKey()).append(' ').append(String.format(java.util.Locale.ROOT, "%.1f", e.getValue() / 1e6));
+        for (Map.Entry<String, Long> e : nodes.entrySet()) {
+            sb.append(first ? " " : ", ").append(e.getKey()).append(' ').append(String.format(Locale.ROOT, "%.1f", e.getValue() / 1e6));
             first = false;
         }
         return sb.toString();

@@ -280,10 +280,26 @@ public class OppoNativeFullResTest {
         assertFalse(OppoNativeFullRes.family("Google"));
         assertFalse(OppoNativeFullRes.family(""));
         assertFalse(OppoNativeFullRes.family(null));
-        assertFalse("the Meitu package is the OPPO's alone", OppoNativeFullRes.brand("realme"));
+        assertFalse("the brand is the OPPO alone", OppoNativeFullRes.brand("realme"));
+        assertTrue("P721: the Meitu package on OPPO and realme", OppoNativeFullRes.teleAccess("realme") && OppoNativeFullRes.teleAccess("OPPO"));
+        assertFalse(OppoNativeFullRes.teleAccess("OnePlus") || OppoNativeFullRes.teleAccess(null));
     }
 
-    /** P214j: the phone decides the route, the PHY110 alone its measured modes, OPPO alone the automatic telephoto package. */
+    /** P721: the RMX3840 main's recorded table stands in (no vendor key in its Java characteristics); no FULLRES row in it. */
+    @Test public void theRmx3840MainHasItsRecordedTable() {
+        ShadowBuild.setManufacturer("realme");
+        ShadowBuild.setModel("RMX3840");
+        assertTrue(OppoNativeFullRes.rmx3840());
+        assertArrayEquals(OppoNativeFullRes.RMX3840_MAIN, OppoNativeFullRes.table("0", null));
+        assertEquals(15, OppoNativeFullRes.RMX3840_MAIN[0]);
+        assertEquals(2 + 15 * 3, OppoNativeFullRes.RMX3840_MAIN.length);
+        assertNull("the front: none recorded", OppoNativeFullRes.table("1", null));
+        assertNull("one 50 MP row (row 0): no FULLRES candidate", OppoNativeFullRes.fullModes(OppoNativeFullRes.RMX3840_MAIN));
+        ShadowBuild.setModel("RMX5200");
+        assertNull(OppoNativeFullRes.table("0", null));
+    }
+
+    /** P214j: the phone decides the route, the PHY110 alone its measured modes, OPPO and realme (P721) the automatic telephoto package. */
     @Test public void onePlusAndRealmeRunTheRouteWithoutThePhy110sTuning() {
         ShadowBuild.setManufacturer("OnePlus");
         ShadowBuild.setModel("CPH2747");
@@ -294,7 +310,7 @@ public class OppoNativeFullResTest {
         ShadowBuild.setManufacturer("realme");
         ShadowBuild.setModel("RMX5200");
         assertTrue(OppoNativeFullRes.device());
-        assertFalse(OppoNativeFullRes.teleAccess());
+        assertTrue("P721: realme gets the Meitu package as the OPPO", OppoNativeFullRes.teleAccess());
         assertFalse(OppoNativeFullRes.model());
         ShadowBuild.setManufacturer("OPPO");
         ShadowBuild.setModel("PKJ110");
@@ -661,9 +677,8 @@ public class OppoNativeFullResTest {
         assertSame("no such row: the same offer", base, OppoNativeFullRes.ispVariants(base, 8192, 6144, 31));
         assertEquals("the tele's single row gets them too only when asked", 3,
                 OppoNativeFullRes.ispVariants(OppoNativeFullRes.rows(OppoNativeFullRes.PYB110_TELE, 4096, 3072, null), 8192, 6144, 9).small.length);
-        // the owner's phone: module_oppo_fullres_fail_2=4, why=1025:died,2025:died,1009:died,25:died (no new ROW_TRIALS needed)
+        // the owner's phone: module_oppo_fullres_fail_2=4, why=1025:died,2025:died,1009:died,25:died
         java.util.Set<Integer> failed = new java.util.HashSet<>(FullResTrials.reasons("1025:died,2025:died,1009:died,25:died").keySet());
-        assertEquals(1, OppoNativeFullRes.ROW_TRIALS);
         final int[] order = {3025, 4025, 3009, 4009, 9};
         for (int i = 0; i < order.length; i++) {
             final int[] live = OppoNativeFullRes.liveRow(o.small, 4 + i, failed);

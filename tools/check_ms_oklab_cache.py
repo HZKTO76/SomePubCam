@@ -4,8 +4,8 @@
 WhyMsDenoise's optics pass filters the colour of every pixel the lens shading lifts (its gain > 1.1: most of a phone frame) over a
 5 x 5 window in Oklab, each neighbour converted with rgb_to_oklab (three cube roots) - 24 conversions a pixel. With the cache a
 pass per strip writes rgb_to_oklab of every pixel of the strip and its two rows above and below into an RGBA32F texture (exact
-floats: the same numbers the filter computed), and the filter reads them (OKLAB_CACHE 2). This draws the pass as WhyMsDenoise
-does - in one draw without the cache, strip by strip with it (strips of 256, 37 and 5 rows) - on a frame of RGBA16F input with
+floats: the same numbers the filter computed), and the filter reads both the centre and neighbours from it (OKLAB_CACHE 2).
+This draws the pass as WhyMsDenoise does - once without the cache, or in strips of 256, 37 and 5 rows - on RGBA16F input with
 the shading gain in alpha (below and above the corner threshold, zero, missing), the speckle median off and at three strengths:
 the RGBA16F outputs must be equal. It also times both on llvmpipe (indicative only).
 """
@@ -108,6 +108,7 @@ def main():
     timing = None
     for (w, h) in ((211, 133), (64, 300)):
         a = np.concatenate([rng.uniform(-0.05, 1.4, (h, w, 3)), rng.choice([0.0, 1.0, 1.05, 1.2, 2.0, 4.0], (h, w, 1))], -1)
+        a[::3, :, :3] *= 0.001  # near-black signed RGB crossing the Oklab cube-root threshold
         a[rng.random((h, w)) < 0.03, :3] *= 8.0
         a[rng.random((h, w)) < 0.01, :3] = 0.0
         inp = ctx.texture((w, h), 4, a.astype(np.float16).tobytes(), dtype='f2')

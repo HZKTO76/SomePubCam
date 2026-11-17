@@ -257,7 +257,9 @@ final class StabilizationTrace {
      * "stab_trace 0" turns it off. The request's OIS sample mode is not this switch's ({@link #wantsOisSamples} as before).
      */
     static boolean traceOn() {
-        return PreferenceKeys.scamDevSwitch("stab_trace", debugLog());
+        // A negative value disables collection while keeping the Camera2 OIS sample request.
+        final float mode = PreferenceKeys.scamDevNumber("stab_trace", Float.NaN);
+        return Float.isNaN(mode) ? debugLog() : mode > 0f;
     }
 
     private static boolean debugLog() {

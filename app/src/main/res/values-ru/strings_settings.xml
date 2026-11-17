@@ -11,7 +11,7 @@
     <string name="prefs_scam_hybrid_resize_px_title">Своё разрешение</string>
     <string name="prefs_scam_hybrid_resize_px_hint">Ширина x высота, в которые впишется фото (4000x3000), или длинная сторона (4000)</string>
     <string name="prefs_scam_hybrid_output_title">Разрешение</string>
-    <string name="prefs_scam_hybrid_output_summary">Сколько пикселей получает фото. 2× даёт больше деталей, но обработка идёт примерно вчетверо дольше.</string>
+    <string name="prefs_scam_hybrid_output_summary">Разрешение склейки для фото и DNG. При 2× получается вчетверо больше пикселей, чем при 1×.</string>
     <string name="prefs_scam_hybrid_processing_title">Режим обработки</string>
     <string name="prefs_scam_hybrid_processing_summary">Как камера собирает снимок из серии кадров. «Быстрый» — фото готово заметно раньше. «Качество» — обработка дольше, зато чище выходят движение, вода и мелкие детали. Каждый режим всегда собирает снимок своим способом и не передаёт его другому — с любыми сенсорами (Quad, Tetra, DCG) и при сбоях GPU.</string>
     <string name="prefs_scam_hybrid_fringe_method_title">Подавление аберраций</string>
@@ -80,6 +80,12 @@
     <string name="prefs_scam_hybrid_noise_readout_title">Склейка: шум считывания</string>
     <string name="prefs_scam_hybrid_noise_readout_summary">Та же поправка для тёмных мест. Больше — тени глаже, но могут появиться призраки. Меньше — резче и шумнее.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_title">Шумоподавление и склейка</string>
+    <string name="prefs_scam_fast_motion_denoise_title">Шумоподавление движения</string>
+    <string name="prefs_scam_fast_motion_denoise_summary" formatted="false">Настройте силу от 0 до 100% для семи значений отношения сигнала к шуму (SNR). Кривая действует на готовые фото после быстрой RAW-склейки. DNG сохраняет результат склейки до этого шага.</string>
+    <string name="prefs_scam_fast_motion_denoise_enabled_title">Применять кривую SNR</string>
+    <string name="prefs_scam_fast_motion_denoise_graph_title">Кривая SNR</string>
+    <string name="prefs_scam_hybrid_highlight_merge_title">Слияние светов</string>
+    <string name="prefs_scam_hybrid_highlight_merge_summary">Адаптивное подавляет двоение и шум в зоне перехода к короткой экспозиции.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_summary">Как кадры серии совмещаются и складываются в один и как после склейки убирается шум. Строки, которые в выбранном режиме обработки не действуют, — серые.</string>
     <string name="prefs_scam_hybrid_cre_source_title">Выравнивание (CRE)</string>
     <string name="prefs_scam_hybrid_cre_source_summary">Чем совмещать кадры серии: системным модулем (только на vivo) или встроенным в приложение.</string>
@@ -531,8 +537,6 @@
     <string name="prefs_fullres_hw_remosaic_summary">Снимок 50 Мп берётся уже собранным в обычный кадр самим сенсором, как в штатной камере. Если выключить, камера получает сырую мозаику Quad или Tetra и собирает кадр сама. 200 Мп всегда собирает SCAMERA: сенсор этого не умеет. На vivo X100 Ultra и X300 Ultra действует только на основную камеру.</string>
     <string name="prefs_xiaomi_smooth_zoom_title">Плавный оптический зум (Xiaomi 17 Ultra)</string>
     <string name="prefs_xiaomi_smooth_zoom_summary">Для телевика Xiaomi 17 Ultra: от 3,2x до 4,3x работает оптика, дальше — кроп, а с 6,45x — зум на сенсоре. Если выключить, зум идёт без этих режимов.</string>
-    <string name="prefs_root_enabled_title">Root-доступ</string>
-    <string name="prefs_root_enabled_summary">Не обязателен. Нужен только сборке, в которой обработчик не установлен как часть приложения: тогда он запускается через su.</string>
     <string name="prefs_scam_diagnostics_screen_title">Логи</string>
     <string name="prefs_scam_diagnostics_screen_summary">Журнал приложения, этапы обработки и отчёты — чтобы разобраться со сбоем или странным снимком.</string>
     <string name="prefs_camera_package_spoof_screen_title">Подмена пакета камеры</string>

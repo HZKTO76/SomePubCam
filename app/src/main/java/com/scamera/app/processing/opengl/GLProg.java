@@ -1051,10 +1051,7 @@ public class GLProg implements AutoCloseable {
             final int rows = Math.min(h - y, flush ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS) : GLDrawParams.TILE_ROWS);
             glViewport(0, y, w, rows);
             draw();
-            if (flush) {
-                glFlush();
-                GpuPace.submitted(pass, (long) w * rows);
-            }
+            if (flush) GpuPace.flushBlock(pass, (long) w * rows);
             y += rows;
         }
     }
@@ -1069,10 +1066,7 @@ public class GLProg implements AutoCloseable {
             final int rows = Math.min(Math.min(y1, target.size.y) - y, flush ? GpuPace.bandRows(pass, w, GLDrawParams.TILE_ROWS) : GLDrawParams.TILE_ROWS);
             glViewport(0, y, w, rows);
             draw();
-            if (flush) {
-                glFlush();
-                GpuPace.submitted(pass, (long) w * rows);
-            }
+            if (flush) GpuPace.flushBlock(pass, (long) w * rows);
             y += rows;
         }
     }
@@ -1107,8 +1101,7 @@ public class GLProg implements AutoCloseable {
         while (bands.nextBlock(band)) {
             glViewport(0, band[0], w, band[1]);
             quad.draw(location("vPosition", true));
-            glFlush();
-            GpuPace.submitted(); // P616
+            GpuPace.flushBlock(); // P616
             if (flushType == -1) continue;
             glReadPixels(0, band[0], 1, 1, format, flushType, flushPixels);
             final int error = glGetError();

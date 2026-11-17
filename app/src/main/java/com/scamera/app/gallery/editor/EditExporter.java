@@ -419,9 +419,9 @@ public final class EditExporter {
     static void copyExif(Context c, Uri from, File to, int w, int h, @Nullable String lookLine) {
         try {
             ExifInterface dst = new ExifInterface(to.getAbsolutePath());
-            try (InputStream in = c.getContentResolver().openInputStream(from)) {
-                if (in != null) {
-                    ExifInterface src = new ExifInterface(in);
+            try {
+                final ExifInterface src = com.scamera.app.gallery.helper.ExifRead.open(c.getContentResolver(), from); // P721
+                if (src != null) {
                     for (String tag : EXIF_TAGS) {
                         String v = src.getAttribute(tag);
                         if (v != null) dst.setAttribute(tag, v);

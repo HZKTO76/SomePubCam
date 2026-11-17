@@ -1,5 +1,7 @@
 package com.scamera.app.processing;
 
+import com.scamera.app.capture.LoficPair;
+
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
@@ -31,6 +33,8 @@ import java.util.Locale;
 public final class LoficMerge {
     private LoficMerge() {}
 
+    private static final int HALF_VALUES = 1 << 16, SCALE_BLOCK = 16 * 1024;
+
     public static final int LONG_BLACK = 1024, LONG_WHITE = 16383, SHORT_BLACK = 64, SHORT_WHITE = 1023;
     /** The Long read's weight goes from 1 at this share of its range down to 0 at {@link #TAPER_HI}. */
     public static final double TAPER_LO = 0.70, TAPER_HI = 0.96;
@@ -39,7 +43,7 @@ public final class LoficMerge {
     public static final double SHORT_READ_NOISE = 0.75;
     /** The release's fixed ramp (Long DN over black). */
     public static final double RAMP_LO = 11000, RAMP_HI = 14000;
-    public static final int BLEND_NOISE = 0, BLEND_RAMP = 1;
+    public static final int BLEND_NOISE = 0, BLEND_RAMP = 1, BLEND_ADAPTIVE = 2;
     /** A pair adds less than this over the Long clip: no LOFIC merge for the burst (the Long frames alone). */
     public static final double MIN_GAIN = 1.1;
 
@@ -141,6 +145,25 @@ public final class LoficMerge {
         return a * L + (1 - a) * kS;
     }
 
+    private static double adaptiveShort(ByteBuffer packed, int shortRow, int width, int rows,
+                                        int x, int y, double center, double sigma, double band) {
+        double sum = center, weights = 1;
+        for (int tap = 0; tap < 4; tap++) {
+            final int step = (tap & 1) == 0 ? -2 : 2;
+            final int sx = x + (tap < 2 ? step : 0), sy = y + (tap >= 2 ? step : 0);
+            if (sx < 0 || sx >= width || sy < 0 || sy >= rows) continue;
+            final int at = sy * shortRow + (sx >> 2) * 5, phase = sx & 3;
+            final int code = ((packed.get(at + phase) & 0xff) << 2) | ((packed.get(at + 4) >> (2 * phase)) & 3);
+            if (code >= SHORT_WHITE - 2) continue;
+            final double value = code - SHORT_BLACK, d = (value - center) / sigma;
+            final double range = Math.max(0, 1 - d * d / 9);
+            final double a = 0.5 * range * range;
+            sum += a * value;
+            weights += a;
+        }
+        return center + band * (sum / weights - center);
+    }
+
     /**
      * Merges a pair in place: {@code longPlain} holds the Long frame as uint16 rows of {@code width} (native order, the codes as
      * read), {@code short10} the Short frame's packed RAW10 rows ({@code width} x 10 / 8 bytes, back to back). The Long buffer
@@ -161,6 +184,10 @@ public final class LoficMerge {
             inv[i] = 1.0 / e.g[i];
         }
         final int clipCode = e.longWhite - 2, shortClip = SHORT_WHITE - 2;
+        // Division by a fixed positive range preserves ordering within each CFA site.
+        boolean validRanges = true;
+        for (double r : range) validRanges &= r > 0 && Double.isFinite(r);
+        final double[] peakBySite = validRanges ? new double[4] : null;
         double peak = 0;
         for (int y = 0; y < rows; y++) {
             final int row = y * width;
@@ -175,18 +202,41 @@ public final class LoficMerge {
                     final int s = ((short10.get(at + i) & 0xff) << 2) | ((low >> (2 * i)) & 3);
                     final boolean lc = code >= clipCode, sc = s >= shortClip;
                     final double L = code - e.black[site], S = s - SHORT_BLACK;
-                    final double m = mergePixel(L, S, lc, sc, k, aL[site], bL[site], range[site], blend);
+                    double m;
+                    if (blend == BLEND_ADAPTIVE && !sc && L > TAPER_LO * range[site]) {
+                        final double v = L / range[site];
+                        final double shortVar = PHOTON_RATIO * aL[site] * L + k * k * SHORT_READ_NOISE * SHORT_READ_NOISE;
+                        final double band = (1 - taper(v, 0.70, 0.82)) * taper(v, 0.88, 0.99);
+                        final double filtered = band > 0 ? adaptiveShort(short10, shortRow, width, rows, x, y, S,
+                                Math.max(Math.sqrt(shortVar), 0.018 * range[site]) / k, band) : S;
+                        final double diff = filtered * k - L;
+                        final double residual = lc ? Math.max(0, -diff) : Math.abs(diff);
+                        final double tol = Math.max(3 * Math.sqrt(aL[site] * L + bL[site] + shortVar),
+                                0.025 * range[site] + 0.05 * L);
+                        final double trust = taper(residual, tol, 3 * tol);
+                        m = L + trust * (mergePixel(L, filtered, lc, false, k, aL[site], bL[site], range[site], blend) - L);
+                        if (lc) m = Math.max(L, m);
+                    } else {
+                        m = mergePixel(L, S, lc, sc, k, aL[site], bL[site], range[site], blend);
+                    }
                     if (lc) {
                         st.longClipped++;
                         if (sc) st.bothClipped++;
-                        else st.recovered++;
+                        else if (blend != BLEND_ADAPTIVE || m > L) st.recovered++;
                     }
-                    final double level = m / range[site];
-                    if (level > peak) peak = level;
+                    if (peakBySite != null) {
+                        if (m > peakBySite[site]) peakBySite[site] = m;
+                    } else {
+                        final double level = m / range[site];
+                        if (level > peak) peak = level;
+                    }
                     final long out = Math.round(e.black[site] + m * inv[site]);
                     px.put(row + x, (short) Math.max(0, Math.min(65535, out)));
                 }
             }
+        }
+        if (peakBySite != null) {
+            for (int i = 0; i < 4; i++) peak = Math.max(peak, peakBySite[i] / range[i]);
         }
         st.pixels = (long) width * rows;
         st.maxLevel = peak;
@@ -195,6 +245,24 @@ public final class LoficMerge {
 
     /** Pixels the ratio needs in its band (INTEGRATION.md: about 20 000), and the band of L over black. */
     public static final int K_MIN_PIXELS = 20000, K_LOW = 2000, K_HIGH = 14500;
+
+    /** A Short read without metadata confirmation must match the Long and have its own highlight range. */
+    public static LoficPair.Measure measureShort(ByteBuffer longPlain, ByteBuffer short10, int width, int rows,
+                                                  float[] black, int longWhite) {
+        final float blackMean = (black[0] + black[1] + black[2] + black[3]) * 0.25f;
+        final LoficPair.Stats longStats = LoficPair.stats(LoficPair.plain16(whole(longPlain), width * 2, 0), width, rows);
+        final LoficPair.Stats shortStats = LoficPair.stats(LoficPair.packed(whole(short10), 10, width * 10 / 8, 0), width, rows);
+        return LoficPair.measure(longStats, blackMean, longWhite, shortStats, SHORT_WHITE);
+    }
+
+    public static double verifiedRatio(LoficPair.Measure proof, ByteBuffer longPlain, ByteBuffer short10,
+                                       int width, int rows, float[] black, int longWhite) {
+        if (proof.verdict != LoficPair.Verdict.PAIR || Math.abs(proof.black - SHORT_BLACK) > 4) return 0;
+        final double k = ratioPlain(longPlain, short10, width, rows, black, 4);
+        final double blackMean = (black[0] + black[1] + black[2] + black[3]) * 0.25;
+        final double gain = k * (SHORT_WHITE - SHORT_BLACK) / (longWhite - blackMean);
+        return Math.abs(gain / proof.ratio - 1) <= 0.10 ? k : 0;
+    }
 
     /**
      * k = sum L / sum S over the pixels with {@code K_LOW} < L < {@code K_HIGH} (both over their blacks), the Long frame as uint16
@@ -250,7 +318,22 @@ public final class LoficMerge {
             return;
         }
         final ShortBuffer h = rgb.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer();
-        for (int i = 0, n = h.limit(); i < n; i++) h.put(i, scaleHalf(h.get(i), log2));
+        if (h.remaining() < HALF_VALUES) {
+            for (int i = 0, n = h.limit(); i < n; i++) h.put(i, scaleHalf(h.get(i), log2));
+            return;
+        }
+        // A 12 MP frame has about 36 million RGB samples but only 65,536 distinct half values.
+        final short[] scaled = new short[HALF_VALUES];
+        for (int bits = 0; bits < scaled.length; bits++) scaled[bits] = scaleHalf((short) bits, log2);
+        final short[] block = new short[SCALE_BLOCK];
+        while (h.hasRemaining()) {
+            final int start = h.position();
+            final int count = Math.min(h.remaining(), block.length);
+            h.get(block, 0, count);
+            for (int i = 0; i < count; i++) block[i] = scaled[block[i] & 0xffff];
+            h.position(start);
+            h.put(block, 0, count);
+        }
     }
 
     /** One IEEE half times 2^{@code log2}: the exponent moved (exact), a subnormal through float, an overflow to the largest half. */

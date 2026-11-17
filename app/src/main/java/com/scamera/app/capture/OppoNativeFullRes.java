@@ -105,6 +105,34 @@ public final class OppoNativeFullRes {
             4096, 2304, 60, 4096, 2304, 30, 4096, 3072, 30, 4096, 3072, 30, 8192, 6144, 15, 4096, 3072, 30, 4096, 3072, 30,
             4096, 2560, 30, 4096, 2560, 30, 4096, 2560, 30, 4096, 2560, 30, 2048, 1152, 240, 4096, 3072, 30, 4096, 3072, 60};
 
+    /**
+     * P721: the realme 12 Pro+ (RMX3840) main camera "0" (IMX890) as its SCAM TEST report (2026-11-14, camera 0 NDK tag 0x80390000,
+     * line 6632) recorded it; its Java characteristics list no vendor key (87 keys, 0 vendor) either. Row 0 8192x6144 is the full
+     * size; CameraHWConfiguration.config [OemCamSensorSettingMap] gives the main «HighPicture Single iZoom Crop» and «SAT iZoom main»
+     * row 8 (4096x3072 @ 30, the centre of the full size: 2x), «iZoom Binning» / «COMMON Single CAMERA» row 1.
+     */
+    static final int[] RMX3840_MAIN = {15, 3, 8192, 6144, 15, 4096, 3072, 30, 4096, 3072, 60, 4096, 2304, 30, 4096, 2304, 60,
+            4096, 3072, 24, 1920, 1088, 240, 4096, 3072, 30, 4096, 3072, 30, 4096, 2304, 30, 2048, 1536, 24, 4096, 2304, 60,
+            4096, 2304, 60, 4096, 3072, 24, 4096, 2304, 30};
+    static final String RMX3840 = "RMX3840";
+
+    static boolean rmx3840(@Nullable String manufacturer, @Nullable String model) {
+        return manufacturer != null && manufacturer.equalsIgnoreCase("realme") && model != null && RMX3840.equalsIgnoreCase(model.trim());
+    }
+
+    /** P721: this phone is the realme 12 Pro+ (RMX3840). */
+    public static boolean rmx3840() {
+        return rmx3840(android.os.Build.MANUFACTURER, android.os.Build.MODEL);
+    }
+
+    /** The recorded table standing in for a camera of this phone (PYB110 «2» / «4», RMX3840 «0»); null otherwise. */
+    @Nullable
+    static int[] fallbackTable(@Nullable String cameraId) {
+        if (pyb110()) return recordedTable(true, cameraId);
+        if (!rmx3840() || !"0".equals(cameraId) || !PreferenceKeys.scamDevSwitch("oplus_table_fallback", true)) return null;
+        return RMX3840_MAIN.clone();
+    }
+
     /** P586: the recorded table of a PYB110 camera ({@link #PYB110_MAIN} for "2", {@link #PYB110_TELE} for "4"); null otherwise. */
     @Nullable
     static int[] recordedTable(boolean pyb110, @Nullable String cameraId) {
@@ -120,11 +148,11 @@ public final class OppoNativeFullRes {
         return null;
     }
 
-    /** P586: a camera's sensor-mode table: the one Java reads, else the PYB110's recorded one ({@link #recordedTable}). */
+    /** P586: a camera's sensor-mode table: the one Java reads, else the recorded one of this phone ({@link #fallbackTable}). */
     @Nullable
     public static int[] table(@Nullable String cameraId, @Nullable android.hardware.camera2.CameraCharacteristics c) {
         final int[] own = SensorModeBand.table(c);
-        return own != null ? own : family() ? recordedTable(pyb110(), cameraId) : null;
+        return own != null ? own : family() ? fallbackTable(cameraId) : null;
     }
 
     /**
@@ -148,11 +176,17 @@ public final class OppoNativeFullRes {
     }
 
     /**
-     * The telephotos are listed to {@link #TELE_PACKAGE} (scam_dev.txt "oppo_tele_access 0": not). P214j: OPPO only - the package
-     * was measured on the PHY110; OnePlus and realme keep the package the owner's spoof settings give (none by default).
+     * The telephotos are listed to {@link #TELE_PACKAGE} (scam_dev.txt "oppo_tele_access 0": not). P214j: the package was measured
+     * on the PHY110; OnePlus keeps the package the owner's spoof settings give (none by default). P721: realme too (the RMX3840
+     * listed only [0, 1] to the app's own package; its HAL reads the app's package from oplus.camera.packname, which the Oplus
+     * camera manager sets, and its framework config knows the same Meitu package).
      */
     public static boolean teleAccess() {
-        return brand() && PreferenceKeys.scamDevSwitch("oppo_tele_access", true);
+        return teleAccess(android.os.Build.MANUFACTURER) && PreferenceKeys.scamDevSwitch("oppo_tele_access", true);
+    }
+
+    static boolean teleAccess(@Nullable String manufacturer) {
+        return brand(manufacturer) || manufacturer != null && manufacturer.equalsIgnoreCase("realme");
     }
 
     /** The NoRemosaic mode measured on the PHY110 for an Android camera, -1 for another camera. */
@@ -536,7 +570,8 @@ public final class OppoNativeFullRes {
                 return;
             }
             if (table != null) source = table.length + " values";
-            else if (key && (table = recordedTable(pyb110(), cameraId)) != null) source = "none by name, the PYB110 report's recorded table (" + table[0] + " rows)";
+            else if (key && (table = fallbackTable(cameraId)) != null)
+                source = "none by name, the " + (pyb110() ? "PYB110" : RMX3840) + " report's recorded table (" + table[0] + " rows)";
             int pw = 0, ph = 0;
             try {
                 final android.hardware.camera2.params.StreamConfigurationMap map =
@@ -579,7 +614,7 @@ public final class OppoNativeFullRes {
         if (isp) o = ispVariants(o, PYB110_HAL_W, PYB110_HAL_H, PYB110_ISP_ROWS);
         OFFER.put(cameraId, o);
         final String line = line(cameraId, android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL, modeKey, source, publicWidth,
-                publicHeight, o, custom, OplusIsz.row(pyb110(), cameraId, table), OplusDcg.rows(pyb110(), cameraId, table))
+                publicHeight, o, custom, OplusIsz.row(cameraId, table), OplusDcg.rows(pyb110(), cameraId, table))
                 + (deadFirst && o.small.length > 1 ? " (row " + PYB110_MAIN_DEAD[0] + " last: the camera died in it, log 2026-11-09)" : "")
                 + (halFrame && o.small.length > 0 && o.small[0].length > 5 ? " (P604: the 8192x6144 readers first - the HAL's 50 MP buffer size; the 8160-wide ones died, log 2026-11-10)" : "")
                 + (isp && o.small.length > 0 && ispOf(trialId(o.small[0])) > 0 ? " (P609: first rows 25 / 9 at 8192x6144 with the ISP stream in the session, fake off then on; every RAW-only variant died, log 2026-11-10 19:38-19:39)" : "")
@@ -886,7 +921,7 @@ public final class OppoNativeFullRes {
      * P214h: the route revision of the trials' stamp (FullResTrials, with Build.FINGERPRINT: a firmware update tries a camera's
      * modes again); a build that changes the route bumps it to try every camera's modes again.
      */
-    static final int ROW_TRIALS = 1;
+    static final int ROW_TRIALS = 2; // native sessions no longer get Vivo SDK keys
 
     /** P214h: the base of a camera's trial keys (the tried count itself, its reasons, its stamp). */
     static String base(String cameraId) {

@@ -50,7 +50,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="3dp"
-                    android:fontFamily="sans-serif-medium"
+                    android:fontFamily="@font/roboto_flex_500"
                     android:importantForAccessibility="no"
                     android:includeFontPadding="false"
                     android:maxLines="1"

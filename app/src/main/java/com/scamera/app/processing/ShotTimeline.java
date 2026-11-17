@@ -7,7 +7,7 @@ import java.util.Map;
 
 /**
  * Shot speed (wave 1, W1.0): the stage times of one shot, collected in memory and printed as ONE line
- * ({@code SHOT TIMELINE ms: ...}, every stage in ms after the shutter) once the shot is saved. OPPO's log flow control drops
+ * ({@code SHOT TIMELINE ms: ...}, every stage in ms from the earliest mark) once the shot is saved. OPPO's log flow control drops
  * hundreds of rows per shot, so the per-stage lines alone could not be added up; this one line survives it.
  * <p>
  * The capture marks go to the shot being captured ({@link #begin}, {@link #capture}); when the burst is queued for processing
@@ -298,8 +298,8 @@ public final class ShotTimeline {
     /**
      * P236 (speed-ux F): one line per shot - hold (the press to the last still: the time to keep still), to_worker (the last
      * still to the job sent), merge (the job to the worker's end), gap (the worker's end to the post pipeline: P236's 0.4-0.6 s),
-     * post, save, total, then the notes (thermal state and viewfinder fps at the press and the end, shader compiling, the
-     * worker's stages). -1: a mark missing (a route without that stage).
+     * post, save, total (all marks including prespawn and teardown), shutter_to_save, then the notes (thermal state and
+     * viewfinder fps at the press and the end, shader compiling, the worker's stages). -1: a mark missing.
      */
     String summary() {
         final StringBuilder sb = new StringBuilder("SHOT SUMMARY ms:");
@@ -315,6 +315,7 @@ public final class ShotTimeline {
         long first = Long.MAX_VALUE, last = Long.MIN_VALUE;
         for (long v : marks.values()) { first = Math.min(first, v); last = Math.max(last, v); }
         sb.append(" total=").append((last - first) / 1_000_000);
+        sb.append(" shutter_to_save=").append(span("shutter", "saved"));
         for (Map.Entry<String, String> e : notes.entrySet()) sb.append(' ').append(e.getKey()).append('=').append(e.getValue());
         return sb.toString();
     }

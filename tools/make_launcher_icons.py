@@ -236,17 +236,10 @@ if PREVIEW:
     small.save(PREVIEW + '/preview48.png')
     sys.exit(0)
 
-write('drawable/scamera_icon_fg.xml', vector(CAMERA))
+# P720: the camera's foreground, its themed silhouette, the shared background and the splash are hand-made now (the owner's
+# icon); this script writes the gallery's layers and the adaptive-icon wrappers only.
 write('drawable/sgallery_icon_fg.xml', vector(GALLERY))
-write('drawable/scamera_launch_mono.xml', mono_vector(CAMERA))
 write('drawable/gallery_launch_mono.xml', mono_vector(GALLERY))
-write('drawable/scamera_icon_background.xml', '''<?xml version="1.0" encoding="utf-8"?>
-<!-- P131: the launcher icons' background - the UI's dark surface, a little lighter at the top. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <gradient android:angle="270" android:startColor="%s" android:endColor="%s" />
-</shape>
-''' % (BG_TOP, BG_BOTTOM))
 for name, fg, mono in (('scamera_launcher', 'scamera_icon_fg', 'scamera_launch_mono'),
                        ('scamera_launcher_round', 'scamera_icon_fg', 'scamera_launch_mono'),
                        ('ic_gallery_launcher', 'sgallery_icon_fg', 'gallery_launch_mono'),
@@ -258,10 +251,4 @@ for name, fg, mono in (('scamera_launcher', 'scamera_icon_fg', 'scamera_launch_m
     <monochrome android:drawable="@drawable/%s" />
 </adaptive-icon>
 ''' % (fg, mono))
-# the splash (a raster on black, 48 dp): the camera icon on its rounded surface
-for dens, px in (('mdpi', 48), ('hdpi', 72), ('xhdpi', 96), ('xxhdpi', 144), ('xxxhdpi', 192)):
-    im = visible(draw(CAMERA, px * 3), 'squircle', px)
-    out = Image.new('RGB', (px, px), (0, 0, 0))
-    out.paste(im, (0, 0), im)
-    out.save(RES + 'drawable-%s/scamera_splash_icon.png' % dens, optimize=True)
 print('written')

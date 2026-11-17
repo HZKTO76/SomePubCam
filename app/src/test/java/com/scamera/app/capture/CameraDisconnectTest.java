@@ -1,7 +1,9 @@
 package com.scamera.app.capture;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -43,6 +45,7 @@ import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Semaphore;
 
 /**
  * Bug capture-disconnect-no-reopen: another client took the camera (split screen, a pop-up window) while the camera screen stayed
@@ -106,13 +109,22 @@ public class CameraDisconnectTest {
         return disconnect(id, 1);
     }
 
+    private CaptureController.DeviceStateCallback openCallback() throws Exception {
+        final Semaphore lock = (Semaphore) get(controller, "mCameraOpenCloseLock");
+        assertTrue(lock.tryAcquire());
+        ((java.util.concurrent.atomic.AtomicBoolean) get(controller, "mCameraOpening")).set(true);
+        final CaptureController.DeviceStateCallback callback = controller.new DeviceStateCallback();
+        put(controller, "mStateCallback", callback);
+        return callback;
+    }
+
     /** The camera disconnected while resumed: the wait it registered (the {@code nth} registration). */
     private CameraManager.AvailabilityCallback disconnect(String id, int nth) throws Exception {
         final CameraDevice device = mock(CameraDevice.class);
         when(device.getId()).thenReturn(id);
         put(controller, "isCameraResumed", true);
         put(controller, "mCameraDevice", device);
-        ((CameraDevice.StateCallback) get(controller, "mStateCallback")).onDisconnected(device);
+        openCallback().onDisconnected(device);
         assertNull(get(controller, "mCameraDevice"));
         final ArgumentCaptor<CameraManager.AvailabilityCallback> registered = ArgumentCaptor.forClass(CameraManager.AvailabilityCallback.class);
         verify(manager, times(nth)).registerAvailabilityCallback(registered.capture(), any(Handler.class));
@@ -237,7 +249,57 @@ public class CameraDisconnectTest {
         final CameraDevice device = mock(CameraDevice.class);
         when(device.getId()).thenReturn("3");
         put(controller, "isCameraResumed", false);
-        ((CameraDevice.StateCallback) get(controller, "mStateCallback")).onDisconnected(device);
+        openCallback().onDisconnected(device);
         verify(manager, never()).registerAvailabilityCallback(any(CameraManager.AvailabilityCallback.class), any(Handler.class));
+    }
+
+    @Test
+    public void disconnectAfterTheOpenAnswerDoesNotReleaseAnotherPermit() throws Exception {
+        final CameraDevice device = mock(CameraDevice.class);
+        final CaptureController.DeviceStateCallback callback = openCallback();
+        put(controller, "isCameraResumed", false);
+        callback.onOpened(device);
+        put(controller, "mCameraDevice", device);
+        callback.onDisconnected(device);
+        assertEquals(1, ((Semaphore) get(controller, "mCameraOpenCloseLock")).availablePermits());
+        assertNull(get(controller, "mCameraDevice"));
+    }
+
+    @Test
+    public void lateCallbacksLeaveTheNewDeviceAndItsLeaseAlone() throws Exception {
+        final CameraDevice old = mock(CameraDevice.class);
+        final CameraDevice current = mock(CameraDevice.class);
+        final VivoSdkRawSession oldLease = VivoSdkRawSession.inert();
+        final VivoSdkRawSession currentLease = VivoSdkRawSession.inert();
+        put(controller, "mIszLease", oldLease);
+        final CaptureController.DeviceStateCallback callback = openCallback();
+        try {
+            put(controller, "isCameraResumed", false);
+            callback.onOpened(old);
+            put(controller, "mIszLease", currentLease);
+            final CaptureController.DeviceStateCallback next = openCallback();
+            put(controller, "mCameraDevice", current);
+            callback.onError(old, CameraDevice.StateCallback.ERROR_CAMERA_DEVICE);
+            callback.onClosed(old);
+            assertSame(next, get(controller, "mStateCallback"));
+            assertSame(current, get(controller, "mCameraDevice"));
+            assertSame(currentLease, get(controller, "mIszLease"));
+            assertEquals(0, ((Semaphore) get(controller, "mCameraOpenCloseLock")).availablePermits());
+        } finally {
+            oldLease.close();
+            currentLease.close();
+        }
+    }
+
+    @Test
+    public void aLateOpenFromAnInvalidatedSessionClosesTheDevice() throws Exception {
+        final CameraDevice device = mock(CameraDevice.class);
+        final CaptureController.DeviceStateCallback callback = openCallback();
+        ((java.util.concurrent.atomic.AtomicInteger) get(controller, "mSessionGeneration")).incrementAndGet();
+        put(controller, "isCameraResumed", true);
+        callback.onOpened(device);
+        verify(device).close();
+        assertNull(get(controller, "mCameraDevice"));
+        assertEquals(1, ((Semaphore) get(controller, "mCameraOpenCloseLock")).availablePermits());
     }
 }

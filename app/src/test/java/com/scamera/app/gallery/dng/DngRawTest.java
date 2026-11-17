@@ -136,6 +136,40 @@ public class DngRawTest {
     }
 
     @Test
+    public void linearRgbDecodeKeepsEveryChannel() throws IOException {
+        final int w = 32, h = 16;
+        final int[] rgb = new int[3 * w * h];
+        for (int i = 0; i < rgb.length; i++) rgb[i] = (i * 31337) & 65535;
+        for (boolean compressed : new boolean[]{false, true}) {
+            DngPreviewTest.Tiff t = new DngPreviewTest.Tiff();
+            t.tag(0x100, 4, 1, w);
+            t.tag(0x101, 4, 1, h);
+            t.blob(0x102, 3, 3, DngPreviewTest.shorts(16, 16, 16));
+            t.tag(0x103, 3, 1, compressed ? 7 : 1);
+            t.tag(0x106, 3, 1, 34892);
+            t.tag(0x115, 3, 1, 3);
+            if (compressed) {
+                byte[] jpeg = DngPreviewTest.Lj92TestEncoder.encode(rgb, w, h, 16, 3);
+                t.tag(0x142, 4, 1, w);
+                t.tag(0x143, 4, 1, h);
+                t.blob(0x144, 4, 1, jpeg);
+                t.tag(0x145, 4, 1, jpeg.length);
+            } else {
+                byte[] plane = shorts16(rgb);
+                t.tag(0x116, 4, 1, h);
+                t.blob(0x111, 4, 1, plane);
+                t.tag(0x117, 4, 1, plane.length);
+            }
+            final ByteBuffer file = ByteBuffer.wrap(t.build());
+            final float[] decoded = new float[rgb.length];
+            DngRaw.decodeRgbForDevelop(file, w, h, true, (i, v) -> decoded[i] = v);
+            for (int i = 0; i < rgb.length; i++) assertEquals(rgb[i] / 65535f, decoded[i], 0f);
+            assertArrayEquals(decoded, DngRaw.decodeLinear(file, 1).linear, 0f);
+            assertEquals(w / 2, DngPreview.read(file, w / 2, h / 2).width);
+        }
+    }
+
+    @Test
     public void quadCfaBecomesHalfSizeBayer() throws IOException {
         int[] raw = new int[W * H];
         byte[] cfa = new byte[16];

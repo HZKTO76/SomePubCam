@@ -96,7 +96,7 @@ JNIEXPORT jboolean JNICALL Java_com_scamera_app_processing_yuv_YuvMergeNative_pa
  * settings: profile (0 2.7, 1 3.1), global radius, local radius, threshold scale, chroma check, chroma tolerance, luma check, own
  * noise, sharpest base, guided chroma, bracket, de-ghost, threads, transfer (0 sRGB, 1 points, 2 HLG, 3 linear), decode (0 JFIF
  * BT.601, 1 BT.2020 narrow unless its Y extremes say full, 2 BT.2020 full range, 3 BT.2020 narrow: 2 / 3 the dataspace's range), P701 the points' prior model (0 over linear light, 1 over the camera's sRGB signal), the output's chroma factor (1: unchanged), the shadow toe's gamma and cap (1, 1: none). curve: the
- * points' linear inputs then their encoded outputs. noise: S, O of the camera's profile.
+ * points' linear inputs then their encoded outputs. The final setting is adaptive highlight merge. Noise: S, O of the camera's profile.
  * stats out: base, mean frames, linear S, linear O, bracket used, ES share, L share, noise measured, measured bins, median frames,
  * P701 the model the bracket measured (0 none, 1 over linear light, 2 over sRGB), the scene's geometric mean before and after the
  * shadow toe, 1 when the counts came back as the post's codes (the toe's noise in them).
@@ -107,11 +107,11 @@ JNIEXPORT jstring JNICALL Java_com_scamera_app_processing_yuv_YuvMergeNative_mer
     try {
         const jsize n = env->GetArrayLength(frames);
         if (n < 1 || env->GetArrayLength(ratios) != n || env->GetArrayLength(roles) != n) throw std::invalid_argument("frame lists differ");
-        std::vector<float> r(n), s(19, 0.f), c, nz(2, 0.f);
+        std::vector<float> r(n), s(20, 0.f), c, nz(2, 0.f);
         std::vector<jint> ro(n);
         env->GetFloatArrayRegion(ratios, 0, n, r.data());
         env->GetIntArrayRegion(roles, 0, n, ro.data());
-        const jsize given = std::min<jsize>(19, env->GetArrayLength(settings));
+        const jsize given = std::min<jsize>(20, env->GetArrayLength(settings));
         env->GetFloatArrayRegion(settings, 0, given, s.data());
         if (given < 17) s[16] = 1.f;  // P701: no chroma factor given: unchanged
         if (given < 19) s[17] = s[18] = 1.f;  // P701: no shadow toe given: none
@@ -134,6 +134,7 @@ JNIEXPORT jstring JNICALL Java_com_scamera_app_processing_yuv_YuvMergeNative_mer
         set.sharpestBase = s[8] > .5f;
         set.guidedChroma = s[9] > .5f;
         set.bracket = s[10] > .5f;
+        set.adaptiveHighlights = s[19] > .5f;
         set.deghost = std::clamp(s[11], 0.5f, 10.f);
         set.threads = std::clamp(int(s[12]), 1, 8);
         scam_yuv::Transfer t;

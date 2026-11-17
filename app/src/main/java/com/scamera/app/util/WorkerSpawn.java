@@ -7,7 +7,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Native worker without root: the executable ships in the APK as
@@ -41,36 +40,25 @@ public final class WorkerSpawn {
         return WorkerEnv.build(libs, job, WorkerEnv.gpuNormalPriority(), WorkerEnv.workerNice()); // P242: the GPU priority A/B; P371: nice
     }
 
-    /** A running worker: spawned directly, or a root (su) process. */
+    /** A running worker spawned by the app. */
     public static final class Child {
-        private final Process process;
         private final int pid;
         public final InputStream output;
         private int exit = -1;
         private Child(int pid, int fd) {
-            process = null;
             this.pid = pid;
             output = new ParcelFileDescriptor.AutoCloseInputStream(ParcelFileDescriptor.adoptFd(fd));
         }
-        private Child(Process process) throws IOException {
-            this.process = process;
-            pid = -1;
-            output = process.getInputStream();
-            process.getOutputStream().close();
-        }
-        public static Child of(Process process) throws IOException { return new Child(process); }
         /** True when the worker ended within the timeout. */
         public boolean waitFor(long timeoutMs) throws InterruptedException {
-            if (process != null) return process.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
             if (exit >= 0) return true;
             int r = WorkerSpawn.waitFor(pid, timeoutMs);
             if (r >= 0) exit = r;
             return r >= 0;
         }
-        public int exitValue() { return process != null ? process.exitValue() : exit; }
-        public boolean isAlive() { return process != null ? process.isAlive() : exit < 0; }
+        public int exitValue() { return exit; }
+        public boolean isAlive() { return exit < 0; }
         public void destroy() {
-            if (process != null) { process.destroyForcibly(); return; }
             if (exit >= 0) return;
             try { android.system.Os.kill(pid, android.system.OsConstants.SIGKILL); } catch (Exception ignored) {}
             try { waitFor(5000); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }

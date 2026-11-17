@@ -45,7 +45,7 @@ public class CropUpscaleTest {
         int wanted = s.indexOf("final boolean dngWanted = !yuvShot && (mosaicDngOnly || ((rawSaving >= 1) && alignMode != 2));", flag);
         int dng = wanted < 0 ? -1 : s.indexOf("if (dngWanted) {", wanted);
         int check = s.indexOf("final boolean mosaicDng = mosaicDngOnly;", dng);
-        int merged = s.indexOf("if (scamMergedDng != null) {", check);
+        int merged = s.indexOf("if (scamMergedDng != null || linearDng) {", check);
         int stacked = s.indexOf("imageSaved = mosaicDng ? ImageSaver.Util.saveStackedRaw(dngPath, scamMergedDng, processingParameters, true)", merged);
         int reference = s.indexOf("imageSaved = mosaicDng ? ImageSaver.Util.saveSingleRaw(dngPath, output, processingParameters, true)", stacked);
         int end = s.indexOf("if (rawSaving == 2 || mosaicDngOnly) {", reference);
@@ -54,7 +54,7 @@ public class CropUpscaleTest {
                 && end > reference && pipeline > end);
         String h = src("src/main/java/com/scamera/app/processing/opengl/postpipeline/ScamHybridBurst.java");
         assertTrue(h.contains("burst.mergedDng = mergedDng || burst.dngMosaic > 1;"));
-        assertTrue(h.contains("safe.mergedDng = safe.dngMosaic > 1;"));
+        assertTrue(h.contains("safe.mergedDng = mergedDng || safe.dngMosaic > 1;"));
         String w = src("src/main/cpp/scam-hybrid.h");
         assertTrue(w.contains("||set(\"dngMosaic\",nullptr,&t.dngMosaic)"));
         int at = w.indexOf("const int dngBlock=tune.dngMosaic!=0&&(block==2||block==4)?block:1;");

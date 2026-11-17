@@ -12,6 +12,7 @@ import com.scamera.app.api.Camera2ApiAutoFix;
 import com.scamera.app.api.ParseExif;
 import com.scamera.app.app.ScameraApp;
 import com.scamera.app.capture.CaptureController;
+import com.scamera.app.capture.LoficPair;
 import com.scamera.app.control.GyroBurst;
 import com.scamera.app.processing.ImageFrame;
 import com.scamera.app.processing.LoficMerge;
@@ -779,7 +780,7 @@ public class ScamProcessor extends ProcessorBase {
                 processingParameters.scamHdrRawScale=1f;
                 // P656: a YUV shot has no RAW and no DNG (log 7 said «DNG retains the reference RAW» after each YUV merge)
                 Log.i("SCAM_HDR",yuvShot?"YUV merge completed; RGB goes directly to the tone (the camera's colour), no DNG (no RAW frame)."
-                        :"Original model capture completed; RGB goes directly to WB/LSC/tone. DNG retains the reference RAW.");
+                        :"RAW merge completed; RGB goes directly to WB/LSC/tone.");
             } catch(Exception e) {
                 throw new IllegalStateException("SCAM capture failed: "+e.getMessage(),e);
             }
@@ -796,10 +797,12 @@ public class ScamProcessor extends ProcessorBase {
             Allocator.free(unused);
         }
         ByteBuffer scamMergedDng = mergedDng;
+        final boolean linearDng = dngWanted && hybridShot && !mosaicDngOnly && scamOwnedOutput != null
+                && com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergeTier.startsWith("gpu");
         // P681: above 16 MP the reference RAW is copied out of the shot arena only when something reads it after the frames go (the
         // reference frame's DNG, a post_ab run, a non-hybrid pipeline): a hybrid shot with its merged DNG (or none wanted) never
         // did - 96 MB copied at 50 MP, 384 MB at 200 MP, freed unread. Its view goes now (the arena, a ZSL ring slot, unpinned).
-        if ((long) width * height > 16_000_000L && !referenceRawNeeded(dngWanted && scamMergedDng == null, hybridShot,
+        if ((long) width * height > 16_000_000L && !referenceRawNeeded(dngWanted && !linearDng && scamMergedDng == null, hybridShot,
                 processingParameters.scamRgbOwned, com.scamera.app.processing.opengl.postpipeline.PostAb.wanted(processingParameters,
                         lookAtPress != null ? lookAtPress.film : com.scamera.app.processing.color.FilmSim.current()))) {
             referenceRaw = null;
@@ -819,6 +822,7 @@ public class ScamProcessor extends ProcessorBase {
         Path developTarget = null;
         int developDngW = 0, developDngH = 0;
         boolean mergedDngWritten = false;
+        final Point hybridOut = hybridShot && !yuvShot ? com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastOutputSize : null;
         // P646: a YUV shot has no RAW for a DNG («RAW only» saves its photo)
         if (yuvShot && rawSaving >= 1) Log.i(TAG, "DNG: none for a YUV shot (no RAW frame), the photo only");
         if (dngWanted) {
@@ -842,20 +846,28 @@ public class ScamProcessor extends ProcessorBase {
             // mosaic DNG alone (the worker's dngMosaic: the sensor's layout, uncompressed - Scam Remosaic's single-DNG input for its
             // neural remosaic); a merge that gave none (the CPU tier) leaves the reference frame's mosaic as captured.
             final boolean mosaicDng = mosaicDngOnly;
+            final Point sensorSize = processingParameters.rawSize;
+            final Point dngSize = hybridOut != null ? hybridOut : sensorSize;
+            if (scamMergedDng == null && !linearDng && !dngSize.equals(sensorSize))
+                throw new IllegalStateException("The merged DNG buffer is unavailable at the selected resolution");
             if (mosaicDng) Log.i("SCAM_HDR", "DNG: " + (scamMergedDng != null ? "the merged" : "the reference frame's (no merged RAW)")
-                    + " mosaic " + processingParameters.rawSize.x + "x" + processingParameters.rawSize.y
+                    + " mosaic " + dngSize.x + "x" + dngSize.y
                     + " (no remosaic: the DNG alone, for the neural remosaic of Scam Remosaic)");
-            if (scamMergedDng != null) {
+            if (scamMergedDng != null || linearDng) {
                 // The whole burst's merge (the N frames, the bracketed and the ultrashort ones; nothing else, no denoise),
                 // P165: 16 bit over its headroom, BaselineExposure log2(headroom) keeps its brightness.
                 float[] black = processingParameters.cfaBlack.clone();
                 int white = processingParameters.whiteLevel;
                 boolean handedOff = false;
                 float k = 65535f / white;
-                final float headroom = Math.max(1f, com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom);
+                final boolean half = com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastRgbHalf;
+                final float bound = Math.max(1f, com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom);
+                final float headroom = linearDng && bound > 1f
+                        ? Math.min(bound, com.scamera.app.processing.DngCreator.linearHeadroom(scamOwnedOutput, half)) : bound;
                 for (int i = 0; i < 4; i++) processingParameters.cfaBlack[i] = Math.round(black[i] * k);
                 processingParameters.whiteLevel = 65535;
-                processingParameters.dngBaselineExposure = headroom > 1.0001f ? (float) (Math.log(headroom) / Math.log(2)) : 0f;
+                processingParameters.dngBaselineExposure = headroom > (linearDng ? 1f : 1.0001f)
+                        ? (float) (Math.log(headroom) / Math.log(2)) : 0f;
                 try {
                     // P214c: NoiseProfile of what the file holds - the merge's level over the headroom, averaged over the frames
                     // the worker merged (DngMetadata.noiseProfile); without the worker's frames the legacy computeModel stands
@@ -878,9 +890,14 @@ public class ScamProcessor extends ProcessorBase {
                             single, noiseFactor, headroom, framesKnown ? mergeFrames : 1, 1);
                     processingParameters.dngMosaicBlock = mergedDngBlock;
                     processingParameters.dngMerged = true; // P618: its ImageDescription
+                    processingParameters.rawSize = dngSize;
+                    if (!linearDng && scamMergedDng.remaining() != 2L * dngSize.x * dngSize.y)
+                        throw new IllegalStateException("Merged DNG size does not match the RAW buffer");
                     // P681: beside the post pipeline when memory allows (DngReport.offPostPath); the writer takes every value of
                     // the file now, so the restore below is safe at once, and frees the merged DNG on its thread when it is done
-                    if (DngReport.offPostPath(PreferenceKeys.scamDevSwitch("dng_async", true), dngReport.photoFollows,
+                    if (linearDng) {
+                        imageSaved = ImageSaver.Util.saveLinearRaw(dngPath, scamOwnedOutput, processingParameters, half, headroom);
+                    } else if (DngReport.offPostPath(PreferenceKeys.scamDevSwitch("dng_async", true), dngReport.photoFollows,
                             (long) processingParameters.rawSize.x * processingParameters.rawSize.y, totalMemory())) {
                         final ByteBuffer merged = scamMergedDng;
                         dngJob = ImageSaver.Util.saveSingleRawAsync(dngPath, merged, processingParameters, mosaicDng,
@@ -894,8 +911,14 @@ public class ScamProcessor extends ProcessorBase {
                                 : ImageSaver.Util.saveStackedRaw(dngPath, scamMergedDng, processingParameters);
                     }
                     mergedDngWritten = imageSaved && !mosaicDng; // P665
-                    Log.i("SCAM_HDR", String.format(java.util.Locale.ROOT, "DNG: merged burst RAW (N, bracketed and ultrashort frames), "
-                            + "16-bit, headroom x%.3f, BaselineExposure %+.2f EV", headroom, processingParameters.dngBaselineExposure));
+                    if (mergedDngWritten) {
+                        com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom = headroom;
+                        developDngW = dngSize.x;
+                        developDngH = dngSize.y;
+                    }
+                    Log.i("SCAM_HDR", String.format(java.util.Locale.ROOT, "DNG: merged burst RAW %dx%d, "
+                            + "16-bit, headroom x%.3f, BaselineExposure %+.2f EV",
+                            dngSize.x, dngSize.y, headroom, processingParameters.dngBaselineExposure));
                     final double[] np = processingParameters.dngNoiseProfile;
                     if (np != null && single != null) Log.i("SCAM_HDR", String.format(java.util.Locale.ROOT, "DNG: NoiseProfile G %.4g / %.4g (frames %s, "
                             + "headroom x%.3f, noise x%.3f; one frame %.4g / %.4g)", np[2], np[3],
@@ -908,7 +931,8 @@ public class ScamProcessor extends ProcessorBase {
                     processingParameters.dngNoiseProfile = null;
                     processingParameters.dngMosaicBlock = 1;
                     processingParameters.dngMerged = false;
-                    if (!handedOff) {
+                    processingParameters.rawSize = sensorSize;
+                    if (!handedOff && scamMergedDng != null) {
                         mergedDng = null;
                         Allocator.free(scamMergedDng);
                     }
@@ -950,12 +974,10 @@ public class ScamProcessor extends ProcessorBase {
             }
             // P620: a DNG with a photo (not the mosaic DNG alone, not RAW only); the front camera's photo is mirrored, its DNG not
             if (imageSaved && !mosaicDngOnly && rawSaving != 2 && !processingParameters.mirrored) dngPreviewTarget = dngPath;
-            // P665: a merged Bayer DNG beside a processed photo carries the developer's record (the reference frame's DNG does not:
+            // P665: a merged DNG beside a processed photo carries the developer's record (the reference frame's DNG does not:
             // it is not the RGB the pipeline took)
             if (mergedDngWritten && !mosaicDngOnly && rawSaving != 2 && hybridShot) {
                 developTarget = dngPath;
-                developDngW = processingParameters.rawSize.x;
-                developDngH = processingParameters.rawSize.y;
             }
             if (mosaicDngOnly) {
                 try {
@@ -1002,11 +1024,7 @@ public class ScamProcessor extends ProcessorBase {
             output = null;
         }
         ByteBuffer jpegInput = output;
-        // SCAM HDR hybrid on the Sabre 2x grid: the RGB is larger than the sensor grid (the DNG above stayed sensor
-        // size). Like mosaic SR, the pipeline size follows the RGB; the LSC map is sampled in normalised coordinates.
-        // Only a hybrid shot has the hybrid's output size: the static keeps the last hybrid shot's size, which a SCAM HDR
-        // shot (sensor size) must not take (it rendered the SCAM HDR RGB at the 2x size, black).
-        final Point hybridOut = hybridShot && !yuvShot ? com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastOutputSize : null;
+        // The post pipeline follows the merged RGB grid, using the LSC map in normalized coordinates.
         processingParameters.hybridFinalSize = null;
         // P503 «Уменьшить до» (any Sabre scale, 1X too): resized on the GPU at the end of the pipeline (HybridFinalResize); the CPU
         // resize below only remains as a fallback when the pipeline did not apply it.
@@ -1459,15 +1477,18 @@ public class ScamProcessor extends ProcessorBase {
     static void appendDngPreview(Path dng, Bitmap photoSmall, int cameraRotation, boolean p3) {
         final long started = System.nanoTime();
         final Bitmap sensor = com.scamera.app.processing.PhotoThumbnail.dngSource(photoSmall, cameraRotation);
-        final byte[] jpeg = com.scamera.app.processing.PhotoThumbnail.jpeg(sensor, 90);
-        final boolean ok = jpeg != null && com.scamera.app.processing.DngPreview.append(dng, jpeg, sensor.getWidth(),
-                sensor.getHeight(), p3 ? com.scamera.app.processing.DngPreview.COLOUR_UNKNOWN
-                        : com.scamera.app.processing.DngPreview.COLOUR_SRGB,
-                com.scamera.app.processing.DngMetadata.software());
-        final String size = sensor == null ? "" : sensor.getWidth() + "x" + sensor.getHeight();
-        if (sensor != null) sensor.recycle();
-        Log.i(TAG, "DNG preview " + (ok ? size + " " + jpeg.length / 1024 + " KB" : "not written")
-                + " in " + (System.nanoTime() - started) / 1000000 + " ms");
+        try {
+            final byte[] jpeg = com.scamera.app.processing.PhotoThumbnail.jpeg(sensor, 90);
+            final boolean ok = jpeg != null && com.scamera.app.processing.DngPreview.append(dng, jpeg, sensor.getWidth(),
+                    sensor.getHeight(), p3 ? com.scamera.app.processing.DngPreview.COLOUR_UNKNOWN
+                            : com.scamera.app.processing.DngPreview.COLOUR_SRGB,
+                    com.scamera.app.processing.DngMetadata.software());
+            final String size = sensor == null ? "" : sensor.getWidth() + "x" + sensor.getHeight();
+            Log.i(TAG, "DNG preview " + (ok ? size + " " + jpeg.length / 1024 + " KB" : "not written")
+                    + " in " + (System.nanoTime() - started) / 1000000 + " ms");
+        } finally {
+            if (sensor != null && sensor != photoSmall) sensor.recycle();
+        }
     }
 
     /** P681: the media scanner reads the shot's DNG once, when nothing is appended to it any more (DngReport). */
@@ -1981,8 +2002,8 @@ public class ScamProcessor extends ProcessorBase {
      * the burst merge (LoficMerge) - the Short read is the same moment, pixel-aligned, so it extends the Long frame's highlights
      * with nothing to align; the merged frames then go to our merge as plain N frames. The levels are the streams' own (Long
      * black 1024 / white 16383: the metadata reports them wrongly); k (Long / Short) is measured on each pair. A pair without a
-     * measured k takes the burst's median; with none measured, or no pair adding light over the Long clip, the Long frames go
-     * alone. Sets Parameters.loficLog2.
+     * measured k takes the burst's median when metadata confirms it. Without that confirmation, every frame must carry a
+     * verified Short read to put the entire burst on the same scale. Sets Parameters.loficLog2.
      */
     void loficPremerge(Parameters p, ArrayList<ImageFrame> frames) {
         p.loficLog2 = 0;
@@ -1996,18 +2017,31 @@ public class ScamProcessor extends ProcessorBase {
         final ArrayList<ImageFrame> pairs = new ArrayList<>();
         for (ImageFrame f : frames) if (f != null && f.lofic != null && f.lofic.shortPacked != null && f.buffer != null) pairs.add(f);
         if (pairs.isEmpty()) {
-            Log.w("SCAM_HDR", "LOFIC shot: no frame carries its Short read (no ExposureCount 2 at the press): the Long frames alone,"
+            Log.w("SCAM_HDR", "LOFIC shot: no frame carries a same-grid Short read: the Long frames alone,"
                     + " black " + java.util.Arrays.toString(p.cfaBlack) + " / white " + p.whiteLevel + " (declared " + declaredWhite + ") (P679)");
             return;
         }
         final float[] black = p.cfaBlack.clone();
         final double[] ks = new double[pairs.size()];
+        final boolean verifyShort = pairs.get(0).lofic.verifyShort;
         final long started = android.os.SystemClock.elapsedRealtime();
         com.scamera.app.util.ParallelWork.forEach(pairs.size(), i -> {
             final ImageFrame f = pairs.get(i);
             final int rows = Math.min(f.height, f.lofic.rows);
-            ks[i] = LoficMerge.ratioPlain(f.buffer, f.lofic.shortPacked, f.width, rows, black, 4);
+            if (verifyShort) {
+                final LoficPair.Measure proof =
+                        LoficMerge.measureShort(f.buffer, f.lofic.shortPacked, f.width, rows, black, p.whiteLevel);
+                ks[i] = LoficMerge.verifiedRatio(proof, f.buffer, f.lofic.shortPacked, f.width, rows, black, p.whiteLevel);
+                Log.i("SCAM_HDR", "LOFIC Short verification at " + f.timestamp + ": " + proof + "; accepted k=" + ks[i] + " (P679)");
+            } else {
+                ks[i] = LoficMerge.ratioPlain(f.buffer, f.lofic.shortPacked, f.width, rows, black, 4);
+            }
         });
+        if (verifyShort && (pairs.size() != frames.size() || java.util.Arrays.stream(ks).anyMatch(k -> !(k > 0)))) {
+            for (ImageFrame f : pairs) f.lofic = null;
+            Log.w("SCAM_HDR", "LOFIC shot: Short reads could not be verified for the whole burst; keeping the Long frames (P679)");
+            return;
+        }
         final double median = LoficMerge.median(ks);
         double kMax = 0;
         for (int i = 0; i < ks.length; i++) {
@@ -2024,9 +2058,11 @@ public class ScamProcessor extends ProcessorBase {
             for (ImageFrame f : pairs) f.lofic = null;
             return;
         }
-        final int blend = Math.round(PreferenceKeys.scamDevNumber("lofic_blend", LoficMerge.BLEND_NOISE)) == LoficMerge.BLEND_RAMP
+        final int blend = PreferenceKeys.adaptiveHighlightMerge() ? LoficMerge.BLEND_ADAPTIVE
+                : Math.round(PreferenceKeys.scamDevNumber("lofic_blend", LoficMerge.BLEND_NOISE)) == LoficMerge.BLEND_RAMP
                 ? LoficMerge.BLEND_RAMP : LoficMerge.BLEND_NOISE;
         final LoficMerge.Stats[] stats = new LoficMerge.Stats[pairs.size()];
+        final long mergeStarted = android.os.SystemClock.elapsedRealtime();
         com.scamera.app.util.ParallelWork.forEach(pairs.size(), i -> {
             final ImageFrame f = pairs.get(i);
             final int rows = Math.min(f.height, f.lofic.rows);
@@ -2034,16 +2070,20 @@ public class ScamProcessor extends ProcessorBase {
             final float offset = Float.isFinite(f.noiseOffset) && f.noiseOffset >= 0 ? f.noiseOffset : 1e-7f;
             stats[i] = LoficMerge.merge(f.buffer, f.lofic.shortPacked, f.width, rows, ks[i], slope, offset, e, blend);
         });
+        Log.i("PERF", "LOFIC pairs=" + pairs.size() + " setup_ms=" + (mergeStarted - started)
+                + " merge_ms=" + (android.os.SystemClock.elapsedRealtime() - mergeStarted));
         for (int i = 0; i < pairs.size(); i++) {
             pairs.get(i).lofic = null;
-            Log.i("SCAM_HDR", "LOFIC pair " + i + " (frame " + pairs.get(i).number + ", ExposureCount 2): " + stats[i] + " (P679)");
+            Log.i("SCAM_HDR", "LOFIC pair " + i + " (frame " + pairs.get(i).number
+                    + (verifyShort ? ", verified from RAW" : ", ExposureCount 2") + "): " + stats[i] + " (P679)");
         }
         // frames of the shot without a Short read (none in a LOFIC shot by construction) would be at the Long scale: left out
         frames.removeIf(f -> f != null && !pairs.contains(f));
         p.whiteLevel = 65535;
         p.loficLog2 = e.headroomLog2;
         p.dngBaselineExposure = e.headroomLog2;
-        Log.i("SCAM_HDR", "LOFIC pairs merged (" + (blend == LoficMerge.BLEND_RAMP ? "the release's fixed ramp" : "noise-weighted")
+        Log.i("SCAM_HDR", "LOFIC pairs merged (" + (blend == LoficMerge.BLEND_ADAPTIVE ? "adaptive highlights"
+                : blend == LoficMerge.BLEND_RAMP ? "the release's fixed ramp" : "noise-weighted")
                 + ") in " + (android.os.SystemClock.elapsedRealtime() - started) + " ms: frames white 65535, the Long clip at 1/"
                 + Math.round(e.headroom) + " of it; the merge's result is scaled back x" + Math.round(e.headroom) + " (P679)");
     }
@@ -2054,7 +2094,10 @@ public class ScamProcessor extends ProcessorBase {
      */
     static void loficResult(Parameters p, ByteBuffer rgb) {
         final boolean half = com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastRgbHalf;
+        final long started = android.os.SystemClock.elapsedRealtime();
         LoficMerge.scale(rgb, half, p.loficLog2);
+        Log.i("PERF", "LOFIC RGB " + (half ? "FP16" : "FP32") + " scale_ms="
+                + (android.os.SystemClock.elapsedRealtime() - started));
         final float h = (float) Math.scalb(1.0, p.loficLog2);
         com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastBentoApplied = true;
         com.scamera.app.processing.opengl.postpipeline.ScamHybridBurst.lastMergedDngHeadroom =

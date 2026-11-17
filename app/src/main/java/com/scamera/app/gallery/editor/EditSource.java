@@ -476,9 +476,10 @@ public final class EditSource implements Closeable {
     // ---------------------------------------------------------------- orientation
 
     static int exifOrientation(Context c, Uri uri) {
-        try (InputStream in = c.getContentResolver().openInputStream(uri)) {
-            if (in == null) return 1;
-            int o = new ExifInterface(in).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+        try {
+            final ExifInterface exif = com.scamera.app.gallery.helper.ExifRead.open(c.getContentResolver(), uri); // P721
+            if (exif == null) return 1;
+            int o = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
             return o >= 1 && o <= 8 ? o : 1;
         } catch (IOException | RuntimeException e) {
             return 1;

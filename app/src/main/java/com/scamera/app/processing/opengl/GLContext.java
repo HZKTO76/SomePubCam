@@ -59,7 +59,17 @@ public class GLContext implements AutoCloseable {
     private boolean takeKept() {
         synchronized (GLContext.class) {
             if (keptContext == null || keptTaken) return false;
-            if (!EGL14.eglMakeCurrent(keptDisplay, keptSurface, keptSurface, keptContext)) return false;
+            if (!EGL14.eglMakeCurrent(keptDisplay, keptSurface, keptSurface, keptContext)) {
+                final int error = EGL14.eglGetError();
+                if (error == EGL14.EGL_BAD_CONTEXT || error == EGL14.EGL_BAD_SURFACE || error == EGL14.EGL_CONTEXT_LOST) {
+                    release(keptDisplay, keptContext, keptSurface);
+                    keptDisplay = null;
+                    keptContext = null;
+                    keptSurface = null;
+                    keptProgram = null;
+                }
+                return false;
+            }
             keptTaken = true;
             display = keptDisplay;
             context = keptContext;
@@ -121,29 +131,43 @@ public class GLContext implements AutoCloseable {
         while (GLES31.glGetError() != GLES31.GL_NO_ERROR) { }
     }
 
-    public void createContext(int surfaceWidth, int surfaceHeight) {
-        display = EGL14.eglGetDisplay(GLDrawParams.EGLDisplay);
+    private void createContext(int surfaceWidth, int surfaceHeight) {
+        final EGLDisplay d = EGL14.eglGetDisplay(GLDrawParams.EGLDisplay);
+        if (d == null || d.equals(EGL14.EGL_NO_DISPLAY)) throw eglFailure("eglGetDisplay");
         final int[] version = new int[2];
-        EGL14.eglInitialize(display, version, 0, version, 1);
-        // the first config of the sorted list is the one taken (P659: asked for directly, no second query for the whole list)
-        final EGLConfig[] config = new EGLConfig[1];
-        final int[] found = new int[1];
-        if (!EGL14.eglChooseConfig(display, GLDrawParams.attribList, 0, config, 0, 1, found, 0)) {
-            throw new RuntimeException("OpenGL config loading failed");
+        if (!EGL14.eglInitialize(d, version, 0, version, 1)) throw eglFailure("eglInitialize");
+        EGLSurface newSurface = null;
+        EGLContext newContext = null;
+        try {
+            // the first config of the sorted list is the one taken (P659: asked for directly)
+            final EGLConfig[] config = new EGLConfig[1];
+            final int[] found = new int[1];
+            if (!EGL14.eglChooseConfig(d, GLDrawParams.attribList, 0, config, 0, 1, found, 0))
+                throw eglFailure("eglChooseConfig");
+            if (found[0] == 0 || config[0] == null) throw new IllegalStateException("No ES 3 pbuffer config");
+            newContext = createProcessingContext(d, config[0]);
+            if (newContext == null || newContext.equals(EGL14.EGL_NO_CONTEXT)) throw eglFailure("eglCreateContext");
+            // A frame wider than EGL_MAX_PBUFFER_* gets a pbuffer at the limit (it is never drawn to).
+            final int width = pbufferSide(d, config[0], EGL14.EGL_MAX_PBUFFER_WIDTH, surfaceWidth);
+            final int height = pbufferSide(d, config[0], EGL14.EGL_MAX_PBUFFER_HEIGHT, surfaceHeight);
+            newSurface = EGL14.eglCreatePbufferSurface(d, config[0],
+                    new int[]{EGL14.EGL_WIDTH, width, EGL14.EGL_HEIGHT, height, EGL14.EGL_NONE}, 0);
+            if (newSurface == null || newSurface.equals(EGL14.EGL_NO_SURFACE)) throw eglFailure("eglCreatePbufferSurface");
+            if (!EGL14.eglMakeCurrent(d, newSurface, newSurface, newContext)) throw eglFailure("eglMakeCurrent");
+            program = new GLProg();
+            display = d;
+            context = newContext;
+            surface = newSurface;
+        } finally {
+            if (display == null) release(d, newContext, newSurface);
         }
-        if (found[0] == 0) throw new RuntimeException("OpenGL config count zero");
-        if (config[0] == null) throw new RuntimeException("OpenGL config is null");
-        context = createProcessingContext(display, config[0]);
-        // P27 any resolution: a frame wider than EGL_MAX_PBUFFER_* gets a pbuffer at that limit (it is never drawn to)
-        final int width = pbufferSide(config[0], EGL14.EGL_MAX_PBUFFER_WIDTH, surfaceWidth);
-        final int height = pbufferSide(config[0], EGL14.EGL_MAX_PBUFFER_HEIGHT, surfaceHeight);
-        surface = EGL14.eglCreatePbufferSurface(display, config[0],
-                new int[]{EGL14.EGL_WIDTH, width, EGL14.EGL_HEIGHT, height, EGL14.EGL_NONE}, 0);
-        EGL14.eglMakeCurrent(display, surface, surface, context);
-        program = new GLProg();
     }
 
-    private int pbufferSide(EGLConfig config, int limitAttribute, int wanted) {
+    private static IllegalStateException eglFailure(String operation) {
+        return new IllegalStateException(operation + " failed (EGL error 0x" + Integer.toHexString(EGL14.eglGetError()) + ")");
+    }
+
+    private static int pbufferSide(EGLDisplay display, EGLConfig config, int limitAttribute, int wanted) {
         final int[] limit = new int[1];
         return EGL14.eglGetConfigAttrib(display, config, limitAttribute, limit, 0) && limit[0] > 0 && wanted > limit[0] ? limit[0] : wanted;
     }
@@ -160,7 +184,7 @@ public class GLContext implements AutoCloseable {
             final int level = mode == 1f ? EGL_CONTEXT_PRIORITY_LOW_IMG : EGL_CONTEXT_PRIORITY_MEDIUM_IMG;
             final EGLContext prioritised = EGL14.eglCreateContext(display, config, EGL14.EGL_NO_CONTEXT,
                     new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL_CONTEXT_PRIORITY_LEVEL_IMG, level, EGL14.EGL_NONE}, 0);
-            if (prioritised != null && prioritised != EGL14.EGL_NO_CONTEXT) return prioritised;
+            if (prioritised != null && !prioritised.equals(EGL14.EGL_NO_CONTEXT)) return prioritised;
             EGL14.eglGetError();
         }
         return EGL14.eglCreateContext(display, config, EGL14.EGL_NO_CONTEXT, GLDrawParams.contextAttributeList, 0);
@@ -182,7 +206,8 @@ public class GLContext implements AutoCloseable {
      * the textures of this context even if another one was made current in between).
      */
     public void makeCurrent() {
-        if (display != null && context != null) EGL14.eglMakeCurrent(display, surface, surface, context);
+        if (display == null || context == null) throw new IllegalStateException("Processing context is closed");
+        if (!EGL14.eglMakeCurrent(display, surface, surface, context)) throw eglFailure("eglMakeCurrent");
     }
 
     private interface Step { void run(); }
@@ -193,6 +218,22 @@ public class GLContext implements AutoCloseable {
             step.run();
         } catch (Exception ignored) {
         }
+    }
+
+    private static void unbindIfCurrent(EGLDisplay display, EGLContext context) {
+        if (context.equals(EGL14.eglGetCurrentContext()))
+            EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
+    }
+
+    /** EGL handles acquired from this display initialization. */
+    private static void release(EGLDisplay display, EGLContext context, EGLSurface surface) {
+        if (context != null && !context.equals(EGL14.EGL_NO_CONTEXT)) {
+            quietly(() -> unbindIfCurrent(display, context));
+            quietly(() -> EGL14.eglDestroyContext(display, context));
+        }
+        if (surface != null && !surface.equals(EGL14.EGL_NO_SURFACE))
+            quietly(() -> EGL14.eglDestroySurface(display, surface));
+        quietly(() -> EGL14.eglTerminate(display));
     }
 
     @Override
@@ -206,14 +247,11 @@ public class GLContext implements AutoCloseable {
         surface = null;
         if (holdsKept) { // P353: released for the next shot, the context and its programs kept
             holdsKept = false;
-            quietly(() -> EGL14.eglMakeCurrent(d, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT));
+            quietly(() -> unbindIfCurrent(d, c));
             synchronized (GLContext.class) { keptTaken = false; }
             return;
         }
         quietly(() -> { if (program != null) program.close(); });
-        quietly(() -> EGL14.eglMakeCurrent(d, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT));
-        quietly(() -> { if (c != null) EGL14.eglDestroyContext(d, c); });
-        quietly(() -> { if (s != null) EGL14.eglDestroySurface(d, s); });
-        quietly(() -> EGL14.eglTerminate(d));
+        release(d, c, s);
     }
 }

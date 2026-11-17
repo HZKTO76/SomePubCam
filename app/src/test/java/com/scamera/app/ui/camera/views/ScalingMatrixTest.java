@@ -10,6 +10,11 @@ import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import androidx.core.graphics.Insets;
+import androidx.core.view.DisplayCutoutCompat;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+
 import com.scamera.app.R;
 import com.scamera.app.app.ScameraApp;
 import com.scamera.app.circularbarlib.ui.ExpandingManualPanel;
@@ -152,14 +157,26 @@ public class ScalingMatrixTest {
         assertEquals(at + " not cut", 0, t.getLayout().getEllipsisCount(0));
     }
 
+    @Test
+    public void immersivePhoneWithSmallCutoutKeepsFullWidthPreview() throws Exception {
+        String window = "w390dp-h859dp";
+        RuntimeEnvironment.setQualifiers(window + "-382dpi");
+        check(window, 1f, true);
+    }
+
     private Shares check(String window, float fontScale) throws Exception {
+        return check(window, fontScale, false);
+    }
+
+    private Shares check(String window, float fontScale, boolean immersiveCutout) throws Exception {
         RuntimeEnvironment.setFontScale(fontScale);
         try (ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class)) {
             controller.setup();
             Activity activity = controller.get();
             Context context = new ContextThemeWrapper(activity, R.style.Theme_Scamera_SettingsActivity);
             density = context.getResources().getDisplayMetrics().density;
-            int w = context.getResources().getDisplayMetrics().widthPixels, h = context.getResources().getDisplayMetrics().heightPixels;
+            int w = immersiveCutout ? 930 : context.getResources().getDisplayMetrics().widthPixels;
+            int h = immersiveCutout ? 2048 : context.getResources().getDisplayMetrics().heightPixels;
             String at = window + " (" + Math.round(w / density) + "x" + Math.round(h / density) + "dp) font " + fontScale + ": ";
 
             CameraScreenBinding binding = CameraScreenBinding.inflate(LayoutInflater.from(context));
@@ -203,6 +220,12 @@ public class ScalingMatrixTest {
             activity.setContentView(root);
             CameraFragment.attachBottomChrome(binding, null);
             settle(root, w, h);
+            if (immersiveCutout) {
+                applyTopCutout(new Rect(340, 0, 590, 78));
+                assertEquals("wide notch clearance", 78, screen.getPaddingTop());
+                applyTopCutout(new Rect(430, 25, 500, 78));
+                assertEquals("small camera hole", 0, screen.getPaddingTop());
+            }
             CameraFragment.placeViewfinderPills(binding);
             settle(root, w, h);
 
@@ -214,6 +237,11 @@ public class ScalingMatrixTest {
             String geometry = " top=" + topBar + " vf=" + viewfinder + " lens=" + lensRow + " row=" + shutterRow + " pro=" + pro
                     + " lut=" + lutBox + " lock=" + lockBox;
 
+            if (immersiveCutout) {
+                assertEquals("immersive top" + geometry, dp(6), topBar.top);
+                assertEquals("uncropped preview" + geometry, new Rect(0, topBar.bottom, w, topBar.bottom + 1240), viewfinder);
+            }
+
             // The 3:4 viewfinder under the top bar wherever the window holds it and both bars; a window too short for that
             // (600 x 960dp) lets the top bar lie over the preview's top, as in 16:9 - then nothing of the pills under the bar.
             boolean fits = topBar.height() + w * 4 / 3 + (h - lensRow.top) <= h;
@@ -223,6 +251,7 @@ public class ScalingMatrixTest {
                 System.out.println("SHORT " + at + "the top bar over the viewfinder's top (no room for 3:4 and both bars)");
             }
             assertFalse(at + "lens row / shutter row" + geometry, overlap(lensRow, shutterRow));
+            assertFalse(at + "viewfinder / lens row" + geometry, overlap(viewfinder, lensRow));
             assertFalse(at + "Pro / lens row" + geometry, overlap(pro, lensRow));
             assertFalse(at + "Pro / shutter row" + geometry, overlap(pro, shutterRow));
             assertFalse(at + "Pro / top bar" + geometry, overlap(pro, topBar));
@@ -252,6 +281,15 @@ public class ScalingMatrixTest {
             s.lensRow = lensRow.width() / (float) w;
             return s;
         }
+    }
+
+    private void applyTopCutout(Rect bounds) {
+        int type = WindowInsetsCompat.Type.displayCutout();
+        DisplayCutoutCompat cutout = new DisplayCutoutCompat(new Rect(0, bounds.bottom, 0, 0), List.of(bounds));
+        WindowInsetsCompat insets = new WindowInsetsCompat.Builder().setDisplayCutout(cutout)
+                .setInsets(type, Insets.of(0, bounds.bottom, 0, 0)).setVisible(type, true)
+                .setVisible(WindowInsetsCompat.Type.systemBars(), false).build();
+        ViewCompat.dispatchApplyWindowInsets(screen, insets);
     }
 
     private static void settle(View root, int w, int h) {

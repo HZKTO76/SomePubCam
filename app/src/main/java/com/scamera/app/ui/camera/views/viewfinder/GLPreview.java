@@ -31,8 +31,9 @@ public class GLPreview extends GLSurfaceView {
     private static final int PLACEHOLDER_FILL = Color.rgb(24, 24, 24), PLACEHOLDER_LINE = Color.rgb(58, 58, 58);
     MainRenderer mRenderer;
     /** The aspect the view is measured to (0: the parent's size). */
-    private int aspectW, aspectH;
-    private TextureView.SurfaceTextureListener textureListener;
+    private volatile long aspect;
+    private int heightLimit;
+    private volatile TextureView.SurfaceTextureListener textureListener;
     private Handler main;
     /** The layout editor's stand-in: no GL there. */
     private boolean editorPreview;
@@ -81,6 +82,7 @@ public class GLPreview extends GLSurfaceView {
 
             @Override
             public void destroyContext(EGL10 egl, EGLDisplay display, EGLContext context) {
+                surfaceReady = false;
                 // P662: the RAW viewfinder's mapped pixel-unpack buffers go with the context: revoked first (no copy into them after)
                 final MainRenderer renderer = mRenderer;
                 if (renderer != null) renderer.onContextDestroying();
@@ -154,12 +156,14 @@ public class GLPreview extends GLSurfaceView {
     public void fireOnSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int w, int h) {
         surfaceReady = true;
         main.post(() -> {
+            if (!surfaceReady || surfaceTexture != getSurfaceTexture()) return;
             final TextureView.SurfaceTextureListener listener = textureListener;
             if (listener != null) listener.onSurfaceTextureAvailable(surfaceTexture, w, h);
         });
     }
 
     private void textureGone(SurfaceTexture surfaceTexture) {
+        if (surfaceTexture == null) return;
         main.post(() -> {
             final TextureView.SurfaceTextureListener listener = textureListener;
             if (listener != null) listener.onSurfaceTextureDestroyed(surfaceTexture);
@@ -176,9 +180,13 @@ public class GLPreview extends GLSurfaceView {
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
         super.surfaceChanged(holder, format, w, h);
+        if (main == null) return;
+        final SurfaceTexture surface = getSurfaceTexture();
+        if (surface == null) return;
         main.post(() -> {
+            if (!surfaceReady || surface != getSurfaceTexture()) return;
             final TextureView.SurfaceTextureListener listener = textureListener;
-            if (listener != null) listener.onSurfaceTextureSizeChanged(getSurfaceTexture(), w, h);
+            if (listener != null) listener.onSurfaceTextureSizeChanged(surface, w, h);
         });
     }
 
@@ -197,17 +205,36 @@ public class GLPreview extends GLSurfaceView {
     /** The aspect (any scale: 2:3 and 4:6 alike) the view is measured to; the layout is asked again. */
     public void setAspectRatio(int width, int height) {
         if (width < 0 || height < 0) throw new IllegalArgumentException("Size cannot be negative.");
-        aspectW = width;
-        aspectH = height;
+        // Publish both dimensions together: the camera can set them off the UI thread.
+        final long size = ((long) width << 32) | height;
+        if (aspect == size) return;
+        aspect = size;
         post(this::requestLayout);
     }
 
-    /** The parent's size until an aspect is set, then the aspect's own numbers (the camera's preview size, portrait). */
+    /** UI-thread height budget for 4:3 in a short window, zero when the controls already fit. */
+    public boolean setHeightLimit(int limit) {
+        if (heightLimit == limit) return false;
+        heightLimit = limit;
+        requestLayout();
+        return true;
+    }
+
+    /** Fits the preview without stretching its aspect. Wide modes can draw under the controls. */
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-        if (aspectW == 0 || aspectH == 0) setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec));
-        else setMeasuredDimension(aspectW, aspectH);
+        final long size = aspect;
+        final int aspectW = (int) (size >>> 32), aspectH = (int) size;
+        if (aspectW == 0 || aspectH == 0) return;
+        final int width = MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.UNSPECIFIED
+                ? aspectW : MeasureSpec.getSize(widthMeasureSpec);
+        double scale = width / (double) aspectW;
+        if (MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED)
+            scale = Math.min(scale, MeasureSpec.getSize(heightMeasureSpec) / (double) aspectH);
+        if (heightLimit > 0 && 3L * aspectH <= 4L * aspectW)
+            scale = Math.min(scale, heightLimit / (double) aspectH);
+        setMeasuredDimension((int) Math.round(aspectW * scale), (int) Math.round(aspectH * scale));
     }
 
     /** The texture the ISP stream draws into (null before the renderer made one). */

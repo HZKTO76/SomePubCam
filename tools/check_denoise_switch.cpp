@@ -11,8 +11,7 @@
 //     switch touches nothing else; its log has the HYBRID DENOISE line and no chroma median line; its green plane is the
 //     default's bit for bit away from the lamps (the median moves R and B only: the merge itself is untouched) and the flat
 //     wall's colour noise (R - G, B - G) is the merge's own, above the default's;
-// - the fast route and the native Quad merge (no denoise stage of their own; their lattice / moire passes stay): denoise 0 is
-//   the default bit for bit.
+// - the Fast route without the motion curve and native Quad keep their default result bit for bit with denoise 0.
 #include "../app/src/main/cpp/scam-capture.h"
 #include "../app/src/main/cpp/scam-hybrid.h"
 #include <cassert>
@@ -156,15 +155,27 @@ int main() {
     // ---- the tuning: default, the file's line, the master switch over a stage's own line
     const HybridTuning d;
     expect(d.denoise == 1 && d.plainChromaMedian == 1 && d.bentoBlendChroma == 1.f && d.mosaicTetraMotionSmooth == 1.f, "default: every denoise stage on");
-    expect(sizeof(kHybridDenoiseStages) / sizeof(kHybridDenoiseStages[0]) == 3, "the registry: plainChromaMedian, bentoBlendChroma, mosaicTetraMotionSmooth");
+    expect(d.fastMotionDenoise == std::array<float, 7>{}, "old replay without a motion curve: the motion stage is off");
+    expect(sizeof(kHybridDenoiseStages) / sizeof(kHybridDenoiseStages[0]) == 4, "the worker registry includes motion denoise");
     {
         std::vector<std::string> log;
         const HybridTuning on = fromFile("cdm 0.2\ndenoise 1\n", &log);
         expect(on.denoise == 1 && on.plainChromaMedian == d.plainChromaMedian && on.bentoBlendChroma == d.bentoBlendChroma
                && lines(log, "HYBRID DENOISE") == 0, "denoise 1: the stages as without the line, no HYBRID DENOISE line");
         log.clear();
-        const HybridTuning off = fromFile("plainChromaMedian 2\ndenoise 0\nbentoBlendChroma 0.7\nplainChromaMedian 3\n", &log);
-        expect(off.denoise == -1 && off.plainChromaMedian == 0 && off.bentoBlendChroma == 0.f && off.mosaicTetraMotionSmooth == 0.f,
+        const HybridTuning curve = fromFile(
+            "fastMotionDenoise2 0.9\nfastMotionDenoise3 0.72\nfastMotionDenoise4 0.65\n"
+            "fastMotionDenoise8 0.45\nfastMotionDenoise16 0.22\n"
+            "fastMotionDenoise32 0.08\nfastMotionDenoise64 0.15\n", nullptr);
+        expect(curve.fastMotionDenoise == std::array<float, 7>{.9f, .72f, .65f, .45f, .22f, .08f, .15f},
+               "the seven SNR strengths reach the worker in knot order");
+        const HybridTuning legacy = fromFile("fastMotionDenoise4 0.65\nfastMotionDenoise8 0.45\n", nullptr);
+        expect(legacy.fastMotionDenoise == std::array<float, 7>{.65f, .65f, .65f, .45f, 0.f, 0.f, 0.f},
+               "the extra low-SNR knots default to the older curve's first strength");
+        const HybridTuning off = fromFile("plainChromaMedian 2\nfastMotionDenoise4 0.65\ndenoise 0\n"
+            "bentoBlendChroma 0.7\nplainChromaMedian 3\nfastMotionDenoise2 1\nfastMotionDenoise32 1\n", &log);
+        expect(off.denoise == -1 && off.plainChromaMedian == 0 && off.bentoBlendChroma == 0.f
+               && off.mosaicTetraMotionSmooth == 0.f && off.fastMotionDenoise == std::array<float, 7>{},
                "denoise 0: every stage off after every line (also a stage's own line after it), applied once (-1)");
         expect(lines(log, "HYBRID DENOISE: off") == 1, "denoise 0: one HYBRID DENOISE line");
         HybridTuning again = off;
@@ -209,7 +220,7 @@ int main() {
     }
     expect(same(offTwin[0], offTwin[1]), "denoise 0: the CPU and the GPU twin give the same merge (no median left to round)");
 
-    // ---- the fast route and the native Quad merge: no denoise stage of their own
+    // ---- the Fast route without a motion curve and the native Quad merge
     struct Route { const char* name; int fast, block; };
     for (const Route r : {Route{"fast route", 1, 1}, Route{"native Quad", 0, 2}}) {
         const Stack stack(r.block, false);
@@ -217,7 +228,7 @@ int main() {
         std::vector<std::string> log;
         const std::vector<float> on = merge(stack, base, &log);
         if (r.fast && lines(log, "HYBRID FAST MERGE") == 0) { std::printf("%s: not taken on this host (skipped)\n", r.name); continue; }
-        HybridTuning off = base; off.denoise = 0;
+        HybridTuning off = base; off.denoise = 0; off.fastMotionDenoise.fill(1.f);
         std::vector<std::string> logOff;
         expect(same(merge(stack, off, &logOff), on) && lines(logOff, "HYBRID DENOISE: off") == 1,
                std::string(r.name) + ": denoise 0 is the default bit for bit (its lattice / moire passes stay)");

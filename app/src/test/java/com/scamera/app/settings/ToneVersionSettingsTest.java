@@ -34,8 +34,11 @@ public class ToneVersionSettingsTest {
     }
 
     @Test public void eachVersionGreysTheOthersRows() {
-        final SettingsAvailability v1 = with(null), v1Set = with("v1"), v2 = with("v2");
-        // V2's own rows: greyed with V1 (the default), active with V2
+        final SettingsAvailability v1 = with("v1"), v1Set = with("v1"), v2 = with("v2");
+        // P721: nothing stored is V2 (the default now)
+        assertNull(with(null).reason("pref_scam_hybrid_why_v2_agx_look"));
+        assertNotNull(with(null).reason("pref_scam_hybrid_why_metering"));
+        // V2's own rows: greyed with V1, active with V2
         for (String own : new String[]{"agx_look", "agx_hue_lock", "clarity", "skin_hue_center", "hr_amount"}) {
             final String key = "pref_scam_hybrid_why_v2_" + own;
             assertNotNull(key, v1.reason(key));
@@ -79,6 +82,7 @@ public class ToneVersionSettingsTest {
         final Map<String, Object> values = new HashMap<>();
         values.put("pref_scam_hybrid_why_agx_look", "1");
         values.put("pref_scam_hybrid_why_curve_on", false);
+        values.put("pref_scam_hybrid_tone_version", "v1"); // P721: V2 is the default
         assertNotNull(new SettingsAvailability(values).reason("pref_scam_hybrid_why_agx_slope"));
         assertNotNull(new SettingsAvailability(values).reason("pref_scam_hybrid_why_agx_sat"));
         values.put("pref_scam_hybrid_tone_version", "v2");

@@ -318,7 +318,7 @@ public class CaptureController {
     public volatile com.scamera.app.control.subject.SubjectFocus mSubjectFocus;
 
     private final CameraEvents cameraEventsListener;
-    /** Held from an open request until the device answers (openSettled), so closeCamera waits for an open in flight. */
+    /** Held from an open request until its device callback answers, so closeCamera waits for an open in flight. */
     private final Semaphore mCameraOpenCloseLock = new Semaphore(1);
     /** An open is under way (requested, not answered yet): a second request is dropped, not queued. */
     private final AtomicBoolean mCameraOpening = new AtomicBoolean();
@@ -519,11 +519,18 @@ public class CaptureController {
     // The stock-AE observer attaches to the camera provider after the session
     // starts; a queue flush while it attaches hung the HAL once (no bracket for
     // 65 s, provider restarted). Flush only once the observer has delivered a plan.
-    private volatile boolean mStockObserverReady;
 
     /** The still reader beside the RAW one: its frames go straight to the saver. */
     private final ImageReader.OnImageAvailableListener mStillReaderListener = reader -> mImageSaver.initProcess(reader);
-    private final ImageReader.OnImageAvailableListener mRawReaderListener = this::onRawImage;
+    private final ImageReader.OnImageAvailableListener mRawReaderListener = reader -> {
+        final boolean traced = android.os.Build.VERSION.SDK_INT >= 29 && android.os.Trace.isEnabled();
+        if (traced) android.os.Trace.beginSection("SCAMERA RAW callback");
+        try {
+            onRawImage(reader);
+        } finally {
+            if (traced) android.os.Trace.endSection();
+        }
+    };
 
     /** Closes the newest frame of a reader nobody reads any more (a closed session's, a paused screen's). */
     private static void discardStale(ImageReader reader) {
@@ -646,7 +653,7 @@ public class CaptureController {
     /** P27: manual ISO / shutter this camera's HAL honours (learned from shots; null before the first session). */
     private volatile ExposureLimits mExposureLimits;
     /** Unpacked copy of a RAW10 / RAW12 preview frame for the mosaic measurement (reused). */
-    private java.nio.ByteBuffer mMosaicUnpacked;
+    private volatile java.nio.ByteBuffer mMosaicUnpacked;
     /** P30: the arena of the shot being set up / in flight (released when the shot completes or fails). */
     private volatile com.scamera.app.util.ShotArena mShotArena;
     /** P27: watchRawPayload's session restart waits until the shot in flight is complete. */
@@ -661,7 +668,6 @@ public class CaptureController {
     private volatile CameraCaptureSession mCaptureSession;
     private final Object mPreviewStateLock = new Object();
     private final java.util.concurrent.atomic.AtomicInteger mSessionGeneration = new java.util.concurrent.atomic.AtomicInteger();
-    private volatile ScamStockAe mStockAe;
     private int mConfiguredSessionGeneration = -1;
     /** The lens's last focus distance (diopters) the viewfinder reported. */
     public float focusDiopters;
@@ -930,16 +936,6 @@ public class CaptureController {
                 }
                 maybeRunPendingRearm(session, request, result);
                 maybeReapplyAutoOis(session); // P316: «Оптическая стабилизация» Авто follows the tripod during the session
-                // P680: the constant first (useStockBracketPlanner is false since P129): no settings read per frame for it
-                if(PreferenceKeys.useStockBracketPlanner() && PreferenceKeys.isScamEnabled() && isCurrentPreviewSession(session)) {
-                    ScamStockAe stock=mStockAe;
-                    if(stock==null || stock.generation!=mSessionGeneration.get()) {
-                        if(stock!=null)stock.close();
-                        stock=new ScamStockAe(ScameraApp.getAppContext(),mSessionGeneration.get(),physicalID);
-                        mStockAe=stock;
-                    }
-                    stock.offer(result);
-                }
                 feedThreeA(result);
                 final com.scamera.app.control.subject.SubjectFocus subject = mSubjectFocus;
                 if (subject != null) subject.onPreviewResult(result);
@@ -1017,35 +1013,61 @@ public class CaptureController {
         mPreviewCaptureResult = result;
     }
 
-    /** An open attempt has its answer: the open/close lock is free again and a new open may start. */
-    private void openSettled() {
-        mCameraOpenCloseLock.release();
-        mCameraOpening.set(false);
-    }
+    private volatile DeviceStateCallback mStateCallback;
 
-    /** The device is gone (disconnected, failed): its open settled, the device closed and forgotten. */
-    private void dropDevice(CameraDevice device) {
-        openSettled();
-        device.close();
-        mCameraDevice = null;
-    }
+    /** The camera device's callbacks own the permit and lease of their own open request. */
+    final class DeviceStateCallback extends CameraDevice.StateCallback {
+        private final AtomicBoolean openPending = new AtomicBoolean(true);
+        private final VivoSdkRawSession iszLease = mIszLease;
+        private final int generation = mSessionGeneration.get();
 
-    /** The camera device's open / close / error answers. */
-    private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
+        private boolean claimOpenPermit() {
+            return openPending.compareAndSet(true, false);
+        }
+
+        /** Called only by whoever claimed this attempt's permit. */
+        private void releaseOpenPermit() {
+            mCameraOpening.set(false);
+            mCameraOpenCloseLock.release();
+        }
+
+        private boolean ownsDevice(CameraDevice device) {
+            return mStateCallback == this && (openPending.get() || mCameraDevice == device);
+        }
+
+        private void dropDevice(CameraDevice device) {
+            final boolean opening = claimOpenPermit();
+            try {
+                device.close();
+            } finally {
+                synchronized (mPreviewStateLock) {
+                    if (mCameraDevice == device) mCameraDevice = null;
+                }
+                if (opening) releaseOpenPermit();
+            }
+        }
 
         @Override
         public void onOpened(@NonNull CameraDevice device) {
-            OpenTimeline.opened(); // P680
+            if (!claimOpenPermit()) {
+                if (device != mCameraDevice) device.close();
+                return;
+            }
             synchronized (mPreviewStateLock) {
+                OpenTimeline.opened(); // P680
                 if (mVivoSdkRawSession != null) mVivoSdkRawDevice = device;
-                openSettled();
                 // an open still in flight when the screen went to the background: a hidden app holds no camera
-                if (!isCameraResumed) {
+                if (!isCameraResumed || generation != mSessionGeneration.get()) {
                     Log.d(TAG, "camera " + device.getId() + " opened after the pause: closed again");
-                    device.close();
+                    try {
+                        device.close();
+                    } finally {
+                        releaseOpenPermit();
+                    }
                     return;
                 }
                 mCameraDevice = device;
+                releaseOpenPermit();
                 if (mVivoSdkRawSession == null) VivoQcomModes.onCameraOpened();
                 mImageSaver = new ImageSaver(cameraEventsListener);
                 startSession();
@@ -1054,7 +1076,9 @@ public class CaptureController {
 
         @Override public void onClosed(@NonNull CameraDevice cameraDevice) {
             closeVivoSdkRawSession(cameraDevice);
-            closeIszLease();
+            synchronized (mIszLeaseLock) {
+                if (iszLease != null && mIszLease == iszLease) closeIszLease();
+            }
             synchronized (mDeviceClosedLock) { // P662: awaitClosedForProcessing
                 if (cameraDevice == mClosingDevice) {
                     mClosingDevice = null;
@@ -1065,6 +1089,10 @@ public class CaptureController {
 
         @Override
         public void onDisconnected(@NonNull CameraDevice cameraDevice) {
+            if (!ownsDevice(cameraDevice)) {
+                cameraDevice.close();
+                return;
+            }
             if (mVivoSdkRawSession != null && mVivoSdkRawDevice == null) mVivoSdkRawDevice = cameraDevice;
             // P635: a recipe session the camera service dropped before its first frame or under a shot (the documents'
             // «disconnected» of a wrong field set): the profile is remembered as failed, the reopen below is the normal session
@@ -1079,6 +1107,10 @@ public class CaptureController {
 
         @Override
         public void onError(@NonNull CameraDevice cameraDevice, int error) {
+            if (!ownsDevice(cameraDevice) && !(mStateCallback == this && cameraDevice == mRetryDevice)) {
+                cameraDevice.close();
+                return;
+            }
             mDeviceErrorMs = android.os.SystemClock.elapsedRealtime();
             // the session's own callback runs on another thread: a refusal the HAL answers with this error at the same moment
             // (vivo X300 log: both within 1 ms) is let to choose its retry first (at most 0.5 s)
@@ -1087,7 +1119,11 @@ public class CaptureController {
             // a session (the vivo EIS session key there); the retry with the next configuration is under way, so the error is
             // expected: no overlay, no message, no module revert - the camera reopens with what the retry chose
             final boolean afterRetry = cameraDevice == mRetryDevice;
-            mRetryDevice = null;
+            if (!ownsDevice(cameraDevice) && !(mStateCallback == this && afterRetry && !mCameraOpening.get())) {
+                cameraDevice.close();
+                return;
+            }
+            if (afterRetry) mRetryDevice = null;
             // P263 (owner, 2026-10-19: «исправь ошибку код4 чтобы её не было ни на одном телефоне»; the OPPO showed «Сбой камеры
             // (код 4), перезапуск» once after an update, the camera of the old process still being released): the first device /
             // service error since the last configured session reopens the same camera and module quietly - no message, no module
@@ -1161,7 +1197,7 @@ public class CaptureController {
                 showError(Lang.t("Камера недоступна (код ", "Camera unavailable (code ") + error + ")");
             }
         }
-    };
+    }
 
     /** P240: the camera screen's «Камера перезапускается…» overlay is up (an error is being recovered from). */
     private volatile boolean mRecovering;
@@ -2282,7 +2318,6 @@ public class CaptureController {
         mPreviewSessionStartMs = 0;
         if (mBackgroundHandler != null) mBackgroundHandler.removeCallbacks(mStallCheck);
         mScamQueuedShots = 0;
-        ScamStockAe stock=mStockAe;mStockAe=null;if(stock!=null)stock.close();
         mScamRingFrozen=false;
         clearFlashShot(); // P590
         // Invalidate callbacks before releasing their resources. onConfigured and
@@ -2290,6 +2325,7 @@ public class CaptureController {
         synchronized (mPreviewStateLock) {
             isCameraResumed = false;
             mSessionGeneration.incrementAndGet();
+            mMosaicUnpacked = null;
             mPreviewRequestBuilder = null;
             mPreviewCaptureResult = null;
             mPreviewCaptureRequest = null;
@@ -2394,7 +2430,7 @@ public class CaptureController {
                     handedOff = true;
                 } catch (RuntimeException rejected) {
                     mAsyncCloseInFlight = false;
-                    outputs.countDown(); // closed below, on this thread
+                    // The inline close below signals outputs after the resources have been released.
                 }
             }
             if (!handedOff) {
@@ -2803,7 +2839,7 @@ public class CaptureController {
         Log.w(TAG, "PREVIEW_REFUSED camera " + physicalID + ": the session " + why + " (P700)");
         final boolean handled;
         if (mRecipe != null) handled = retryWithoutRecipe(session, why);
-        else if (XiaomiLofic.sessionActive()) handled = retryWithoutLofic(session, why);
+        else if (XiaomiLofic.sessionActive()) handled = retryWithoutLofic(session, why, true); // P719: no result came
         else {
             handled = retryWithoutDcgRoute(session, why);
             if (handled && dualGain != null) showToast(Lang.t(dualGain + ": камера не дала кадров этим способом, пробую следующий",
@@ -2847,7 +2883,7 @@ public class CaptureController {
         }
         // P679: a LOFIC session without viewfinder frames: its setup failed, the next one (or the normal session) opens
         if (XiaomiLofic.sessionActive() && retryWithoutLofic(mCaptureSession, "no preview frame for " + noFrame + " ms ("
-                + (mLastPreviewResultMs == 0 ? "none since the session started" : "frames stopped") + ")")) {
+                + (mLastPreviewResultMs == 0 ? "none since the session started" : "frames stopped") + ")", mLastPreviewResultMs == 0)) {
             mPreviewSessionStartMs = 0;
             handler.removeCallbacks(mStallCheck);
             return;
@@ -3399,7 +3435,12 @@ public class CaptureController {
             Log.d(TAG, "camera open for a destroyed controller: dropped");
             return;
         }
-        processExecutor.execute(() -> openOnPool(width, height));
+        try {
+            processExecutor.execute(() -> openOnPool(width, height));
+        } catch (java.util.concurrent.RejectedExecutionException destroyed) {
+            mCameraOpening.set(false);
+            Log.d(TAG, "camera open raced controller shutdown: dropped");
+        }
     }
 
     private void openOnPool(int width, int height) {
@@ -3431,6 +3472,17 @@ public class CaptureController {
             return true;
         }
         return closeWaitFirst(mIszLease != null || mVivoSdkRawSession != null || mVivoSdkRestorePending, leaseWanted, sdkWanted);
+    }
+
+    /** P719: the longest an open waits for a close the HAL holds (the 17 Ultra's took 7.9 s; P710 saw 30 s under memory pressure). */
+    static final long OPEN_CLOSE_WAIT_MAX_MS = 30_000;
+
+    /**
+     * P719: an open that has waited {@code waitedMs} for the open lock waits on while the previous camera's close still runs on
+     * CAMERA_CLOSE ({@code closeInFlight}) and the screen stays ({@code resumed}), up to {@link #OPEN_CLOSE_WAIT_MAX_MS}.
+     */
+    static boolean openWaitsLongerForClose(boolean closeInFlight, boolean resumed, long waitedMs) {
+        return closeInFlight && resumed && waitedMs < OPEN_CLOSE_WAIT_MAX_MS;
     }
 
     /** P662: waits (at most 5 s) until a close handed to CAMERA_CLOSE released the open lock; the ms waited. */
@@ -3468,10 +3520,6 @@ public class CaptureController {
             cameraEventsListener.processingFailed(failure.getMessage());
             return;
         }
-        // Attaching the stock AE observer takes seconds; start it with the
-        // camera instead of on the first SCAM preview frame.
-        if (mVivoSdkRawSession == null && PreferenceKeys.isScamEnabled() && PreferenceKeys.useStockBracketPlanner())
-            ScamStockAe.warmUp(ScameraApp.getAppContext());
         try {
             cameraEventsListener.cameraOpening(mCameraManager);
             // The package spoof first: a module only the spoof lists has no characteristics without it.
@@ -3496,15 +3544,37 @@ public class CaptureController {
             return;
         }
         boolean lockHeld = false;
+        DeviceStateCallback callback = null;
         try {
             // P662: a restart's close runs on its own thread holding the lock: the open waits for it (as it waited on the main thread)
             final long lockStart = System.nanoTime();
             trace("CaptureController.awaitClose");
-            final boolean locked;
+            boolean locked;
             try {
                 locked = mCameraOpenCloseLock.tryAcquire(mAsyncCloseInFlight ? 5000 : 1000, TimeUnit.MILLISECONDS);
+                // P719: a close the HAL holds longer (Xiaomi 17 Ultra, a refused LOFIC setup: 7.9 s and 7.7 s, log 2026-11-14
+                // 19:26:59 / 19:27:56) is waited for while it runs and the screen stays, instead of the old 5 s and «Time out waiting
+                // to lock camera opening» - the open that gave up left the viewfinder frozen until the app was left
+                boolean slowLogged = false;
+                while (!locked && openWaitsLongerForClose(mAsyncCloseInFlight, isCameraResumed,
+                        (System.nanoTime() - lockStart) / 1_000_000)) {
+                    if (!slowLogged) {
+                        slowLogged = true;
+                        Log.w("PERF", "camera open: the previous camera's close still runs after "
+                                + (System.nanoTime() - lockStart) / 1_000_000 + " ms (the HAL holds it): waiting up to "
+                                + OPEN_CLOSE_WAIT_MAX_MS + " ms (P719)");
+                    }
+                    locked = mCameraOpenCloseLock.tryAcquire(1000, TimeUnit.MILLISECONDS);
+                }
+                if (slowLogged) Log.i("PERF", "camera open: " + (locked ? "the lock came" : "gave up") + " after "
+                        + (System.nanoTime() - lockStart) / 1_000_000 + " ms of the previous camera's close (P719)");
             } finally {
                 endTrace();
+            }
+            if (!locked && !isCameraResumed) {
+                mCameraOpening.set(false);
+                Log.d(TAG, "screen left while the previous camera closed: no open");
+                return;
             }
             if (!locked) {
                 mCameraOpening.set(false);
@@ -3518,7 +3588,7 @@ public class CaptureController {
                 Log.i("PERF", "camera open overlapped the previous camera's close: prepared in " + prepared + " ms, then waited "
                         + waited + " ms for the close (" + overlap + " ms of the close ran beside the preparation)");
                 if (!isCameraResumed) {
-                    openRefused(true);
+                    openRefused(true, null);
                     Log.d(TAG, "screen left while the previous camera closed: no open");
                     return;
                 }
@@ -3532,11 +3602,13 @@ public class CaptureController {
             if (mXiaomiRouted) Log.i(TAG, "camera " + physicalID + " opens through logical camera " + logicalID + " (P41b)");
             // The retry budget belongs to one camera: switching modules during a provider restart used it up for the next one.
             if (!logicalID.equals(mOpenRetryId)) { mOpenRetryId = logicalID; mOpenRetries = 0; }
-            this.mCameraManager.openCamera(logicalID, mStateCallback,
+            callback = new DeviceStateCallback();
+            mStateCallback = callback;
+            this.mCameraManager.openCamera(logicalID, callback,
                     mVivoSdkRawSession != null ? mVivoSdkCallbackHandler : mBackgroundHandler);
             mOpenRetries = 0;
         } catch (CameraAccessException e) {
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             Log.e(TAG, Log.getStackTraceString(e));
             if (retryWithoutXiaomiRoute(width, height, e)) return;
             // CAMERA_ERROR / CAMERA_DISCONNECTED while the provider restarts: the same retry as an unknown device.
@@ -3545,14 +3617,14 @@ public class CaptureController {
         } catch (IllegalArgumentException e) {
             // "Unknown device" while the vendor camera provider restarts after a HAL crash: the device list comes back a few
             // seconds later - a retry, not the app taken down with the HAL.
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             if (retryWithoutXiaomiRoute(width, height, e)) return;
             retryOpen(width, height, e);
         } catch (InterruptedException e) {
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             throw new RuntimeException("Interrupted while trying to lock camera opening.", e);
         } catch (RuntimeException e) {
-            openRefused(lockHeld);
+            openRefused(lockHeld, callback);
             cameraEventsListener.processingFailed(e.getMessage());
             Log.e(TAG, Log.getStackTraceString(e));
         }
@@ -3563,11 +3635,15 @@ public class CaptureController {
      * here, and the open lock taken for it is released (it used to stay held, so the next open waited 1 s and failed with "Time
      * out waiting to lock camera opening").
      */
-    private void openRefused(boolean lockHeld) {
+    private void openRefused(boolean lockHeld, @Nullable DeviceStateCallback callback) {
+        if (callback != null && !callback.claimOpenPermit()) return;
         mCameraOpening.set(false);
-        closeVivoSdkRawSession(null);
-        closeIszLease();
-        if (lockHeld) mCameraOpenCloseLock.release();
+        try {
+            closeVivoSdkRawSession(null);
+            closeIszLease();
+        } finally {
+            if (lockHeld) mCameraOpenCloseLock.release();
+        }
     }
     private String mOpenRetryId = "";
 
@@ -4120,7 +4196,7 @@ public class CaptureController {
     private void sessionRefused(CameraCaptureSession refused, CameraDevice device) {
         mRetryDevice = device;
         mFallbackUndo = null;
-        if (retryWithoutLofic(refused, "session configuration failed")) return; // P679
+        if (retryWithoutLofic(refused, "session configuration failed", false)) return; // P679
         if (retryWithoutRecipe(refused, "session configuration failed")) return; // P635
         if (retryWithoutDcgRoute(refused, "session configuration failed")) return; // P230
         if (retryWithoutVendorMode(refused)) return; // P211
@@ -4156,7 +4232,11 @@ public class CaptureController {
      * the viewfinder's repeating request.
      */
     public void startSession() {
-        final int generation = mSessionGeneration.incrementAndGet();
+        final int generation;
+        synchronized (mPreviewStateLock) {
+            generation = mSessionGeneration.incrementAndGet();
+            mMosaicUnpacked = null;
+        }
         unspektraAe.reset();
         final CameraDevice sessionDevice = mCameraDevice;
         if (!isCameraResumed || sessionDevice == null) return;
@@ -4546,13 +4626,13 @@ public class CaptureController {
                     configuration.setSessionParameters(loficSession.build());
                 } else if (sdkFullRes) {
                     CaptureRequest.Builder sdkSession = sessionDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-                    if (nativeVivoFullRes()) applyVivoSdkPreview(sdkSession);
+                    final boolean nativeFullRes = nativeVivoFullRes();
+                    if (nativeFullRes) applyVivoSdkPreview(sdkSession);
                     if (fullSizeRecipe()) { // P684: the stock full-size recipe's session keys
                         final List<String> unknown = X300FullSize.applySession(sdkSession);
                         Log.i("SCAM_CAPTURE", "200 MP full-size session keys on camera " + physicalID
                                 + (unknown.isEmpty() ? ": all set" : ": unknown to this firmware (skipped) " + unknown) + " (P684)");
-                    }
-                    else {
+                    } else if (!nativeFullRes) {
                         mVivoSdkRawSession.apply(sdkSession, false, 0);
                         mVivoSdkRawSession.applyStreamUsage(sdkSession);
                     }
@@ -4618,7 +4698,7 @@ public class CaptureController {
             }
         } catch (Exception e) {
             Log.e(TAG, Log.getStackTraceString(e));
-            if (retryWithoutLofic(null, "session: " + e.getMessage())) return; // P679
+            if (retryWithoutLofic(null, "session: " + e.getMessage(), false)) return; // P679
             if (retryWithoutRecipe(null, "session: " + e.getMessage())) return; // P635
             if (retryWithoutDcgRoute(null, "session: " + e.getMessage())) return; // P230
             if (retryWithoutVendorMode(null)) return; // P211
@@ -5338,12 +5418,16 @@ public class CaptureController {
         });
     }
 
-    /** P679: a LOFIC session refused, or failed while being built: its setup failed, the camera reopens with the next one. */
-    private boolean retryWithoutLofic(@Nullable CameraCaptureSession session, String why) {
+    /**
+     * P679: a LOFIC session refused, or failed while being built: its setup failed, the camera reopens with the next one.
+     * P719: {@code noFrame} - the session gave no result at all (the HAL refused its requests), which fails the other 4:3 variants
+     * asking the same row too (XiaomiLofic.sessionFailed).
+     */
+    private boolean retryWithoutLofic(@Nullable CameraCaptureSession session, String why, boolean noFrame) {
         if (!XiaomiLofic.sessionActive() || mCameraDevice == null) return false;
         mDcgOperationMode = 0;
         mDcgRequestKeys = false;
-        XiaomiLofic.sessionFailed(why);
+        XiaomiLofic.sessionFailed(why, noFrame);
         if (session != null) try { session.close(); } catch (RuntimeException ignored) { }
         mainHandler().post(this::restartCamera);
         return true;
@@ -6819,6 +6903,10 @@ public class CaptureController {
                     if (preview != null) preview.requestRender();
                 });
             }
+        } catch (IllegalStateException closed) {
+            // P722 (realme RMX3840, 2026-11-15 12:54:46: «Image is already closed» in vivoAeAudit, the camera thread died): the
+            // reader closed with its session while a meter of this frame ran; the frame is dropped, the next session's go on
+            Log.d(TAG, "live RAW frame closed under its meters: " + closed.getMessage());
         } finally {
             if (!retained) img.close();
             if (ringView != null) Allocator.free(ringView); // never handed over (an exception on the way)
@@ -7086,6 +7174,7 @@ public class CaptureController {
      */
     private void observeMosaic(Image img) {
         try {
+            final int generation = mSessionGeneration.get();
             if (!mMosaicMeasure || !isRawFormat(img.getFormat()) || !isCameraResumed || mPayloadBad) return;
             if (mRecipePlan != null) return; // P635: a recipe shot's block is measured on its own stills (the truth check, the merge)
             // P35: the measurement is the background check of the stored block: never while a shot takes its frames.
@@ -7103,11 +7192,17 @@ public class CaptureController {
                 if (com.scamera.app.util.RawUnpack.isPacked(readFormat)) {
                     // RAW10 / RAW12: measured on the unpacked frame (only the first frames of a session are measured)
                     final int bytes = img.getWidth() * img.getHeight() * 2;
-                    if (mMosaicUnpacked == null || mMosaicUnpacked.capacity() < bytes)
-                        mMosaicUnpacked = java.nio.ByteBuffer.allocateDirect(bytes).order(java.nio.ByteOrder.nativeOrder());
+                    java.nio.ByteBuffer unpacked = mMosaicUnpacked;
+                    if (unpacked == null || unpacked.capacity() < bytes) {
+                        unpacked = java.nio.ByteBuffer.allocateDirect(bytes).order(java.nio.ByteOrder.nativeOrder());
+                        synchronized (mPreviewStateLock) {
+                            if (generation != mSessionGeneration.get() || !isCameraResumed) return;
+                            mMosaicUnpacked = unpacked;
+                        }
+                    }
                     if (!com.scamera.app.util.RawUnpack.unpack(samples.duplicate(), readFormat, img.getWidth(), img.getHeight(),
-                            sampleStride, mMosaicUnpacked)) return;
-                    samples = mMosaicUnpacked.duplicate().order(java.nio.ByteOrder.nativeOrder());
+                            sampleStride, unpacked)) return;
+                    samples = unpacked.duplicate().order(java.nio.ByteOrder.nativeOrder());
                     samples.position(0); samples.limit(bytes);
                     sampleStride = img.getWidth() * 2;
                 }
@@ -7132,7 +7227,11 @@ public class CaptureController {
                 int block = com.scamera.app.processing.MosaicStream.observe(measured);
                 // P187: measured - the unpacked frame (2 B a pixel, 401 MB on a packed 200 MP stream) is not kept for the
                 // rest of the session
-                if (!com.scamera.app.processing.MosaicStream.wantsFrame()) mMosaicUnpacked = null;
+                if (!com.scamera.app.processing.MosaicStream.wantsFrame()) {
+                    synchronized (mPreviewStateLock) {
+                        if (generation == mSessionGeneration.get()) mMosaicUnpacked = null;
+                    }
+                }
                 // P214i: an X300 Ultra ISZ module's frames against the mosaic its mode declares (before the stream crop below,
                 // which reads the module's sensor crop)
                 final VivoQcomIsz.StreamCheck iszCheck = mIszCheck;
@@ -8006,10 +8105,10 @@ public class CaptureController {
      * once a second beside the HAL's exposure (VivoAeAudit). Only a plain 16-bit RAW, never under a shot.
      */
     private void vivoAeAudit(Image img, @Nullable TotalCaptureResult result) {
-        if (img == null || result == null || img.getFormat() != ImageFormat.RAW_SENSOR || mPayloadBad || !mPreviewLayouts.isEmpty()
-                || VivoSdkFullRes.oppo() || mVivoSdkCapture != null || burst || mShotInProgress || shotInFlight()
-                || !VivoAeAudit.wanted() || !mVivoAeAudit.due()) return;
+        if (img == null || result == null || mPayloadBad || !mPreviewLayouts.isEmpty() || VivoSdkFullRes.oppo() || mVivoSdkCapture != null
+                || burst || mShotInProgress || shotInFlight() || !VivoAeAudit.wanted() || !mVivoAeAudit.due()) return;
         try {
+            if (img.getFormat() != ImageFormat.RAW_SENSOR) return; // (P722: in the try - a closed Image throws here)
             final Long exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME);
             final Integer iso = result.get(CaptureResult.SENSOR_SENSITIVITY);
             if (exposure == null || iso == null || exposure <= 0 || iso <= 0) return;
@@ -9605,9 +9704,10 @@ public class CaptureController {
             }
             // P219: every ultrashort frame of the plan, one long frame (HybridPlan.fullResLongFrames); the N take the slots freed
             plan = plan.withLongFrames(HybridPlan.fullResLongFrames(true, block, PreferenceKeys.isHybridMosaicRemosaic())).withNote(ettrNote()); // P377
-            final int extras = plan.requests.size();
-            final int frames = budget.applyAsInt(Math.max(1, requested) + extras);
-            plan = plan.withLeadingNormals(Math.max(1, frames - extras));
+            final int frames = budget.applyAsInt(Math.max(1, requested) + plan.requests.size());
+            if (frames < 1) return null;
+            plan = plan.limitedTo(frames - 1, "memory");
+            plan = plan.withLeadingNormals(frames - plan.requests.size());
             Log.i("SCAM_CAPTURE", "50 MP PSL: " + plan.requests.size() + " frames after the shutter (" + requested + " N asked, "
                     + frames + " by the memory); " + plan.description);
             return plan;
@@ -9615,6 +9715,40 @@ public class CaptureController {
             Log.w("SCAM_CAPTURE", "50 MP PSL: no hybrid plan (" + noPlan.getMessage() + "): N frames only");
             return null;
         }
+    }
+
+    private static java.util.function.IntUnaryOperator mosaicSeriesBudget(int width, int height, int block,
+            long frameBytes, boolean huge, long availableBytes, long halFreeBytes, boolean fast) {
+        final boolean mosaicDng = block > 1 && !PreferenceKeys.isHybridMosaicRemosaic();
+        final boolean keepSensorGrid = huge || (!mosaicDng && !PreferenceKeys.cropUpscale() && PreferenceKeys.cropShot());
+        final String mode = keepSensorGrid ? "sensor" : PreferenceKeys.hybridOutputMode();
+        final int grid = "sensor".equals(mode) ? 1 : 2;
+        final android.graphics.Point output = ScamHybridBurst.sabreSize(width, height, mode, mosaicDng ? block : 1);
+        final long pixels = (long) width * height, outputPixels = (long) output.x * output.y;
+        return count -> VivoSdkFullRes.seriesCount(count, pixels, width, frameBytes, block, grid, outputPixels,
+                huge, availableBytes, halFreeBytes, fast);
+    }
+
+    private HybridPlan fitMosaicShot(HybridPlan plan, int block) {
+        final ImageReader reader = mImageReaderRaw;
+        if (reader == null) return plan;
+        final int width = reader.getWidth(), height = reader.getHeight();
+        final long pixels = (long) width * height, frameBytes = 2 * pixels;
+        final int held = mPendingZslNormalFrames.size(), stills = plan.requests.size();
+        final long free = ScamHybridBurst.memoryAvailableNow();
+        if (free <= 0) return plan;
+        final int frames = mosaicSeriesBudget(width, height, block, frameBytes, pixels > HUGE_SHOT_PIXELS,
+                free + held * frameBytes, 0, PreferenceKeys.fastProcessing()).applyAsInt(held + stills);
+        if (frames >= held + stills) return plan;
+        // Keep the newest ring frame and make room for the planned bracket before trimming the bracket itself.
+        final int keep = held == 0 ? 0 : Math.max(1, Math.min(held, frames - stills));
+        final int drop = held - keep;
+        for (int i = 0; i < drop; i++) mPendingZslNormalFrames.remove(0).close();
+        if (burstShake.size() == held) burstShake.subList(0, drop).clear();
+        final HybridPlan fitted = plan.limitedTo(Math.max(held == 0 ? 1 : 0, frames - keep), "memory");
+        Log.i("SCAM_CAPTURE", "RAW merge memory: " + (keep + fitted.requests.size()) + " of " + (held + stills)
+                + " frames (block " + block + ", " + (free >> 20) + " MB free)");
+        return fitted;
     }
 
     private void captureVivoSdkFullResChecked() {
@@ -9661,13 +9795,17 @@ public class CaptureController {
         final boolean seriesMode = hugeSeries || fifty > 0;
         final int requested = hugeSeries ? PreferenceKeys.getFullRes200Frames() : fifty > 0 ? fifty : PreferenceKeys.getHybridZslFrames();
         final long availableBytes = manager == null ? -1 : memory.availMem;
-        final int grid = !hugeSeries && !"sensor".equals(PreferenceKeys.hybridOutputMode()) ? 2 : 1;
         // P194: the native route's own colour block (Quad 2, the X100 / X300 Ultra's hardware-remosaic Bayer 1); the SDK route 1
         // P586: a 200 MP row its frames proved a Quad (the OnePlus 16) merges as one; the vivo 200 MP profiles are block 4 as before
-        final int block = nativeVivoFullRes() ? Math.max(1, VivoSdkFullRes.profile(mVivoSdkCameraId).mergeBlock()) : hugeSeries ? 4 : 1; // P609
+        final int block = shotProfile != null && nativeVivoFullRes() ? Math.max(1, shotProfile.mergeBlock()) : 1; // P609
         final int guarded = VivoSdkFullRes.frameCount(requested, frameBytes, availableBytes);
-        final int frames = seriesMode ? VivoSdkFullRes.seriesCount(requested, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid,
-                hugeSeries, availableBytes, hugeSeries ? 4L * frameBytes : halFree) : guarded;
+        final boolean fastMerge = PreferenceKeys.fastProcessing();
+        final boolean estimateMerge = seriesMode || block > 1;
+        final java.util.function.IntUnaryOperator budget = estimateMerge
+                ? mosaicSeriesBudget(rawWidth, rawHeight, block, frameBytes, hugeSeries, availableBytes,
+                        hugeSeries ? 4L * readerBytes : halFree, fastMerge)
+                : all -> VivoSdkFullRes.frameCount(all, frameBytes, availableBytes);
+        final int frames = budget.applyAsInt(requested);
         if (hugeSeries) {
             if (frames < 3) {
                 failPendingShutter(new IllegalStateException(Lang.t("Недостаточно памяти для серии 200 Мп", "Not enough memory for a 200 MP series")));
@@ -9693,14 +9831,15 @@ public class CaptureController {
             // P232 (speed-ux A2): the budget first, then the split - the ring frames stay (the zero-lag ones, P198's point), the N
             // taken after the press shrink; before P232 the top-up was fixed first and the budget removed the oldest ring frames
             // (owner's X7U 20:20:35: «5 ring frames + 7 N after the shutter» -> «N 1 from the ring + 13 after the shutter»)
-            final int[] split = VivoSdkFullResCapture.zslSplit(ring, extras, requested, all -> seriesMode
-                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, withRing)
-                    : VivoSdkFullRes.frameCount(all, frameBytes, withRing));
+            final java.util.function.IntUnaryOperator ringBudget = estimateMerge
+                    ? mosaicSeriesBudget(rawWidth, rawHeight, block, frameBytes, false, withRing, 0, fastMerge)
+                    : all -> VivoSdkFullRes.frameCount(all, frameBytes, withRing);
+            final int[] split = VivoSdkFullResCapture.zslSplit(ring, extras, requested, ringBudget);
             final int keep = split[0];
             zslTopUp = split[1];
             zslTrimmed = split[2] < Math.max(ring, requested) + extras; // the memory, not the ring, held the N back
             while (zsl.frames.size() > keep) zsl.frames.remove(0).close(); // the oldest go, the moment of the press stays
-            zsl.plan = zsl.plan.withLeadingNormals(zslTopUp);
+            zsl.plan = zsl.plan.limitedTo(Math.max(1, split[2] - keep - zslTopUp), "memory").withLeadingNormals(zslTopUp);
             Log.i("SCAM_CAPTURE", "50 MP ZSL: " + keep + " of " + ring + " ring frames + " + zslTopUp + " N after the shutter (asked "
                     + requested + ", budget " + split[2] + " frames); " + zsl.plan.description);
             count = zsl.plan.requests.size();
@@ -9708,9 +9847,7 @@ public class CaptureController {
         } else {
             // P202 (owner, 2026-10-17: «В PSL у нас тоже должны быть брекет кадры»): a native 50 MP series after the shutter is N
             // and the 12 MP Hybrid plan's bracketed / ultrashort frames, as a ZSL shot's frames after the shutter
-            pslPlanBuilt = hugeSeries || !nativeVivoFullRes() ? null : pslPlan(requested, all -> seriesMode
-                    ? VivoSdkFullRes.seriesCount(all, (long) rawWidth * rawHeight, rawWidth, frameBytes, block, grid, false, availableBytes, halFree)
-                    : VivoSdkFullRes.frameCount(all, frameBytes, availableBytes), manualPslNs, block);
+            pslPlanBuilt = hugeSeries || !nativeVivoFullRes() ? null : pslPlan(requested, budget, manualPslNs, block);
             count = pslPlanBuilt != null ? pslPlanBuilt.requests.size() : frames;
             shotN = 0;
         }
@@ -9728,7 +9865,7 @@ public class CaptureController {
         // 12 кадров» while the worker merged 8 N); the worker's own count follows after the merge (ScamHybridBurst.notice)
         final int taken = zsl != null ? VivoSdkFullResCapture.zslTaken(shotN, zslTopUp) : count;
         final String cut = zsl != null ? (taken >= requested ? "" : zslTrimmed ? "memory" : "ring")
-                : count >= requested ? "" : count < guarded && grid == 2 ? "2x" : "memory";
+                : count >= requested ? "" : count < guarded && !hugeSeries && !"sensor".equals(PreferenceKeys.hybridOutputMode()) ? "scale" : "memory";
         if (tetraBin) Log.i("SCAM_CAPTURE", "50 MP from the 200 MP mode " + shotProfile.sensorMode + " " + shotProfile.size
                 + ", 2x2 binned per Tetra cell -> " + shotSize + " Quad (block 2, P609): " + count + " stills after the shutter, "
                 + (frameBytes >> 20) + " MB a frame (" + (readerBytes >> 20) + " MB unbinned), the HAL's " + (halFree >> 20)
@@ -9739,8 +9876,8 @@ public class CaptureController {
                 + " availableMB=" + (memory.availMem >> 20) + (seriesMode ? " series" : "") + (cut.isEmpty() ? "" : " cut=" + cut));
         if (!cut.isEmpty() && !"ring".equals(cut))
             showToast(Lang.t("Снято " + taken + " из " + requested + " кадров: свободно " + (memory.availMem >> 20) + " МБ"
-                        + ("2x".equals(cut) ? ", вывод 2×" : ""),
-                "Took " + taken + " of " + requested + " frames: " + (memory.availMem >> 20) + " MB free" + ("2x".equals(cut) ? ", 2× output" : "")));
+                        + ("scale".equals(cut) ? ", разрешение склейки" : ""),
+                "Took " + taken + " of " + requested + " frames: " + (memory.availMem >> 20) + " MB free" + ("scale".equals(cut) ? ", merge resolution" : "")));
         final ImageSaver saver = new ImageSaver(cameraEventsListener);
         saver.iszAspect4x3 = mShutterIszAspect4x3 || nativeVivoFullRes();
         saver.tetraBin = tetraBin; // P609
@@ -10228,6 +10365,17 @@ public class CaptureController {
             // (PreferenceKeys.noHdrFrames) and its own frame count when the row is set (getHybridZslFrames).
             // The capture route of this shot (P27: a SCAM HDR shot without an S/ES plan is captured and merged by the Hybrid).
             final boolean scamHybridShot=scamHybridSelected;
+            // P35: the stream key of this shot (its stored colour block skips the detector in the processing).
+            // P635: a recipe shot's block is measured on its own frames every time (no stored block: a real frame and a doubled one
+            // taken back to the binned frame are different mosaics under one stream key)
+            final String shotMosaicKey=recipePlan!=null?"off":com.scamera.app.processing.MosaicStream.key();
+            // P214i: by the X300 Ultra's list; 0 once the module's frames proved a plain Bayer (the stored 1 merges then)
+            // P276: a picked full-size row of the SensorModeTable declares the sensor's own mosaic
+            final int iszBlock=VivoQcomIsz.declaredBlockOf(com.scamera.app.settings.ModuleRegistry.active());
+            // P631: a picked Xiaomi row whose frames proved a plain Bayer (the HAL's remosaic) merges as the Bayer it is
+            final int shotDeclaredBlock=XiaomiSensorRow.shotBlock(iszBlock>0?iszBlock:SensorModePick.sessionBlock(mCameraCharacteristics),
+                    SensorModePick.session()!=null&&XiaomiSensorRow.device(),
+                    com.scamera.app.processing.MosaicBlockStore.get().stored(shotMosaicKey));
             final HybridPlan[] hybridPlanHolder={null};
             final float[] normalBackLongRatio={0f};
             final boolean scamZslRequested = hybridZslRequested && scamCapture;
@@ -10514,6 +10662,10 @@ public class CaptureController {
                 if(mFullResSession && !com.scamera.app.settings.MotionMode.on())
                     plan=plan.withLongFrames(HybridPlan.fullResLongFrames(true,0,PreferenceKeys.isHybridMosaicRemosaic()));
                 if(recipePlan!=null) plan=plan.limitedTo(recipePlan.recipe.frames); // P635: the profile's frames a shot
+                if (flash == null && !yuvAfter && !yuvRing && !mLoficShot && mLoficOverflow.reader == null) {
+                    final int block = com.scamera.app.processing.MosaicBlockStore.blockForModule(shotMosaicKey, shotDeclaredBlock);
+                    if (block > 1 || mShutterIszAspect4x3) plan = fitMosaicShot(plan, Math.max(1, block));
+                }
                 if(flash==null) plan=plan.withNote(ettrNote()); // P377: the shot's ETTR (the stamp's line, the log); P590: none on a flash frame
                 hybridPlanHolder[0]=plan;
                 Log.i("SCAM_CAPTURE",plan.description);
@@ -10692,17 +10844,6 @@ public class CaptureController {
             final boolean shotHybridRoute=scamHybridShot;
             // P590: the flash frame came back without the flash (FLASH_STATE not FIRED): it is left out, the normal shot follows
             final boolean[] flashMissed={false};
-            // P35: the stream key of this shot (its stored colour block skips the detector in the processing).
-            // P635: a recipe shot's block is measured on its own frames every time (no stored block: a real frame and a doubled one
-            // taken back to the binned frame are different mosaics under one stream key)
-            final String shotMosaicKey=recipePlan!=null?"off":com.scamera.app.processing.MosaicStream.key();
-            // P214i: by the X300 Ultra's list; 0 once the module's frames proved a plain Bayer (the stored 1 merges then)
-            // P276: a picked full-size row of the SensorModeTable declares the sensor's own mosaic
-            final int iszBlock=VivoQcomIsz.declaredBlockOf(com.scamera.app.settings.ModuleRegistry.active());
-            // P631: a picked Xiaomi row whose frames proved a plain Bayer (the HAL's remosaic) merges as the Bayer it is
-            final int shotDeclaredBlock=XiaomiSensorRow.shotBlock(iszBlock>0?iszBlock:SensorModePick.sessionBlock(mCameraCharacteristics),
-                    SensorModePick.session()!=null&&XiaomiSensorRow.device(),
-                    com.scamera.app.processing.MosaicBlockStore.get().stored(shotMosaicKey));
             final TotalCaptureResult[] nativeBaseResult={hybridZsl?mNativeZslBase:null};
             // W1.9: the vendor-key scan of every bracket result (10-15 ms on the camera callback thread) only with diagnostics.
             final boolean vendorScan=scamCapture&&PreferenceKeys.isScamDiagnosticsEnabled();
@@ -11032,7 +11173,7 @@ public class CaptureController {
             // first bracket exposure ~0.25 s closer to the press; the preview is
             // restarted right behind the burst.
             final boolean flushWanted = mScamRouted && scamSequence != null && PreferenceKeys.isScamFastCapture()
-                    && !mShotRequests.isEmpty() && (mStockObserverReady || !PreferenceKeys.useStockBracketPlanner());
+                    && !mShotRequests.isEmpty();
             // P27 (M6): a camera whose HAL lost the first requests after the flush twice in a row is not flushed any more.
             // P54b: nor a camera under the forced stabilisation (the flush restarts the HAL pipeline; the stock app never flushes).
             final boolean forcedNoFlush = mForcedStab && ForcedStabilization.noFlush();

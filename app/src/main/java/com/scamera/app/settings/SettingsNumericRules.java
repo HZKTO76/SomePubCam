@@ -59,6 +59,10 @@ public final class SettingsNumericRules {
             case "pref_scam_hybrid_resolve_speckle_strength": return new double[]{0,1,0};
             case "pref_scam_hybrid_why_dn_factor": case "pref_scam_hybrid_why_dn_grain": return new double[]{0,2,0};
             case "pref_scam_hybrid_why_dn_luma_revert": case "pref_scam_hybrid_why_dn_motion_revert": return new double[]{0,1,0};
+            case "pref_scam_hybrid_fast_motion_denoise_2": case "pref_scam_hybrid_fast_motion_denoise_3":
+            case "pref_scam_hybrid_fast_motion_denoise_4": case "pref_scam_hybrid_fast_motion_denoise_8":
+            case "pref_scam_hybrid_fast_motion_denoise_16": case "pref_scam_hybrid_fast_motion_denoise_32":
+            case "pref_scam_hybrid_fast_motion_denoise_64": return new double[]{0,100,1};
             // SCAM Hybrid noise reduction (ScamDenoise, engine "multiscale")
             case "pref_scam_hybrid_dn_snr_scale": return new double[]{0.25,8,0};
             case "pref_scam_hybrid_dn_model_shot": return new double[]{0.25,4,0};

@@ -202,6 +202,7 @@ public final class ScameraFolder {
 
     /** Writes the file (replacing one of the same name this app saved) and returns its shown path. */
     public String save(Context context, String name, byte[] data) throws IOException {
+        if (!accepts(name)) throw new IOException("invalid file name for " + relative);
         if (!mediaStore()) {
             File dir = legacyDir();
             if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
@@ -225,16 +226,22 @@ public final class ScameraFolder {
         values.put(MediaStore.Downloads.IS_PENDING, 1);
         Uri uri = resolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values);
         if (uri == null) throw new IOException("MediaStore refused " + name);
-        try (OutputStream out = resolver.openOutputStream(uri, "w")) {
-            if (out == null) throw new IOException("cannot open " + name);
-            out.write(data);
+        try {
+            try (OutputStream out = resolver.openOutputStream(uri, "w")) {
+                if (out == null) throw new IOException("cannot open " + name);
+                out.write(data);
+            }
+            values.clear();
+            values.put(MediaStore.Downloads.IS_PENDING, 0);
+            if (resolver.update(uri, values, null, null) <= 0) throw new IOException("MediaStore could not publish " + name);
         } catch (IOException | RuntimeException e) {
-            resolver.delete(uri, null, null);
+            try {
+                resolver.delete(uri, null, null);
+            } catch (RuntimeException cleanup) {
+                Log.w(TAG, "cleanup of " + uri + " failed: " + cleanup);
+            }
             throw e;
         }
-        values.clear();
-        values.put(MediaStore.Downloads.IS_PENDING, 0);
-        resolver.update(uri, values, null, null);
         // MediaStore renames on a clash with a file another app owns: report the name it kept.
         String kept = name;
         try (Cursor c = resolver.query(uri, new String[]{MediaStore.Downloads.DISPLAY_NAME}, null, null, null)) {
@@ -263,6 +270,7 @@ public final class ScameraFolder {
     }
 
     public InputStream open(Context context, String name) throws IOException {
+        if (!accepts(name)) throw new IOException("invalid file name for " + relative);
         if (mediaStore()) {
             Uri uri = find(context, name);
             if (uri != null) {
@@ -301,7 +309,7 @@ public final class ScameraFolder {
      * names with the folder's extensions: a name with a path never leaves it.
      */
     public boolean delete(Context context, String name) {
-        if (!accepts(name) || name.contains("/") || name.contains("\\")) return false;
+        if (!accepts(name)) return false;
         boolean gone = false;
         if (mediaStore()) {
             Uri uri = find(context, name);
@@ -333,7 +341,8 @@ public final class ScameraFolder {
 
     /** Whether the name has one of the folder's extensions. */
     public boolean accepts(String name) {
-        if (name == null) return false;
+        if (name == null || name.isEmpty() || name.equals(".") || name.equals("..")
+                || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || name.indexOf('\0') >= 0) return false;
         String n = name.toLowerCase(Locale.ROOT);
         for (String e : extensions) if (n.endsWith(e)) return true;
         return false;

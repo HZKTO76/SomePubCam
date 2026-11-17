@@ -1,10 +1,14 @@
 package com.scamera.app.processing.opengl.postpipeline;
 
 import android.graphics.Point;
+import android.opengl.GLES30;
 
 import com.scamera.app.processing.opengl.GLFormat;
+import com.scamera.app.processing.opengl.GLLimits;
 import com.scamera.app.processing.opengl.GLTexture;
+import com.scamera.app.processing.opengl.PostGlMode;
 import com.scamera.app.processing.opengl.nodes.Node;
+import com.scamera.app.util.Allocator;
 import com.scamera.app.util.BufferUtils;
 import com.scamera.app.settings.PreferenceKeys;
 import com.scamera.app.util.Log;
@@ -12,6 +16,7 @@ import com.scamera.app.util.Log;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.nio.ShortBuffer;
 
 import static android.opengl.GLES20.GL_CLAMP_TO_EDGE;
 import static android.opengl.GLES20.GL_LINEAR;
@@ -47,11 +52,10 @@ public final class WhyV2Stats extends Node {
 
     /**
      * The clip ceiling of the reference's statistics and tone (u_clip_ceiling): 1 without short frames in the merge, with them its
-     * highlight recovery factor itself ({@link #MAX_CEILING}, the owner's "8"; not the data's maximum). Here the merge's Bento
-     * headroom (our ultrashort frames) stands for its short frames; {@code max} (the samples' maximum) is only logged.
+     * highlight recovery factor itself ({@link #MAX_CEILING}, the owner's "8"). The samples' maximum is only logged.
      */
-    static float clipCeiling(boolean bento, float max) {
-        return bento ? MAX_CEILING : 1f;
+    static float clipCeiling(boolean shorts) {
+        return shorts ? MAX_CEILING : 1f;
     }
 
     /**
@@ -207,6 +211,55 @@ public final class WhyV2Stats extends Node {
                 : com.scamera.app.processing.render.NoiseModeler.reportedMean(null);
     }
 
+    /** Read native RGBA16F samples only after the driver proves that its float read widens them exactly. */
+    private static ByteBuffer readHalfSamples(GLTexture samples) {
+        if (PostGlMode.legacy()) return null;
+        final int type = WhyStats.halfReadType();
+        if (type == 0 || !WhyStats.halfReadbackExact(type)) return null;
+        final int width = samples.size.x, height = samples.size.y;
+        final ByteBuffer data = Allocator.allocate(GLLimits.bufferBytes(width, height, 8, "WHY V2 samples"));
+        if (data == null) return null;
+        boolean success = false;
+        try {
+            GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, type, data);
+            success = GLES30.glGetError() == GLES30.GL_NO_ERROR;
+            return success ? data : null;
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        } finally {
+            if (!success) Allocator.free(data);
+        }
+    }
+
+    // Both readers visit samples and channels in the same order. The maximum is only logged.
+    static float measureSamples(FloatBuffer data, int count, float clip, WhyV2Ae.Hist histogram) {
+        float max = 0f;
+        for (int i = 0; i < count; i++) {
+            final int offset = i * 4;
+            final float r = data.get(offset), g = data.get(offset + 1), b = data.get(offset + 2);
+            if (r > max && Float.isFinite(r)) max = r;
+            if (g > max && Float.isFinite(g)) max = g;
+            if (b > max && Float.isFinite(b)) max = b;
+            WhyV2Ae.add(histogram, r, g, b, clip, false);
+        }
+        return max;
+    }
+
+    static float measureSamples(ShortBuffer data, int count, float clip, WhyV2Ae.Hist histogram) {
+        final float[] table = HalfFloat.TABLE;
+        float max = 0f;
+        for (int i = 0; i < count; i++) {
+            final int offset = i * 4;
+            final float r = table[data.get(offset) & 0xffff], g = table[data.get(offset + 1) & 0xffff];
+            final float b = table[data.get(offset + 2) & 0xffff];
+            if (r > max && Float.isFinite(r)) max = r;
+            if (g > max && Float.isFinite(g)) max = g;
+            if (b > max && Float.isFinite(b)) max = b;
+            WhyV2Ae.add(histogram, r, g, b, clip, false);
+        }
+        return max;
+    }
+
     @Override
     public void runPass() {
         final PostPipeline pipeline = (PostPipeline) hostPipeline;
@@ -232,6 +285,7 @@ public final class WhyV2Stats extends Node {
             gainMap = fallback;
         }
         GLTexture samples = null;
+        ByteBuffer halfPixels = null;
         try {
             // LINEAR as the reference's RGB texture (hr_extract reads it bilinear at half the grid; the rest texelFetch)
             v2.clean = new GLTexture(size, new GLFormat(GLFormat.DataType.FLOAT_16, 4), null, GL_LINEAR, GL_CLAMP_TO_EDGE);
@@ -248,29 +302,22 @@ public final class WhyV2Stats extends Node {
             shaderProg.drawBlocks(samples);
             shaderProg.closed = true;
             samples.renderInto();
-            final ByteBuffer px = samples.textureBuffer(new GLFormat(GLFormat.DataType.FLOAT_16, 4));
+            final long readStarted = System.nanoTime();
+            halfPixels = readHalfSamples(samples);
+            final boolean half = halfPixels != null;
+            final ByteBuffer px = half ? halfPixels : samples.textureBuffer(new GLFormat(GLFormat.DataType.FLOAT_16, 4));
             px.order(ByteOrder.nativeOrder());
-            final FloatBuffer f = px.asFloatBuffer();
-            // the data's maximum (logged), then the histograms at the ceiling
-            float max = 0f;
-            for (int i = 0; i < sw * sh; i++) {
-                for (int c = 0; c < 3; c++) {
-                    final float v = f.get(i * 4 + c);
-                    if (v > max && Float.isFinite(v)) max = v;
-                }
-            }
+            final long readFinished = System.nanoTime();
             final boolean shorts = shortFramesMerged(ScamHybridBurst.lastBentoApplied, ScamHybridBurst.lastReport);
-            final float ceiling = clipCeiling(shorts, max);
+            final float ceiling = clipCeiling(shorts);
             final float clip = WhyV2Ae.clipCeiling(ceiling);
             // no face: the reference's photo path never fills its AE's face rect (u_has_face 0; setSnapshotPortraitData carries
             // only the portrait flag, aperture and depth), so its face priority never meters a photo
             final WhyV2Ae.Hist h = new WhyV2Ae.Hist();
-            for (int y = 0; y < sh; y++) {
-                for (int x = 0; x < sw; x++) {
-                    final int o = (y * sw + x) * 4;
-                    WhyV2Ae.add(h, f.get(o), f.get(o + 1), f.get(o + 2), clip, false);
-                }
-            }
+            final long histStarted = System.nanoTime();
+            final float max = half ? measureSamples(px.asShortBuffer(), sw * sh, clip, h)
+                    : measureSamples(px.asFloatBuffer(), sw * sh, clip, h);
+            final long histFinished = System.nanoTime();
             // the reference's AE noise: the one-frame mean of the camera's noise profile (not our stacked model, pipeline.noiseS / O)
             final float[] noise = referenceNoise(pipeline.shotParams.noiseModel);
             final WhyV2Ae.Result r = WhyV2Ae.finish(h, v2.params, ceiling, noise[0], noise[1]);
@@ -283,8 +330,11 @@ public final class WhyV2Stats extends Node {
             Log.i("SCAM_PIPELINE", "WHY V2 stats " + r.describe() + " style=" + com.scamera.app.settings.PhotoStyle.id(style) + " stride=" + stride + " samples=" + sw + "x" + sh
                     + " max=" + max + " bento=" + ScamHybridBurst.lastBentoApplied + " shorts=" + shorts + " noise=" + noise[0] + "/" + noise[1]
                     + " (stacked model " + pipeline.noiseS + "/" + pipeline.noiseO + ")"
-                    + " ms=" + (System.currentTimeMillis() - started));
+                    + " ms=" + (System.currentTimeMillis() - started) + " readback=" + (half ? "half" : "float")
+                    + " sample_bytes=" + px.capacity() + " read_ms=" + (readFinished - readStarted) / 1_000_000
+                    + " hist_ms=" + (histFinished - histStarted) / 1_000_000);
         } finally {
+            if (halfPixels != null) Allocator.free(halfPixels);
             if (samples != null) samples.close();
             if (fallback != null) fallback.close();
         }

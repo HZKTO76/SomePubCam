@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- P131: the launcher icons' background - the UI's dark surface, a little lighter at the top. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <gradient android:angle="270" android:startColor="#23272E" android:endColor="#121417" />
-</shape>
+<!-- P720: the launcher icons' background - a dark graphite gradient with a soft light at the top. Hand-made, not written by tools/make_launcher_icons.py. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M0,0H108V108H0Z"><aapt:attr name="android:fillColor"><gradient android:type="linear" android:startX="54" android:startY="18" android:endX="54" android:endY="90"><item android:offset="0" android:color="#FF343A44"/><item android:offset="0.55" android:color="#FF1B1E24"/><item android:offset="1" android:color="#FF0D0F12"/></gradient></aapt:attr></path>
+    <path android:pathData="M0,0H108V108H0Z">
+        <aapt:attr name="android:fillColor"><gradient android:type="radial" android:centerX="54" android:centerY="30" android:gradientRadius="46">
+            <item android:offset="0" android:color="#1AFFFFFF"/><item android:offset="1" android:color="#00FFFFFF"/></gradient></aapt:attr>
+    </path>
+</vector>

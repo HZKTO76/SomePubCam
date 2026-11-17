@@ -52,6 +52,20 @@ public class PreviewStallTest {
     }
 
     /**
+     * P719 (Xiaomi 17 Ultra, «DCG+LOFIC» 4:3+row / 4:3+row+yuv, log 2026-11-14 19:26:56 and 19:27:53): the HAL lost the result and
+     * the buffers of 7 requests - 5 of them within 12 ms - and then answered nothing; the viewfinder froze until the 3 s stall.
+     * Both sessions are refused at their first burst.
+     */
+    @Test
+    public void theSeventeenUltrasRefusedLoficSessionsAreRefusedAtTheirFirstBurst() {
+        assertTrue(PreviewStall.refused(5, 0));
+        assertTrue(PreviewStall.refused(7, 0));
+        assertTrue(PreviewStall.REFUSED_REQUESTS <= 5);
+        assertFalse(PreviewStall.refused(PreviewStall.REFUSED_REQUESTS - 1, 0));
+        assertFalse("a result came once", PreviewStall.refused(7, 56_314));
+    }
+
+    /**
      * P710 (X300 Ultra tele, owner's log 2026-11-14 09:31: «cam[CameraBackground] 7206.5/7276.3» - the camera thread 7.2 s inside one
      * RAW viewfinder frame, then «PREVIEW_STALL ... no preview frame for 7431 ms» and a restart): a check that ran 1.5 s or more
      * late shows the camera thread held; its queued results get the full limit from the moment it is free.

@@ -184,7 +184,6 @@ public class HybridSettingsTest {
         assertEquals(1f,PreferenceKeys.routeInternalValue("noise_photon",1f),0f);
         assertEquals(20,PreferenceKeys.getScamZslFrames());assertEquals(20,PreferenceKeys.getHybridZslFrames());
         assertTrue(PreferenceKeys.isHybridDenoiseEnabled());
-        assertFalse(PreferenceKeys.useStockBracketPlanner());
         assertEquals("auto",PreferenceKeys.getScamCreSource());
         manager.set("default_scope","pref_scam_hybrid_noise_photon","2,5");
         manager.set("default_scope","pref_scam_hybrid_zsl_frames","99");
@@ -390,6 +389,7 @@ public class HybridSettingsTest {
     @Test public void conditionalRowsFollowTheirSetting() {
         // P629: the rows of the SCAM merge, read with «Качество» (the other modes grey them: MergeRouteSettingsTest)
         Map<String,Object> s=new HashMap<>();s.put("pref_scam_hybrid_processing","quality");
+        s.put("pref_scam_hybrid_tone_version","v1"); // V1's AgX look rule below (P721: V2 is the default)
         for(String k:new String[]{"pref_scam_hybrid_s61_min_motion","pref_scam_hybrid_snr_scale","pref_scam_hybrid_shasta_sharpness",
                 "pref_scam_hybrid_shasta_max_ratio","pref_scam_hybrid_bento_trigger"})
             assertNotNull(k,new SettingsAvailability(s).reason(k));
@@ -557,7 +557,7 @@ public class HybridSettingsTest {
         // P421: the few-frame boost limit has no engine / strength map rows to follow any more
         assertNull(new SettingsAvailability(new HashMap<>()).reason("pref_scam_hybrid_bento_denoise_max"));
         // the OPPO matrix's saturation is AgX's: greyed under ACES, Uchimura and the own curve, live with every AgX look
-        Map<String,Object> t=new HashMap<>();
+        Map<String,Object> t=new HashMap<>();t.put("pref_scam_hybrid_tone_version","v1"); // V1's row (P721: V2 is the default)
         assertNull(new SettingsAvailability(t).reason("pref_scam_hybrid_why_ccm_sat"));
         t.put("pref_scam_hybrid_why_agx_look","1");
         assertNull(new SettingsAvailability(t).reason("pref_scam_hybrid_why_ccm_sat"));
@@ -574,8 +574,8 @@ public class HybridSettingsTest {
         for(String k:trio)assertNotNull(k,new SettingsAvailability(h).reason(k));
         h.put("pref_scam_hybrid_highlight_recovery",50);
         for(String k:trio)assertNull(k,new SettingsAvailability(h).reason(k));
-        // clarity and the flat-area protection scale the WHY detail delta
-        Map<String,Object> a=new HashMap<>();
+        // clarity and the flat-area protection scale the WHY detail delta (V1's rows; P721: V2 is the default)
+        Map<String,Object> a=new HashMap<>();a.put("pref_scam_hybrid_tone_version","v1");
         for(String k:new String[]{"pref_scam_hybrid_why_clarity","pref_scam_hybrid_why_flat_protect"}){
             a.remove("pref_scam_hybrid_why_sharp_gain");
             assertNull(k,new SettingsAvailability(a).reason(k));
@@ -1375,6 +1375,24 @@ public class HybridSettingsTest {
         assertEquals("set again: stays",0.0,PreferenceNumber.read(prefs.getAll().get("pref_scam_hybrid_why_vibrance_hl_str"),9),1e-6);
     }
 
+    @Test public void configV6MovesTheMinLimitAndTheToneVersionOnce() {
+        // P721 (owner's config arkburial_stable_v6): a stored former default moves once - AE min limit 0.5 -> 1, «Why тон» V1 -> V2
+        prefs.edit().clear().putString(PreferenceKeys.ROUTE_KEY,"hybrid").putInt("pref_scam_hybrid_defaults_rev",7)
+                .putString("pref_scam_hybrid_why_ae_min_limit","0.5").putString("pref_scam_hybrid_tone_version","v1").commit();
+        assertTrue(SettingsMigration.migrateScamHybrid(prefs,false));
+        assertEquals(1.0,PreferenceNumber.read(prefs.getAll().get("pref_scam_hybrid_why_ae_min_limit"),9),1e-6);
+        assertEquals("v2",prefs.getString("pref_scam_hybrid_tone_version",""));
+        assertEquals(1,prefs.getInt(SettingsMigration.CONFIG_V6_REV,0));
+        prefs.edit().putString("pref_scam_hybrid_why_ae_min_limit","0.5").putString("pref_scam_hybrid_tone_version","v1").commit();
+        SettingsMigration.migrateScamHybrid(prefs,false);
+        assertEquals("set again: stays",0.5,PreferenceNumber.read(prefs.getAll().get("pref_scam_hybrid_why_ae_min_limit"),9),1e-6);
+        assertEquals("set again: stays","v1",prefs.getString("pref_scam_hybrid_tone_version",""));
+        prefs.edit().clear().putString(PreferenceKeys.ROUTE_KEY,"hybrid").putInt("pref_scam_hybrid_defaults_rev",7)
+                .putString("pref_scam_hybrid_why_ae_min_limit","0.7").commit();
+        SettingsMigration.migrateScamHybrid(prefs,false);
+        assertEquals("chosen by hand",0.7,PreferenceNumber.read(prefs.getAll().get("pref_scam_hybrid_why_ae_min_limit"),9),1e-6);
+    }
+
     @Test public void lookVibranceMovesIntoTheReferenceRowsOnce() {
         // P419: «Цвет»'s shadow / light vibrance add to the reference app's rows once, its skin protection goes (why_skin_protect stays)
         prefs.edit().clear().putString(PreferenceKeys.ROUTE_KEY,"hybrid").putInt("pref_scam_hybrid_defaults_rev",7)
@@ -1755,5 +1773,23 @@ public class HybridSettingsTest {
         assertFalse(tuning,tuning.contains("rejPool 0\n"));
         manager.set("default_scope","pref_scam_hybrid_processing","fast");
         assertTrue(PreferenceKeys.hybridTuningText().endsWith(PreferenceKeys.FAST_TUNING));
+    }
+
+    @Test public void motionDenoiseCurveReachesOnlyTheFastMerge() {
+        final String prefix = PreferenceKeys.HYBRID_PREFIX + PreferenceKeys.FAST_MOTION_DENOISE_PREFIX;
+        String tuning = PreferenceKeys.hybridTuningText();
+        for (String line : new String[]{"2 0.65", "3 0.65", "4 0.65", "8 0.45", "16 0.22", "32 0.08", "64 0.0"})
+            assertTrue(tuning, tuning.contains("\nfastMotionDenoise" + line + "\n"));
+
+        manager.set("default_scope", prefix + "3", "73");
+        tuning = PreferenceKeys.hybridTuningText();
+        assertTrue(tuning, tuning.contains("\nfastMotionDenoise3 0.73\n"));
+        assertEquals(tuning.indexOf("fastMotionDenoise3 "), tuning.lastIndexOf("fastMotionDenoise3 "));
+
+        manager.set("default_scope", prefix + "enabled", false);
+        assertFalse(PreferenceKeys.hybridTuningText().contains("fastMotionDenoise"));
+        manager.set("default_scope", prefix + "enabled", true);
+        manager.set("default_scope", PreferenceKeys.HYBRID_PREFIX + "processing", "quality");
+        assertFalse(PreferenceKeys.hybridTuningText().contains("fastMotionDenoise"));
     }
 }

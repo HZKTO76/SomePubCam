@@ -134,7 +134,7 @@ public final class DngPreview {
         need = Math.min(need, 4096);
         Ifd bestJpeg = null, largestJpeg = null, raw = null;
         for (Ifd f : p.ifds) {
-            if (f.photometric == 32803 && (f.subType & 1) == 0) {
+            if ((f.photometric == 32803 || f.photometric == 34892) && (f.subType & 1) == 0) {
                 if (raw == null || (long) f.width * f.height > (long) raw.width * raw.height) raw = f;
             } else if (f.jpegOffset >= 0 || (f.compression == 6 || f.compression == 7) && f.photometric != 32803 && f.stripOffsets != null) {
                 long[] jr = jpegRange(f);
@@ -150,7 +150,9 @@ public final class DngPreview {
         if (previewOnly) return largestJpeg != null ? jpeg(r, largestJpeg) : null;
         if (raw != null) {
             try {
-                p.render(raw, reqW > 0 ? reqW : need, reqH > 0 ? reqH : need, r);
+                final int w = reqW > 0 ? reqW : need, h = reqH > 0 ? reqH : need;
+                if (raw.photometric == 34892) p.renderLinear(buffer, raw, w, h, r);
+                else p.render(raw, w, h, r);
                 return r;
             } catch (IOException | RuntimeException e) {
                 if (largestJpeg == null) throw e instanceof IOException ? (IOException) e : new IOException(e);
@@ -672,6 +674,17 @@ public final class DngPreview {
         }
     }
 
+    private void renderLinear(ByteBuffer buffer, Ifd raw, int w, int h, Result r) throws IOException {
+        final int bin = Math.max((raw.width - 1) / w + 1, (raw.height - 1) / h + 1);
+        final DngRaw.Image image = DngRaw.decodeLinear(buffer, bin);
+        if (image.info.kind != DngRaw.KIND_RGB) throw new IOException("DNG: missing linear RGB");
+        outW = image.width;
+        outH = image.height;
+        sum = image.linear;
+        black = new double[]{0};
+        finish(1, r);
+    }
+
     private void finish(double white, Result r) {
         final double bl = mean(black);
         final double range = Math.max(1, white - bl);
@@ -686,7 +699,7 @@ public final class DngPreview {
             double[] cam = new double[3];
             for (int c = 0; c < 3; ++c) {
                 int k = i * 3 + c;
-                cam[c] = cnt[k] > 0 ? sum[k] / cnt[k] / range : 0;
+                cam[c] = cnt == null ? sum[k] : cnt[k] > 0 ? sum[k] / cnt[k] / range : 0;
             }
             for (int c = 0; c < 3; ++c) {
                 double v = (m[c * 3] * cam[0] + m[c * 3 + 1] * cam[1] + m[c * 3 + 2] * cam[2]) * gain;

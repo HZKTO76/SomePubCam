@@ -154,11 +154,13 @@ final class XiaomiLoficReaders {
             final int used;
             if (exact) {
                 exactImages++;
-                used = XiaomiLofic.usedBytes(b);
-                stream = XiaomiLofic.classify(used);
+                final int filled = XiaomiLofic.usedBytes(b);
+                stream = XiaomiLofic.classify(filled);
+                final int rows = XiaomiLofic.rows(filled, stream);
+                used = rows * (stream == XiaomiLofic.Stream.LONG ? XiaomiLofic.LONG_ROW : XiaomiLofic.SHORT_ROW);
                 if (exactImages <= 4) Log.i("SCAM_CAPTURE", "XIAOMI LOFIC " + s.label + ": " + (reader == rawA ? "RAW A" : "RAW B")
                         + " image " + img.getWidth() + "x" + img.getHeight() + " stride " + img.getPlanes()[0].getRowStride()
-                        + ", used " + used + " B -> " + stream + " " + XiaomiLofic.rows(used, stream) + " rows (P679)");
+                        + ", used " + filled + " B -> " + stream + " " + rows + " rows (P679)");
             } else {
                 stream = XiaomiLofic.quick(b, s.rows);
                 used = stream == XiaomiLofic.Stream.LONG ? s.longBytes() : stream == XiaomiLofic.Stream.SHORT ? s.shortBytes() : 0;
@@ -166,6 +168,7 @@ final class XiaomiLoficReaders {
             // at 60 fps every second exposure is kept (both of its images: the second one finds the pair begun)
             final long gap = s.fps >= 50 ? 25_000_000L : 0L;
             if (!exact && gap > 0 && !pairs.has(ts) && ts - keptTs < gap) return;
+            if (used > b.capacity()) return;
             final XiaomiLofic.Pair done = pairs.store(stream, ts, b, used);
             if (done == null && stream != XiaomiLofic.Stream.NONE) keptTs = ts;
             if (done != null && exact && XiaomiLofic.onPair(done.longImage.rows, done.shortImage.rows, ts) == XiaomiLofic.Verdict.FAILED)
@@ -178,10 +181,9 @@ final class XiaomiLoficReaders {
     }
 
     /**
-     * A shot of a LOFIC session: the newest pairs before the press (ExposureCount 2: the Short read usable) as the shot's N
-     * frames, each Long frame unpacked (14 bit) with its Short read along (ImageFrame.lofic, merged by ScamProcessor before the
-     * burst merge). Without a pair of ExposureCount 2 the Long frames alone. Throws while the setup is not proven or the ring is
-     * empty (the shot is refused, as P316's empty ring).
+     * The newest pairs before the press: each Long frame unpacked (14 bit) with its Short read (ImageFrame.lofic).
+     * Without an ExposureCount 2 pair, ScamProcessor verifies the Short reads before merging them. Throws if the setup
+     * is not proven or the ring is empty.
      */
     Drained drain(int requested, long scamZslShutterTimestamp, Map<Long, Double> exposureByFrame) {
         final XiaomiLofic.Setup s = XiaomiLofic.setup();
@@ -192,11 +194,10 @@ final class XiaomiLoficReaders {
         final int want = Math.max(1, Math.min(requested > 0 ? requested : XiaomiLofic.PAIRS, XiaomiLofic.pairsWanted()));
         this.pairs.freeze();
         final String before = this.pairs.describe();
-        final boolean usable = this.pairs.usableCount() > 0;
-        final List<XiaomiLofic.Pair> pairs = usable ? this.pairs.take(want, scamZslShutterTimestamp)
-                : this.pairs.takeLongOnly(want, scamZslShutterTimestamp);
+        final List<XiaomiLofic.Pair> pairs = this.pairs.take(want, scamZslShutterTimestamp);
+        final boolean confirmed = !pairs.isEmpty() && pairs.get(0).usable();
         Log.i("SCAM_HDR", "XIAOMI LOFIC shot (" + s.label + "): " + pairs.size() + " of " + want + " pairs wanted"
-                + (usable ? " with ExposureCount 2" : " - no pair with ExposureCount 2: the Long frames ALONE") + "; ring " + before
+                + (confirmed ? " with ExposureCount 2" : " - Short reads require RAW verification") + "; ring " + before
                 + "; cutoff " + scamZslShutterTimestamp + " (P679)");
         if (pairs.isEmpty())
             throw new IllegalStateException(Lang.t("LOFIC: нет кадров. Повторите снимок.", "LOFIC: no frames yet. Take the shot again."));
@@ -212,10 +213,11 @@ final class XiaomiLoficReaders {
             f.setCaptureMetadata(p.result);
             f.width = XiaomiLofic.RAW_W;
             f.height = l.rows;
-            if (usable && p.shortImage != null) {
+            if (p.sameGrid()) {
                 f.lofic = new ImageFrame.Lofic();
                 f.lofic.shortPacked = p.shortImage.data;
                 f.lofic.rows = p.shortImage.rows;
+                f.lofic.verifyShort = !p.usable();
             }
             exposureByFrame.put(f.timestamp, f.measuredExposure > 0 && f.measuredIso > 0 ? f.measuredExposure / 1e9 * f.measuredIso : 1.0);
             out.add(f);

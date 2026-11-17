@@ -165,6 +165,77 @@ public class LoficMergeTest {
     }
 
     @Test
+    public void recoversHighlightsFromARaw10ReadWithoutExposureCount() {
+        final int w = 480, rows = 360;
+        final ByteBuffer l = ByteBuffer.allocateDirect(w * rows * 2).order(ByteOrder.nativeOrder());
+        final ByteBuffer s = ByteBuffer.allocateDirect(w * rows * 10 / 8);
+        final ByteBuffer duplicate = ByteBuffer.allocateDirect(s.capacity());
+        final double k = 1900;
+        final Random random = new Random(8);
+        for (int y = 0; y < rows; y++) {
+            for (int g = 0; g < w / 4; g++) {
+                final int[] sv = new int[4], dv = new int[4];
+                for (int i = 0; i < 4; i++) {
+                    final int x = 4 * g + i;
+                    final double t = x < 360 ? 400 + x * 39 : 5 * RANGE;
+                    final int code = (int) Math.min(16383, 1024 + t);
+                    l.putShort(2 * (y * w + x), (short) code);
+                    sv[i] = (int) Math.round(64 + t / k + 0.75 * random.nextGaussian());
+                    dv[i] = 64 + (int) Math.round((code - 1024) * 959 / RANGE);
+                }
+                com.scamera.app.capture.XiaomiLoficTest.pack10(s, y * w * 10 / 8 + g * 5, sv);
+                com.scamera.app.capture.XiaomiLoficTest.pack10(duplicate, y * w * 10 / 8 + g * 5, dv);
+            }
+        }
+        final com.scamera.app.capture.LoficPair.Measure proof = LoficMerge.measureShort(l, s, w, rows, BLACK, 16383);
+        final double measured = LoficMerge.verifiedRatio(proof, l, s, w, rows, BLACK, 16383);
+        assertEquals(proof.toString(), k, measured, 0.03 * k);
+        final com.scamera.app.capture.LoficPair.Measure copy = LoficMerge.measureShort(l, duplicate, w, rows, BLACK, 16383);
+        assertEquals(0, LoficMerge.verifiedRatio(copy, l, duplicate, w, rows, BLACK, 16383), 0);
+        final LoficMerge.Stats st = LoficMerge.merge(l, s, w, rows, measured, 1e-4f, 1e-7f,
+                LoficMerge.encoding(measured, BLACK, 16383), LoficMerge.BLEND_NOISE);
+        assertEquals(120L * rows, st.recovered);
+        assertTrue(st.maxLevel > 4);
+    }
+
+    @Test
+    public void adaptiveBlendRejectsMovingShadowsAndKeepsRealHighlights() {
+        final int w = 64, rows = 8;
+        final double k = 100;
+        final ByteBuffer standard = ByteBuffer.allocate(w * rows * 2).order(ByteOrder.nativeOrder());
+        final ByteBuffer adaptive = ByteBuffer.allocate(standard.capacity()).order(ByteOrder.nativeOrder());
+        final ByteBuffer shortRead = ByteBuffer.allocate(w * rows * 10 / 8);
+        for (int y = 0; y < rows; y++) {
+            for (int g = 0; g < w / 4; g++) {
+                final int zone = g / 4;
+                final double longLevel = zone == 0 ? 0.2 : zone == 1 ? 0.92 : 1;
+                final double shortLevel = zone == 0 ? 0.2 : zone == 1 ? 0.32 : zone == 2 ? 2.5 : 0.2;
+                final int raw = 1024 + (int) Math.round(RANGE * longLevel);
+                final int code = 64 + (int) Math.round(RANGE * shortLevel / k);
+                for (int i = 0; i < 4; i++) {
+                    final int at = 2 * (y * w + g * 4 + i);
+                    standard.putShort(at, (short) raw);
+                    adaptive.putShort(at, (short) raw);
+                }
+                com.scamera.app.capture.XiaomiLoficTest.pack10(shortRead, y * w * 10 / 8 + g * 5,
+                        new int[]{code, code, code, code});
+            }
+        }
+        final LoficMerge.Encoding encoding = LoficMerge.encoding(k, BLACK, 16383);
+        LoficMerge.merge(standard, shortRead, w, rows, k, 1e-4f, 1e-7f, encoding, LoficMerge.BLEND_NOISE);
+        final LoficMerge.Stats stats = LoficMerge.merge(adaptive, shortRead, w, rows, k, 1e-4f, 1e-7f,
+                encoding, LoficMerge.BLEND_ADAPTIVE);
+        assertEquals(standard.getShort(2 * 8), adaptive.getShort(2 * 8));
+        final double[] expected = {0.92, 2.5, 1};
+        for (int i = 0; i < expected.length; i++) {
+            final int x = 24 + 16 * i;
+            final double value = ((adaptive.getShort(2 * x) & 0xffff) - 1024) * encoding.g[0] / RANGE;
+            assertEquals(expected[i], value, 0.015);
+        }
+        assertEquals(16L * rows, stats.recovered);
+    }
+
+    @Test
     public void halfScalingIsExact() {
         for (int v = 0; v < 65536; v++) {
             final short h = (short) v;
@@ -183,6 +254,59 @@ public class LoficMergeTest {
         LoficMerge.scale(rgb, false, 6);
         assertEquals(32f, rgb.getFloat(0), 0f);
         assertEquals(64f, rgb.getFloat(4), 0f);
+    }
+
+    @Test
+    public void bulkHalfScalingMatchesScalarForEveryBitPattern() {
+        final int n = 1 << 16;
+        final ByteBuffer rgb = ByteBuffer.allocateDirect(n * 2 + 6).order(ByteOrder.nativeOrder());
+        rgb.putShort(0, (short) 0x1234).putShort(n * 2 + 4, (short) 0x5678);
+        rgb.position(4).limit(n * 2 + 4);
+        for (int exponent = 1; exponent <= 10; exponent++) {
+            for (int i = 0; i < n; i++) rgb.putShort(4 + 2 * i, (short) i);
+            LoficMerge.scale(rgb, true, exponent);
+            for (int i = 0; i < n; i++) assertEquals(LoficMerge.scaleHalf((short) i, exponent), rgb.getShort(4 + 2 * i));
+            assertEquals(4, rgb.position());
+            assertEquals(n * 2 + 4, rgb.limit());
+        }
+        rgb.clear();
+        assertEquals((short) 0x1234, rgb.getShort(0));
+        assertEquals((short) 0x5678, rgb.getShort(n * 2 + 4));
+    }
+
+    @Test
+    public void cfaPeakMatchesPixelwiseNormalization() {
+        final int[][] longCodes = {{1024, 9800, 16383, 12000}, {400, 16383, 4700, 16383}};
+        final int[][] shortCodes = {{74, 140, 630, 260}, {63, 621, 200, 1023}};
+        final ByteBuffer image = ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder());
+        final ByteBuffer shortRead = ByteBuffer.allocateDirect(10);
+        final double k = 1900;
+        final float slope = 2e-5f, offset = 1e-7f;
+        final LoficMerge.Encoding encoding = LoficMerge.encoding(k, new float[]{1024.5f, 1024, 1023.25f, 1021.75f}, 16383);
+        final long[] expected = new long[8];
+        double peak = 0;
+        for (int y = 0; y < longCodes.length; y++) {
+            com.scamera.app.capture.XiaomiLoficTest.pack10(shortRead, y * 5, shortCodes[y]);
+            for (int x = 0; x < longCodes[y].length; x++) {
+                final int site = 2 * y + (x & 1);
+                final int l = longCodes[y][x], s = shortCodes[y][x];
+                final double range = encoding.longWhite - encoding.black[site];
+                final double merged = LoficMerge.mergePixel(l - encoding.black[site], s - LoficMerge.SHORT_BLACK,
+                        l >= encoding.longWhite - 2, s >= LoficMerge.SHORT_WHITE - 2,
+                        k, slope * range, offset * range * range, range, LoficMerge.BLEND_NOISE);
+                peak = Math.max(peak, merged / range);
+                final long code = Math.round(encoding.black[site] + merged * (1.0 / encoding.g[site]));
+                expected[4 * y + x] = Math.max(0, Math.min(65535, code));
+                image.putShort((short) l);
+            }
+        }
+        image.flip();
+        final LoficMerge.Stats actual = LoficMerge.merge(image, shortRead, 4, 2, k, slope, offset, encoding, LoficMerge.BLEND_NOISE);
+        for (int i = 0; i < expected.length; i++) assertEquals(expected[i], image.getShort(2 * i) & 0xffff);
+        assertEquals(3, actual.longClipped);
+        assertEquals(2, actual.recovered);
+        assertEquals(1, actual.bothClipped);
+        assertEquals(peak, actual.maxLevel, 0);
     }
 
     // ---------------------------------------------------------------- the worker's host check (only with LOFIC_NCH_DIR)

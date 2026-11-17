@@ -177,13 +177,15 @@ public class EditDevelopFromTagsTest {
         assertNotNull(d);
         assertEquals(90, DevelopRun.parameters(d.record, DngFixtures.W, DngFixtures.H).rotationDeg);
         assertNull("not a DNG", EditDevelop.open("x.dng", write(new byte[]{'I', 'I', 42, 0, 8, 0, 0, 0, 0, 0, 0, 0})));
-        // a Quad / LinearRaw mosaic is refused by the tags alone
+        // Quad mosaics and third-party Linear DNGs are refused by the tags alone.
         DngRaw.Info info = DngRaw.probe(ByteBuffer.wrap(DngFixtures.bayer(ours())));
         assertNull(EditDevelop.refusal(info));
         info.cell = 2;
         assertNotNull(EditDevelop.refusal(info));
         info.cell = 1;
         info.kind = DngRaw.KIND_RGB;
+        assertNull("SCAMERA Linear DNGs can be developed from their tags", EditDevelop.refusal(info));
+        info.software = "Some RAW app 1.0";
         assertNotNull(EditDevelop.refusal(info));
     }
 

@@ -101,7 +101,11 @@ void main() {
 
     if (u_quad_speckle_strength > 0.001 || corner_boost > 0.01) {
         float L, a_val, b_val;
+#if OKLAB_CACHE == 2
+        cachedOklab(coord.x, coord.y, L, a_val, b_val);
+#else
         rgb_to_oklab(rgb, L, a_val, b_val);
+#endif
 
         if (u_quad_speckle_strength > 0.001) {
             float a_win[9]; float b_win[9];

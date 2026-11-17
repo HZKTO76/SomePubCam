@@ -131,3 +131,10 @@ add_library(scameraRaw SHARED scamera-raw.cpp)
 target_compile_options(scameraRaw PRIVATE -O2 -fexceptions -fvisibility=hidden)
 target_link_options(scameraRaw PRIVATE -Wl,--exclude-libs,ALL -Wl,--gc-sections)
 target_link_libraries(scameraRaw PRIVATE scameraLibRaw z log)
+
+set(SCAMERA_JNI_EXPORTS ${SRC_DIR}/scamera-jni-exports.map)
+foreach(jni_lib IN ITEMS dngCreator allocator camera2native scameraJpeg scameraAvif
+        scameraTone scameraYuv lanczosDownscale scameraRaw)
+    target_link_options(${jni_lib} PRIVATE "-Wl,--version-script=${SCAMERA_JNI_EXPORTS}")
+    set_property(TARGET ${jni_lib} APPEND PROPERTY LINK_DEPENDS ${SCAMERA_JNI_EXPORTS})
+endforeach()

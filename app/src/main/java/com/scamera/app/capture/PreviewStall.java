@@ -34,8 +34,13 @@ final class PreviewStall {
      * refuses request by request (Xiaomi 17 Ultra, «DCG+LOFIC» rung «lofic-pair», log 2026-11-14 11:18:25 / 11:24:39: every
      * frame's result and its three buffers lost at 20 fps, a black viewfinder the owner swiped away after 1.5 s - before the
      * 2.5 s stall limit). About half a second of frames.
+     * <p>
+     * P719 (Xiaomi 17 Ultra, «DCG+LOFIC» setups 4:3+row and 4:3+row+yuv, build 4ed084d3, log 2026-11-14 19:26:56 / 19:27:53): the
+     * HAL failed the results and every buffer of only 7 requests (5 of them within 12 ms), then stopped answering at all - 8 was
+     * never reached, the viewfinder froze until the 3 s stall limit and the close then took the HAL 7.9 s. 5 catches both sessions
+     * at their first burst.
      */
-    static final int REFUSED_REQUESTS = 8;
+    static final int REFUSED_REQUESTS = 5;
 
     /**
      * P700: the session's requests are refused: {@code failedInARow} failed requests (error, not flushed) since the last

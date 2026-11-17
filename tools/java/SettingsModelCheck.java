@@ -349,7 +349,8 @@ public class SettingsModelCheck {
         if(new SettingsAvailability(lu).mosaicStreams(false).reason("pref_scam_hybrid_bento_sigma")==null)throw new AssertionError("highlight kernel live without a mosaic");
         eq(SettingsNumericRules.value("pref_scam_hybrid_bento_chroma_sigma","0",2),0.5);
         // settings audit 2026-10-21: post rows the other settings leave out (the recovery, the WHY detail, the strength map, AgX)
-        Map<String,Object> po=new HashMap<>();active(po,"pref_scam_hybrid_highlight_band");active(po,"pref_scam_hybrid_highlight_glow");active(po,"pref_scam_hybrid_why_clarity");
+        Map<String,Object> po=new HashMap<>();inactive(po,"pref_scam_hybrid_why_clarity"); // P721: V2 by default, a V1 row inactive
+        po.put("pref_scam_hybrid_tone_version","v1");active(po,"pref_scam_hybrid_highlight_band");active(po,"pref_scam_hybrid_highlight_glow");active(po,"pref_scam_hybrid_why_clarity");
         active(po,"pref_scam_hybrid_bento_denoise_max");active(po,"pref_scam_hybrid_why_ccm_sat");
         po.put("pref_scam_hybrid_highlight_recovery","0");inactive(po,"pref_scam_hybrid_highlight_band");inactive(po,"pref_scam_hybrid_highlight_glow");inactive(po,"pref_scam_hybrid_highlight_defringe");
         po.put("pref_scam_hybrid_why_sharp_gain","0");inactive(po,"pref_scam_hybrid_why_clarity");inactive(po,"pref_scam_hybrid_why_flat_protect");

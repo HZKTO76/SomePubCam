@@ -613,7 +613,9 @@ public class ScamLabFragment extends ModuleConceptFragment {
         if (r == null) {
             waiting(errorOf(job), Lang.t(getContext(), "Подготовка…", "Preparing…"));
         } else {
-            final String aText = Lang.t(getContext(), "A · тогда (фото снимка)", "A · then (the shot's photo)"), bText = Lang.t(getContext(), "B · сейчас", "B · now");
+            final String aText = r.performanceReplay ? Lang.t(getContext(), "A · эталон", "A · reference")
+                    : Lang.t(getContext(), "A · тогда (фото снимка)", "A · then (the shot's photo)");
+            final String bText = r.performanceReplay ? Lang.t(getContext(), "B · эксперимент", "B · experiment") : Lang.t(getContext(), "B · сейчас", "B · now");
             LabCompareView compare = new LabCompareView(requireContext());
             compare.setTag("lab_compare_view");
             compare.setAccent(accent);
@@ -639,8 +641,13 @@ public class ScamLabFragment extends ModuleConceptFragment {
                 sides.addView(b[i], lp);
             }
             body.addView(sides, space(-1, -2, 8));
-            explain(Lang.t(getContext(), "A — фото, которое сохранила версия приложения при съёмке (не больше 1600 пикселей по стороне, поэтому на фрагменте оно мягче). B — та же серия сейчас: склейка " + r.b.mergeMs + " мс, обработка " + r.b.postMs + " мс.",
-                    "A is the photo the app's version saved at the shot (at most 1600 px a side, so softer on a fragment). B is the same series now: merge " + r.b.mergeMs + " ms, processing " + r.b.postMs + " ms."));
+            if (r.performanceReplay) {
+                explain(Lang.t(getContext(), "Склейка + обработка", "Merge + processing") + "\nA · " + r.a.mergeMs + " + "
+                        + r.a.postMs + " ms\nB · " + r.b.mergeMs + " + " + r.b.postMs + " ms\nPERF_VERIFY");
+            } else {
+                explain(Lang.t(getContext(), "A — фото, которое сохранила версия приложения при съёмке (не больше 1600 пикселей по стороне, поэтому на фрагменте оно мягче). B — та же серия сейчас: склейка " + r.b.mergeMs + " мс, обработка " + r.b.postMs + " мс.",
+                        "A is the photo the app's version saved at the shot (at most 1600 px a side, so softer on a fragment). B is the same series now: merge " + r.b.mergeMs + " ms, processing " + r.b.postMs + " ms."));
+            }
             if (busy) note(runStage == null ? Lang.t(getContext(), "Пересчёт…", "Updating…") : runStage);
         }
     }

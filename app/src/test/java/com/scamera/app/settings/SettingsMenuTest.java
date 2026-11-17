@@ -627,6 +627,7 @@ public class SettingsMenuTest {
     }
 
     @Test public void nestedWhyTonePageOpensWithoutParentDependency() {
+        prefs.edit().putString("pref_scam_hybrid_tone_version","v1").commit(); // the metering row below is V1's (P721: V2 is the default)
         try(var controller=org.robolectric.Robolectric.buildActivity(
                 com.scamera.app.ui.settings.SettingsActivity.class)) {
             controller.setup();var activity=controller.get();var fm=activity.getSupportFragmentManager();
@@ -894,7 +895,7 @@ public class SettingsMenuTest {
 
     /** P134: a grading zone's hue acts only with its strength; the AgX saturation only with the «Custom» AgX look. */
     @Test public void colourRowsSayWhenTheyAct(){
-        java.util.Map<String,Object> v=new java.util.HashMap<>();
+        java.util.Map<String,Object> v=new java.util.HashMap<>();v.put("pref_scam_hybrid_tone_version","v1"); // V1's rows (P721: V2 is the default)
         assertNotNull(new SettingsAvailability(v).reason("pref_scam_hybrid_colour_grade_highlights_hue"));
         v.put("pref_scam_hybrid_colour_grade_highlights_str","30");
         assertNull(new SettingsAvailability(v).reason("pref_scam_hybrid_colour_grade_highlights_hue"));
@@ -970,8 +971,8 @@ public class SettingsMenuTest {
         assertEquals("pref_scam_hybrid_why_uchi_on",root.findPreference("pref_scam_hybrid_why_uchi_m").getDependency());
         assertTrue(root.findPreference("pref_scam_hybrid_why_curve_points") instanceof com.scamera.app.ui.settings.custompreferences.ToneCurvePreference);
         assertEquals("pref_scam_hybrid_why_curve_on",root.findPreference("pref_scam_hybrid_why_curve_points").getDependency());
-        // AgX's rows tell which operator works instead
-        java.util.Map<String,Object> values=new java.util.HashMap<>();
+        // AgX's rows tell which operator works instead (V1's look row; P721: V2 is the default)
+        java.util.Map<String,Object> values=new java.util.HashMap<>();values.put("pref_scam_hybrid_tone_version","v1");
         assertNull(new SettingsAvailability(values).reason("pref_scam_hybrid_why_agx_look"));
         values.put("pref_scam_hybrid_why_uchi_on",true);
         String why=new SettingsAvailability(values).reason("pref_scam_hybrid_why_agx_look");
@@ -1770,7 +1771,7 @@ public class SettingsMenuTest {
                 keys(screen.findPreference("scam_hybrid_merge_frames_category")));
         // P629: «Шумоподавление и склейка» - the denoise groups of the former «Шумоподавление», then the merge groups of the former
         // «Склейка», each in its order (P644: «Статика»'s group after the frames is gone with the route)
-        assertEquals(Arrays.asList("scam_hybrid_nr_merge_category","scam_hybrid_resolve_optics_category",
+        assertEquals(Arrays.asList("pref_scam_hybrid_highlight_merge","scam_hybrid_nr_merge_category","scam_hybrid_resolve_optics_category",
                 "scam_hybrid_ms_general_category","scam_hybrid_ms_luma_category","scam_hybrid_ms_chroma_category",
                 "scam_hybrid_merge_frames_category","scam_hybrid_yuv_category","scam_hybrid_merge_align_category","scam_hybrid_merge_reject_category",
                 "scam_hybrid_merge_kernel_category","scam_hybrid_merge_quad_category","scam_hybrid_merge_final_category"),
@@ -1784,7 +1785,7 @@ public class SettingsMenuTest {
         // «Лаборатория» (P277: a row that opens ScamLabFragment, no page of its own), «Логи», «О приложении»
         assertEquals(Arrays.asList("scam_lab_screen"),keys(screen.findPreference("root_lab")));
         assertEquals(0,((PreferenceScreen)screen.findPreference("scam_lab_screen")).getPreferenceCount());
-        assertEquals(Arrays.asList("scam_diagnostics_screen","camera_package_spoof_screen","developer_settings_screen","pref_root_enabled"),
+        assertEquals(Arrays.asList("scam_diagnostics_screen","camera_package_spoof_screen","developer_settings_screen"),
                 keys(screen.findPreference("root_logs")));
         // rows removed: the module hub (P384), the LUT link, empty containers; P406: the SHDR wrapper, «Другие тонкие настройки» and the
         // groups the reference app does not have

@@ -119,7 +119,7 @@ public final class WhyTone {
         WhyAe.Settings s = new WhyAe.Settings();
         s.aeTarget = value("ae_target", 0.15f);
         s.maxBoost = value("ae_max_boost", 5.0f);
-        s.minLimit = Math.min(value("ae_min_limit", 0.5f), s.maxBoost);
+        s.minLimit = Math.min(value("ae_min_limit", 1f), s.maxBoost); // P721: the owner's config arkburial_stable_v6
         s.hlOverflow = value("hl_overflow", 2.0f);
         // P402: the share of the frame's exposure kept above the highlight overflow's limit (the reference app's ae_hl_blend)
         s.hlBlend = Math.max(0f, Math.min(1f, value("hl_blend", 0.5f)));

@@ -980,6 +980,24 @@ public final class SettingsMigration {
             e.putInt(CCT_SAT_REV, 1);
             markOnly = true;
         }
+        // P721 (owner, 2026-11-15, config arkburial_stable_v6: «обнови наши дефолтные настройки светотени ... и включи V2 тонмапинг по
+        // дефолту»): as P513 - a stored former default moves to the new one once (AE «Мин. предел» 0.5 -> 1, «Why тон» V1 -> V2), a
+        // value chosen by hand stays
+        if (!values.containsKey(CONFIG_V6_REV)) {
+            final String minKey = ScamHybridKeys.PREFIX + "why_ae_min_limit";
+            final Object v = values.get(minKey);
+            if (v != null && isNumber(v, 0.5f)) {
+                ModuleProfiles.put(e, minKey, v instanceof String ? PreferenceNumber.format(1f, true) : (Object) 1f);
+                changed = true;
+            }
+            final String toneKey = ScamHybridKeys.PREFIX + "tone_version";
+            if ("v1".equals(values.get(toneKey))) {
+                e.putString(toneKey, "v2");
+                changed = true;
+            }
+            e.putInt(CONFIG_V6_REV, 1);
+            markOnly = true;
+        }
         // P614 (owner, 2026-11-11: V1 and V2 on one page «Настройки изображения»): V2's rows that became V1's (WhyV2Stats.MERGED)
         // leave their pref_scam_hybrid_why_v2_* keys once; a value set off V2's default (setDefaultValues stored the defaults too)
         // goes to the merged row where that row still holds V1's default; V2's tone operator becomes V1's three switches
@@ -1210,6 +1228,9 @@ public final class SettingsMigration {
 
     /** P615: marker of the one-time move of the fringe net's light floor 0.12 to 0.05. */
     static final String FRINGE_LIGHT_REV = "pref_scam_hybrid_fringe_light_rev";
+
+    /** P721: marker of the one-time move to the owner's config arkburial_stable_v6 (AE min limit 1, «Why тон» V2). */
+    static final String CONFIG_V6_REV = "pref_scam_hybrid_config_v6_rev";
 
     /** P407: marker of the one-time move of the matrix saturation 1.25 to 1.1. */
     static final String CCT_SAT_REV = "pref_scam_hybrid_cct_sat_rev";

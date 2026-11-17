@@ -85,6 +85,43 @@ int main() {
             assert(std::fabs(float(m[size_t(y) * w + x]) - want) <= 1.f);
         }
     }
+    for (int scaledW : {w * 3 / 2, w * 2}) {
+        const int scaledH = h * scaledW / w;
+        for (int cfa = 0; cfa < 4; ++cfa) {
+            HybridInput scaled = input(0.125f);
+            scaled.cfa = cfa;
+            scaled.mergedDng = true;
+            scaled.black = {32.f, 48.f, 64.f, 80.f};
+            float measuredCeiling = 0.f;
+            std::vector<uint16_t> mosaic;
+            assert(hybridWriteSensorDng(scaled, &mosaic)); // 1x still writes its merged RAW
+            scaled.sabreDngCeiling = &measuredCeiling;
+            assert(!hybridWriteSensorDng(scaled, &mosaic));
+            assert(measuredCeiling == 8.f && mosaic.empty());
+
+            std::vector<float> rgb(size_t(scaledW) * scaledH * 3);
+            for (int y = 0; y < scaledH; ++y)
+                for (int x = 0; x < scaledW; ++x)
+                    for (int c = 0; c < 3; ++c)
+                        rgb[(size_t(y) * scaledW + x) * 3 + c] = 0.125f * (1 + c + (x + y) % 5);
+            rgb[0] = rgb[1] = rgb[2] = 12.f;
+            for (int block : {1, 2, 4}) {
+                const float headroom = hybridWriteSabreDng(mosaic, scaledW, scaledH, scaled, rgb, false, block, measuredCeiling);
+                assert(headroom == 8.f && mosaic.size() == size_t(scaledW) * scaledH && mosaic[0] == 65535);
+                for (int y = 0; y < scaledH; ++y)
+                    for (int x = y == 0 ? 1 : 0; x < scaledW; ++x) {
+                        const size_t i = size_t(y) * scaledW + x;
+                        const int site = (((y / block) & 1) << 1) | ((x / block) & 1);
+                        const int phase = site ^ cfa;
+                        const int channel = phase == 0 ? 0 : phase == 3 ? 2 : 1;
+                        const float black = scaled.black[site];
+                        const float expected = (black + rgb[3 * i + channel] / headroom * (scaled.white - black))
+                                * (65535.f / scaled.white);
+                        assert(mosaic[i] == std::lround(expected));
+                    }
+            }
+        }
+    }
     std::printf("check_dng_ceiling: OK\n");
     return 0;
 }

@@ -4,12 +4,21 @@ import android.os.Build;
 
 import com.scamera.app.processing.color.DngColour;
 import com.scamera.app.processing.render.Parameters;
+import com.scamera.app.settings.PreferenceKeys;
 import com.scamera.app.util.DeviceName;
 import com.scamera.app.util.Log;
 
+import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.util.Arrays;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * One DNG file of a shot, built by the native writer (library dngCreator, dngCreator.cpp): {@link #setParameters} hands it
@@ -37,7 +46,7 @@ public class DngCreator {
     /** EXIF Orientation of the sensor rotation in quarter turns (0, 90, 180, 270 degrees); 0 for any other step. */
     private static final int[] ORIENTATION_OF_QUARTER = {1, 6, 3, 8};
 
-    private static native long nOpen();
+    private static native long nOpen(boolean linear);
     private static native void nClose(long file);
     private static native void nNumber(long file, int field, double value);
     private static native void nVector(long file, int field, double[] values);
@@ -57,6 +66,11 @@ public class DngCreator {
     private static native ByteBuffer nStrip(long file);
     private static native byte[] nTail(long file);
     private static native boolean nLossless(long file);
+    private static native float nLinearHeadroom(ByteBuffer rgb, boolean half);
+    private static native byte[] nLinearLayout(long file, int width, int height, int rows, boolean compressed);
+    private static native boolean nLinearStrip(ByteBuffer rgb, boolean half, int width, int firstRow, int rows,
+                                               float headroom, ByteBuffer strip, int storedRows);
+    private static native int nLinearCompress(ByteBuffer strip, int width, int rows, byte[] output);
 
     static {
         System.loadLibrary("dngCreator");
@@ -65,7 +79,11 @@ public class DngCreator {
     private long file;
 
     public DngCreator() {
-        file = nOpen();
+        this(false);
+    }
+
+    DngCreator(boolean linear) {
+        file = nOpen(linear);
         if (file == 0) throw new RuntimeException("DNG writer not created");
     }
 
@@ -191,6 +209,155 @@ public class DngCreator {
         writtenBytes = (long) head.length + strip.capacity() + tail.length;
         Log.i("PERF", "DNG written: " + (writtenBytes >> 10) + " KB, " + width + "x" + height + (nLossless(file) ? " lossless JPEG" : " 16-bit")
                 + ", layout " + (t1 - t0) / 1_000_000 + " ms, write " + (System.nanoTime() - t1) / 1_000_000 + " ms, streamed (no file in memory)");
+    }
+
+    /** Writes the merge's 16-bit camera RGB in bounded TIFF tiles or strips. */
+    void writeLinearBuffer(OutputStream out, ByteBuffer rgb, int width, int height,
+                           boolean half, float headroom, boolean lossless) throws IOException {
+        if (!(out instanceof ChannelSink) || !(((ChannelSink) out).channel instanceof FileChannel))
+            throw new IOException("Linear DNG requires a seekable file");
+        final long started = System.nanoTime();
+        final FileChannel channel = (FileChannel) ((ChannelSink) out).channel;
+        final long rowBytesLong = 6L * width;
+        if (width <= 0 || width > 65520 || height <= 0
+                || (long) rgb.remaining() / height != rowBytesLong * (half ? 1 : 2)
+                || (long) rgb.remaining() % height != 0)
+            throw new IOException("Linear DNG: wrong RGB dimensions");
+        // TIFF tiles must be multiples of 16. Store narrow or unaligned rows as uncompressed strips.
+        final boolean compress = lossless && (width & 15) == 0;
+        final int rowBytes = (int) rowBytesLong;
+        final int rows = compress
+                ? Math.max(16, Math.min((height + 15) & ~15, (STREAM_PIECE / rowBytes) & ~15))
+                : Math.min(height, Math.max(1, STREAM_PIECE / rowBytes));
+        final int strips = (height - 1) / rows + 1;
+        final byte[] bytes = nLinearLayout(file, width, height, rows, compress);
+        if (bytes == null) throw new IOException("Linear DNG: metadata could not be written");
+        final ByteBuffer header = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        final int offsets = stripTable(header, compress ? 324 : 273, strips);
+        final int counts = stripTable(header, compress ? 325 : 279, strips);
+        final ByteBuffer source = rgb.slice();
+        final ByteBuffer strip = ByteBuffer.allocateDirect(rows * rowBytes);
+        final byte[] coded = compress ? new byte[4 * strip.capacity() + 4096] : null;
+        final boolean parallel = compress && strips > 1 && strip.capacity() <= STREAM_PIECE && (long) width * height <= 16_000_000L
+                && Runtime.getRuntime().availableProcessors() >= 4 && PreferenceKeys.scamDevSwitch("dng_linear_parallel", false);
+        channel.position(bytes.length);
+        final boolean parallelUsed;
+        try (LinearStripWorker worker = parallel ? LinearStripWorker.create(strip.capacity(), coded.length) : null) {
+            parallelUsed = worker != null;
+            Future<Integer> pending = null;
+            for (int y = 0, index = 0; y < height; index++) {
+                final int h = Math.min(rows, height - y);
+                final long start = channel.position();
+                if (pending != null) {
+                    out.write(worker.coded, 0, worker.result(pending));
+                    pending = null;
+                } else if (coded != null) {
+                    final int next = y + h;
+                    if (worker != null && next < height) {
+                        pending = worker.executor.submit(() -> compressLinearStrip(source, half, width, next,
+                                Math.min(rows, height - next), headroom, rows, worker.strip, worker.coded));
+                    }
+                    out.write(coded, 0, compressLinearStrip(source, half, width, y, h, headroom, rows, strip, coded));
+                } else {
+                    if (!nLinearStrip(source, half, width, y, h, headroom, strip, h))
+                        throw new IOException("Linear DNG: invalid RGB strip");
+                    strip.clear().limit(h * rowBytes);
+                    while (strip.hasRemaining()) channel.write(strip);
+                }
+                final long end = channel.position();
+                if (end > 0xffffffffL) throw new IOException("Linear DNG exceeds classic TIFF offsets");
+                header.putInt(offsets + 4 * index, (int) start);
+                header.putInt(counts + 4 * index, (int) (end - start));
+                y += h;
+            }
+        }
+        writtenBytes = channel.position();
+        channel.position(0);
+        out.write(bytes);
+        Log.i("PERF", "Linear DNG written: " + (writtenBytes >> 10) + " KB, " + width + "x" + height
+                + (compress ? ", lossless JPEG" : ", uncompressed") + ", " + (parallelUsed ? 2 : 1) + " worker(s), "
+                + (System.nanoTime() - started) / 1_000_000 + " ms");
+    }
+
+    private static int compressLinearStrip(ByteBuffer source, boolean half, int width, int y, int h, float headroom,
+                                           int rows, ByteBuffer strip, byte[] coded) throws IOException {
+        if (!nLinearStrip(source, half, width, y, h, headroom, strip, rows))
+            throw new IOException("Linear DNG: invalid RGB strip");
+        final int n = nLinearCompress(strip, width, rows, coded);
+        if (n <= 0) throw new IOException("Linear DNG: lossless JPEG failed");
+        return n;
+    }
+
+    /** One additional strip, compressed beside the caller. The caller alone writes the file in strip order. */
+    private static final class LinearStripWorker implements AutoCloseable {
+        final ByteBuffer strip;
+        final byte[] coded;
+        final ExecutorService executor;
+
+        private LinearStripWorker(int stripBytes, int codedBytes) {
+            strip = ByteBuffer.allocateDirect(stripBytes);
+            coded = new byte[codedBytes];
+            executor = Executors.newSingleThreadExecutor(task -> {
+                final Thread thread = new Thread(task, "SCAMERA-linear-dng");
+                thread.setPriority(Thread.NORM_PRIORITY - 1);
+                return thread;
+            });
+        }
+
+        static LinearStripWorker create(int stripBytes, int codedBytes) {
+            try {
+                return new LinearStripWorker(stripBytes, codedBytes);
+            } catch (OutOfMemoryError e) {
+                Log.i("PERF", "Linear DNG: parallel scratch unavailable, sequential strips");
+                return null;
+            }
+        }
+
+        int result(Future<Integer> pending) throws IOException {
+            try {
+                return pending.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Linear DNG: interrupted", e);
+            } catch (ExecutionException e) {
+                throw new IOException("Linear DNG: lossless JPEG worker failed", e.getCause());
+            }
+        }
+
+        @Override
+        public void close() {
+            executor.shutdown();
+            boolean interrupted = false;
+            // The caller frees the source after this returns, even if writing to the channel failed.
+            try {
+                while (true) {
+                    try {
+                        if (executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) return;
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    public static float linearHeadroom(ByteBuffer rgb, boolean half) {
+        return nLinearHeadroom(rgb.slice(), half);
+    }
+
+    private static int stripTable(ByteBuffer header, int tag, int strips) throws IOException {
+        final int ifd = header.getInt(4), entries = header.getShort(ifd) & 0xffff;
+        for (int i = 0; i < entries; i++) {
+            final int entry = ifd + 2 + i * 12;
+            if ((header.getShort(entry) & 0xffff) == tag && header.getShort(entry + 2) == 4
+                    && header.getInt(entry + 4) == strips) {
+                final int table = strips == 1 ? entry + 8 : header.getInt(entry + 8);
+                if (table >= 8 && table + 4L * strips <= header.capacity()) return table;
+            }
+        }
+        throw new IOException("Linear DNG: missing TIFF strip table " + tag);
     }
 
     /** P681: the three parts of a laid-out file, in order; the strip in place through a {@link ChannelSink}, else in pieces. */

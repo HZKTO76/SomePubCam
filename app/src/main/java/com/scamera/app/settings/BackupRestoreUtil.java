@@ -134,7 +134,7 @@ public class BackupRestoreUtil {
     private static String appVersion(Context context) {
         try {
             android.content.pm.PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
-            return info.versionName + " (" + info.getLongVersionCode() + ")";
+            return info.versionName + " (" + androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info) + ")";
         } catch (Exception e) {
             return "unknown";
         }

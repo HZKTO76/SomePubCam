@@ -48,11 +48,11 @@ public final class GLDeferredDraw {
         int program;
         final int[] tex2d = new int[UNITS], tex3d = new int[UNITS];
         final int[] ssbo = new int[BUFFERS];
-        boolean ssboKnown;
+        int ssboCount, genericSsbo;
         int activeUnit;
         int framebuffer;
 
-        static State capture() {
+        static State capture(boolean reuse) {
             final State s = new State();
             final int[] v = new int[1];
             GLES30.glGetIntegerv(GLES30.GL_CURRENT_PROGRAM, v, 0);
@@ -77,7 +77,11 @@ public final class GLDeferredDraw {
                 }
                 if (GLES30.glGetError() != GLES30.GL_NO_ERROR) break; // GL ES 3.0: no storage buffers (none used)
                 s.ssbo[b] = v[0];
-                s.ssboKnown = true;
+                s.ssboCount++;
+            }
+            if (reuse && s.ssboCount != 0) {
+                GLES30.glGetIntegerv(GLES31.GL_SHADER_STORAGE_BUFFER_BINDING, v, 0);
+                s.genericSsbo = v[0];
             }
             GLES30.glGetIntegerv(GLES30.GL_DRAW_FRAMEBUFFER_BINDING, v, 0);
             s.framebuffer = v[0];
@@ -93,8 +97,32 @@ public final class GLDeferredDraw {
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, tex3d[u]);
             }
             GLES30.glActiveTexture(activeUnit);
-            if (ssboKnown) for (int b = 0; b < BUFFERS; b++) GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, b, ssbo[b]);
+            for (int b = 0; b < ssboCount; b++) GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, b, ssbo[b]);
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer);
+        }
+
+        /** Applies differences between the two known states without moving the output's read framebuffer. */
+        void restoreFrom(State previous) {
+            if (program != previous.program) GLES30.glUseProgram(program);
+            int active = previous.activeUnit;
+            final int n = units();
+            for (int u = 0; u < n; u++) {
+                final boolean bind2d = tex2d[u] != previous.tex2d[u];
+                final boolean bind3d = tex3d[u] != previous.tex3d[u];
+                if (!bind2d && !bind3d) continue;
+                final int unit = GLES30.GL_TEXTURE0 + u;
+                if (active != unit) GLES30.glActiveTexture(unit);
+                active = unit;
+                if (bind2d) GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex2d[u]);
+                if (bind3d) GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, tex3d[u]);
+            }
+            if (activeUnit != active) GLES30.glActiveTexture(activeUnit);
+            // Keep the reference's indexed bindings. Each glBindBufferBase also sets the generic binding.
+            if (ssboCount != 0) {
+                for (int b = 0; b < ssboCount; b++) GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, b, ssbo[b]);
+                if (genericSsbo != ssbo[ssboCount - 1]) GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, genericSsbo);
+            }
+            if (framebuffer != previous.framebuffer) GLES30.glBindFramebuffer(GLES30.GL_DRAW_FRAMEBUFFER, framebuffer);
         }
 
         boolean binds(int texture) {
@@ -116,6 +144,7 @@ public final class GLDeferredDraw {
     private final String pass;
     private final int attribute;
     private final int width, height;
+    private final boolean reuseState;
     /** Lines drawn so far: rows, or columns once a request asked for columns (then every later one does). */
     private boolean[] drawn;
     private boolean columns;
@@ -123,13 +152,16 @@ public final class GLDeferredDraw {
     private final ArrayList<GLTexture> held = new ArrayList<>();
     private final ArrayList<Runnable> laterRuns = new ArrayList<>();
     long bands, drawnPixels;
+    private long stateNs;
+    private int stateCaptures, reusedTiles;
 
-    private GLDeferredDraw(GLProg prog, State state, GLTexture target, String pass, int attribute) {
+    private GLDeferredDraw(GLProg prog, State state, GLTexture target, String pass, int attribute, boolean reuseState) {
         this.prog = prog;
         this.state = state;
         this.target = target;
         this.pass = pass;
         this.attribute = attribute;
+        this.reuseState = reuseState;
         this.width = target.size.x;
         this.height = target.size.y;
     }
@@ -151,8 +183,9 @@ public final class GLDeferredDraw {
         ARMED.remove();
         target.ensureFramebuffer();
         target.bindFramebuffer();
-        final State s = State.capture();
-        final GLDeferredDraw d = new GLDeferredDraw(prog, s, target, prog.activeName, prog.positionAttribute());
+        final boolean reuse = com.scamera.app.settings.PreferenceKeys.scamDevSwitch("post_stream_gl_state", false);
+        final State s = State.capture(reuse);
+        final GLDeferredDraw d = new GLDeferredDraw(prog, s, target, prog.activeName, prog.positionAttribute(), reuse);
         PENDING.set(d);
         return true;
     }
@@ -161,7 +194,7 @@ public final class GLDeferredDraw {
      * Lines [{@code from}, {@code to}) of the target drawn where they are not yet (rows, or columns with {@code columnLines}), in
      * bands sized as GLProg.drawBlocks sizes them; the GL state of the caller is put back after.
      */
-    public void lines(boolean columnLines, int from, int to) {
+    void lines(boolean columnLines, int from, int to, State outputState) {
         if (drawn == null) {
             columns = columnLines;
             drawn = new boolean[columns ? width : height];
@@ -173,9 +206,14 @@ public final class GLDeferredDraw {
         from = Math.max(0, from);
         to = Math.min(drawn.length, to);
         if (from >= to || drawnCount == drawn.length) return;
-        final State caller = State.capture();
+        final long start = System.nanoTime();
+        final State caller = outputState == null ? State.capture(false) : outputState;
+        if (outputState == null) stateCaptures++;
+        else reusedTiles++;
         try {
-            state.restore();
+            if (outputState == null) state.restore();
+            else state.restoreFrom(caller);
+            stateNs += System.nanoTime() - start;
             final int across = columns ? height : width;
             int i = from;
             while (i < to) {
@@ -187,8 +225,7 @@ public final class GLDeferredDraw {
                     if (columns) GLES30.glViewport(at, 0, n, height);
                     else GLES30.glViewport(0, at, width, n);
                     prog.drawQuad(attribute);
-                    GLES30.glFlush();
-                    GpuPace.submitted(pass, (long) across * n);
+                    GpuPace.flushBlock(pass, (long) across * n);
                     for (int k = at; k < at + n; k++) drawn[k] = true;
                     drawnCount += n;
                     bands++;
@@ -198,13 +235,26 @@ public final class GLDeferredDraw {
                 i = end;
             }
         } finally {
-            caller.restore();
+            final long restore = System.nanoTime();
+            if (outputState == null) caller.restore();
+            else caller.restoreFrom(state);
+            stateNs += System.nanoTime() - restore;
         }
+    }
+
+    /** The output loop keeps these bindings stable between deferred draws. Null selects the reference path. */
+    State captureOutputState() {
+        if (!reuseState) return null;
+        final long start = System.nanoTime();
+        final State output = State.capture(true);
+        stateNs += System.nanoTime() - start;
+        stateCaptures++;
+        return state.ssboCount == output.ssboCount ? output : null;
     }
 
     /** Every line not drawn yet (before any other reader of the target), the caller's GL state put back. */
     public void drawAll() {
-        lines(columns, 0, drawn == null ? height : drawn.length);
+        lines(columns, 0, drawn == null ? height : drawn.length, null);
     }
 
     /** The draw is complete (or given up): the textures and buffers the node closed meanwhile are closed now. */
@@ -250,7 +300,8 @@ public final class GLDeferredDraw {
     }
 
     public String describe() {
-        return pass + " " + width + "x" + height + " in " + bands + " " + (columns ? "column" : "row") + " bands beside the output tiles";
+        return pass + " " + width + "x" + height + " in " + bands + " " + (columns ? "column" : "row") + " bands beside the output tiles"
+                + " (state_us=" + stateNs / 1000 + " captures=" + stateCaptures + " reused_tiles=" + reusedTiles + ")";
     }
 
     /** GLTexture.close's question: true when the texture is one the recorded draw reads or writes (it is closed after the draw). */

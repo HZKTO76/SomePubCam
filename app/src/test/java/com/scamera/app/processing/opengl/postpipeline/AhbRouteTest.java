@@ -39,7 +39,8 @@ public class AhbRouteTest {
         assertTrue("16 MP, no merged DNG", route.contains("outputPixels <= ScamHybridBurst.CLASSIC_INPUT_PIXELS && !mergedDng"));
         assertTrue("fast merge only", route.contains("tuningValue(tuning, \"fastMerge\") > 0"));
         final String client = source("java/com/scamera/app/processing/opengl/postpipeline/ScamNeuralClient.java");
-        assertTrue("direct worker only", client.contains("ahbWanted=direct&&AhbRoute.wanted("));
+        assertTrue("worker is launched by the app", client.contains("process=com.scamera.app.util.WorkerSpawn.start(context,args,"));
+        assertTrue("AHB eligibility is checked", client.contains("ahbWanted=AhbRoute.wanted("));
         assertTrue("answer decides", client.contains("ahb.answer(200)==AhbRoute.IN_BUFFER"));
         assertTrue("memfd layout without the RGB only then", client.contains("final long expected=rgbInAhb?0:rgbBytes;"));
         assertTrue("socket closed with the job", client.contains("if(ahb!=null)ahb.close();"));

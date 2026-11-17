@@ -66,11 +66,7 @@ final class NoiseMath {
         int[] valid = new int[count];
         int n = 0;
         for (int i = 0; i < count; i++) {
-            int o = 8 * i;
-            float y = blocks[o];
-            boolean ok = y > 1e-5f && y < clip && blocks[o + 2] > 0f;
-            for (int k = 1; k < 8 && ok; k++) ok = Float.isFinite(blocks[o + k]);
-            if (ok) valid[n++] = i;
+            if (validBlock(blocks, 8 * i, clip)) valid[n++] = i;
         }
         if (n < 16) return null;
         // Shot speed: the two stable sorts of reduceLegacy (boxed Integer[] with a Float.compare lambda) as sorts of primitive
@@ -110,6 +106,30 @@ final class NoiseMath {
         return out;
     }
 
+    /** The finish SNR only reads gY1. Its median needs the same quarter of blocks in any order. */
+    static float[] reduceLuma(float[] blocks, int count, float clip) {
+        final long[] keys = new long[count];
+        int n = 0;
+        for (int i = 0; i < count; i++) {
+            final int o = 8 * i;
+            // Original block indices break texture ties in the same order as compacted valid indices.
+            if (validBlock(blocks, o, clip)) keys[n++] = ((long) sortableBits(blocks[o + 1]) << 32) | i;
+        }
+        if (n < 16) return null;
+        final int m = Math.max(16, n / 4);
+        selectSmallest(keys, n, m);
+        final int[] gains = new int[m];
+        for (int i = 0; i < m; i++) gains[i] = sortableBits(blocks[8 * (int) keys[i] + 2]);
+        return new float[]{medianKeys(gains, m)};
+    }
+
+    private static boolean validBlock(float[] blocks, int o, float clip) {
+        final float y = blocks[o];
+        boolean ok = y > 1e-5f && y < clip && blocks[o + 2] > 0f;
+        for (int k = 1; k < 8 && ok; k++) ok = Float.isFinite(blocks[o + k]);
+        return ok;
+    }
+
     /**
      * P364: {@link #median} without the sort - the middle element(s) of a[0..n) in Arrays.sort's order (Float.compare: the
      * order of {@link #sortableBits}) by selection. The same value, bit for bit (a is not changed).
@@ -117,6 +137,10 @@ final class NoiseMath {
     static float medianSelect(float[] a, int n) {
         final int[] c = new int[n];
         for (int i = 0; i < n; i++) c[i] = sortableBits(a[i]);
+        return medianKeys(c, n);
+    }
+
+    private static float medianKeys(int[] c, int n) {
         final float hi = floatOfSortable(selectInt(c, n, n / 2));
         if ((n & 1) == 1) return hi;
         int lo = c[0]; // c[0 .. n/2) holds the n/2 smallest: the largest of them is the element below the middle

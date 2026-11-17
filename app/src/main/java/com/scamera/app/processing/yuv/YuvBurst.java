@@ -96,7 +96,7 @@ public final class YuvBurst {
                 1f, PreferenceKeys.hybridSwitch("yuv_own_noise", true) ? 1 : 0, PreferenceKeys.hybridSwitch("yuv_sharpest", true) ? 1 : 0,
                 PreferenceKeys.hybridSwitch("yuv_guided_chroma", true) ? 1 : 0, bracket ? 1 : 0, PreferenceKeys.hybridValue("yuv_deghost", 3f),
                 threads, transfer, YuvFrames.decodeMode(hlg, first.yuvRange), prior == YuvCurveModel.OVER_SRGB ? 1 : 0, chroma(),
-                toe()[0], toe()[1]};
+                toe()[0], toe()[1], PreferenceKeys.adaptiveHighlightMerge() ? 1f : 0f};
         // the fallback noise: the camera's NOISE_PROFILE of the reference (its mean channel, normalised)
         final float[] noise = {Float.isFinite(first.noiseSlope) ? first.noiseSlope : 0f, Float.isFinite(first.noiseOffset) ? first.noiseOffset : 0f};
         final long rgbBytes = (long) w * h * 12;

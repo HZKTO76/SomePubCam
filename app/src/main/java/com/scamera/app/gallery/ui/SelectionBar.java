@@ -26,6 +26,10 @@ public final class SelectionBar {
     /** P697: «В папку» (move or copy the selection into a folder), null without it. */
     @androidx.annotation.Nullable public final View folder;
     public final TextView count;
+    private final View[] actions;
+    private final int preferredActionWidth;
+    private int selected;
+    private boolean compact;
 
     public SelectionBar(Context c, Runnable onClose, Runnable onCompare, Runnable onShare, Runnable onDelete) {
         this(c, onClose, onCompare, onShare, onDelete, null, null);
@@ -47,7 +51,13 @@ public final class SelectionBar {
     public SelectionBar(Context c, Runnable onClose, Runnable onCompare, Runnable onShare, Runnable onDelete,
                         @androidx.annotation.Nullable Runnable onFavourite, @androidx.annotation.Nullable Runnable onAll,
                         @androidx.annotation.Nullable java.util.function.Consumer<View> onFolder) {
-        view = new LinearLayout(c);
+        view = new LinearLayout(c) {
+            @Override
+            protected void onMeasure(int widthSpec, int heightSpec) {
+                fitActions(widthSpec);
+                super.onMeasure(widthSpec, heightSpec);
+            }
+        };
         view.setOrientation(LinearLayout.HORIZONTAL);
         view.setGravity(Gravity.CENTER_VERTICAL);
         view.setBackground(GalleryUi.bar(c, 26));
@@ -87,19 +97,45 @@ public final class SelectionBar {
         list.add(share);
         if (folder != null) list.add(folder);
         list.add(delete);
-        View[] actions = list.toArray(new View[0]);
+        actions = list.toArray(new View[0]);
         // (owner, 2026-11-05: the bottom bars «гораздо более компактными» - fixed buttons in a centred capsule, not the full width);
         // P697: five actions go down to 46dp each (their labels shrink to fit)
-        int each = GalleryUi.dp(c, Math.max(actions.length > 4 ? 46 : 52, Math.min(72, (c.getResources().getConfiguration().screenWidthDp - 190) / actions.length)));
+        preferredActionWidth = GalleryUi.dp(c, Math.max(actions.length > 4 ? 46 : 52,
+                Math.min(72, (c.getResources().getConfiguration().screenWidthDp - 190) / actions.length)));
         for (View b : actions) {
             com.scamera.app.ui.Motion.press(b);
-            view.addView(b, new LinearLayout.LayoutParams(each, ViewGroup.LayoutParams.WRAP_CONTENT));
+            view.addView(b, new LinearLayout.LayoutParams(preferredActionWidth, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
+    }
+
+    /** Keep every action on screen in a narrow cover window or split-screen pane. */
+    private void fitActions(int widthSpec) {
+        int remaining = Integer.MAX_VALUE;
+        boolean bounded = View.MeasureSpec.getMode(widthSpec) != View.MeasureSpec.UNSPECIFIED;
+        if (bounded) {
+            LinearLayout.LayoutParams cp = (LinearLayout.LayoutParams) count.getLayoutParams();
+            remaining = Math.max(0, View.MeasureSpec.getSize(widthSpec) - view.getPaddingStart() - view.getPaddingEnd()
+                    - close.getLayoutParams().width - cp.leftMargin - cp.rightMargin);
+        }
+        Context c = view.getContext();
+        boolean iconsOnly = remaining < GalleryUi.dp(c, 72 + 42 * actions.length);
+        int countSpace = GalleryUi.dp(c, iconsOnly ? 50 : 72);
+        int each = Math.min(preferredActionWidth, Math.max(0, remaining - countSpace) / actions.length);
+        int countMax = remaining - each * actions.length;
+        if (count.getMaxWidth() != countMax) count.setMaxWidth(countMax);
+        if (compact != iconsOnly) {
+            compact = iconsOnly;
+            count.setText(compact ? Integer.toString(selected) : GalleryUi.shots(selected));
+            for (View action : actions)
+                ((ViewGroup) action).getChildAt(1).setVisibility(compact ? View.GONE : View.VISIBLE);
+        }
+        for (View action : actions) action.getLayoutParams().width = each;
     }
 
     /** The count and the enabled actions for {@code n} selected photos. */
     public void bind(int n) {
-        count.setText(GalleryUi.shots(n));
+        selected = n;
+        count.setText(compact ? Integer.toString(n) : GalleryUi.shots(n));
         count.setContentDescription(Lang.t("Выбрано: ", "Selected: ") + GalleryUi.shots(n));
         GalleryUi.setEnabledLook(compare, n == 2);
         GalleryUi.setEnabledLook(share, n > 0);

@@ -111,8 +111,8 @@
     </string-array>
     <string-array name="scam_hybrid_output_entries">
         <item>1.0× (sensor size, default)</item>
-        <item>1.5× (≈28 MP)</item>
-        <item>2.0× (≈50 MP)</item>
+        <item>1.5×</item>
+        <item>2.0×</item>
     </string-array>
     <string-array name="scam_hybrid_resize_entries">
         <item>Off (the merged size)</item>
@@ -143,6 +143,14 @@
     <string-array name="scam_hybrid_processing_values" translatable="false">
         <item>fast</item>
         <item>quality</item>
+    </string-array>
+    <string-array name="scam_hybrid_highlight_merge_entries">
+        <item>Standard</item>
+        <item>Adaptive</item>
+    </string-array>
+    <string-array name="scam_hybrid_highlight_merge_values" translatable="false">
+        <item>classic</item>
+        <item>adaptive</item>
     </string-array>
     <string-array name="scam_hybrid_fringe_method_entries">
         <item>Neural</item>

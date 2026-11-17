@@ -59,7 +59,7 @@ android {
     packagingOptions {
         jniLibs {
             // Extracted to nativeLibraryDir: the SCAM/neural worker (buildScamNeuralWorker) and its QNN
-            // runtime (added by tools/package_scam_neural.py) run from there, with or without root.
+            // runtime (added by tools/package_scam_neural.py) run from there under the app UID.
             useLegacyPackaging true
         }
     }
@@ -118,9 +118,7 @@ android {
         if (graph.hasTask(assembleDebug) || graph.hasTask(assembleRelease)) autoIncrementBuildNumber()
     }
 
-    // P662: both build types are shrunk by R8 without renaming (proguard-rules.pro: -dontobfuscate; the keeps for reflection,
-    // JNI, GSON, the su launcher's main) and with unused resources removed (res/raw/keep.xml); unit tests still run on the
-    // javac classes. Native code is never debuggable, the APK is zip-aligned.
+    // Both build types use R8 shrinking and obfuscation. proguard-rules.pro keeps the names used by JNI and saved data.
     buildTypes.configureEach {
         minifyEnabled = true
         shrinkResources = true
@@ -181,9 +179,9 @@ android {
     }
 }
 // This must be an executable launched with exec(), never a JNI shared object:
-// app_process/System.load creates an ART namespace that excludes FastRPC deps.
-// P662: it ships once, as lib/arm64-v8a/libscamera_worker.so (extracted to nativeLibraryDir: the app process and the su
-// launcher both run that file; the copy in assets/scam-neural is gone, -1.7 MB), linked without its static symbol table
+// System.load creates an ART namespace that excludes FastRPC deps.
+// The app launches the worker from nativeLibraryDir, where it ships once as lib/arm64-v8a/libscamera_worker.so.
+// It is linked without its static symbol table
 // (-s: 5.5 -> 3.6 MB; .dynsym stays, the crash handler's dladdr and the pc offsets are unchanged, the code is identical).
 def neuralLibs = layout.buildDirectory.dir('generated/scamNeuralLibs')
 def buildScamNeuralWorker = tasks.register('buildScamNeuralWorker', Exec) {

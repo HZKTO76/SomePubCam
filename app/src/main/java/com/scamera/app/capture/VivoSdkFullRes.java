@@ -187,10 +187,9 @@ public final class VivoSdkFullRes {
      * from the 200 MP row merges with the camera closed as a 200 MP shot: its four 16320x12288 buffers, 4 x 401 MB, count as free).
      */
     static int seriesFit(long pixels, int width, long frameBytes, int block, int grid, boolean huge, long availableBytes, long halFreeBytes) {
-        if (availableBytes < 0) return 65;
-        final double halFree = Math.max(0, halFreeBytes), fixed = (huge ? 20.0 : 40.0) * pixels * grid * grid;
+        final double reserve = (huge ? 20.0 : 40.0) * pixels * grid * grid + frameBytes;
         final double perFrame = frameBytes + 2.0 * pixels / ((double) block * block) + 3800.0 * width;
-        return (int) Math.max(0, Math.min(65, Math.floor((availableBytes + halFree - fixed - frameBytes) / perFrame)));
+        return fitSeries(availableBytes, halFreeBytes, reserve, perFrame);
     }
 
     /**
@@ -204,10 +203,60 @@ public final class VivoSdkFullRes {
     /** P609: {@link #seriesCount} with the HAL's buffers freed for the merge given ({@link #seriesFit}'s {@code halFreeBytes}). */
     static int seriesCount(int requested, long pixels, int width, long frameBytes, int block, int grid, boolean huge, long availableBytes,
                            long halFreeBytes) {
+        return seriesCount(requested, pixels, width, frameBytes, block, grid, huge, availableBytes, halFreeBytes, false);
+    }
+
+    /**
+     * P721: {@link #seriesCount} for the merge route of the shot: {@code fast} («Быстрый») sizes the series by
+     * {@link #fastSeriesFit} - the fast route merges in row bands that fit its share of MemAvailable and reads every frame in place
+     * (P685), so it needs no fixed 40 B per output pixel beside the frames ({@link #seriesFit} is the SCAM merge's, «Качество»).
+     */
+    static int seriesCount(int requested, long pixels, int width, long frameBytes, int block, int grid, boolean huge, long availableBytes,
+                           long halFreeBytes, boolean fast) {
+        return seriesCount(requested, pixels, width, frameBytes, block, grid, pixels * grid * grid,
+                huge, availableBytes, halFreeBytes, fast);
+    }
+
+    static int seriesCount(int requested, long pixels, int width, long frameBytes, int block, int grid,
+                           long outputPixels, boolean huge, long availableBytes, long halFreeBytes, boolean fast) {
         final int guard = frameCount(requested, frameBytes, availableBytes);
         final int legacy = Math.min(huge ? 4 : 2, guard);
-        return Math.min(guard, Math.max(legacy, seriesFit(pixels, width, frameBytes, block, grid, huge, availableBytes, halFreeBytes)));
+        final int fit = fast ? fastSeriesFit(outputPixels, frameBytes, availableBytes, halFreeBytes)
+                : block == 2 || block == 4
+                        ? mosaicSeriesFit(pixels, width, frameBytes, block, grid, huge, availableBytes, halFreeBytes)
+                        : seriesFit(pixels, width, frameBytes, block, grid, huge, availableBytes, halFreeBytes);
+        return Math.min(guard, Math.max(legacy, fit));
     }
+
+    // The Quality mosaic merge maps the shot arena, makes a binned copy of each selected frame and uses GPU strips.
+    // Its worker reserves 20 B per pixel inside 80% of the remaining memory (hybridMosaicNativeBudget).
+    private static int mosaicSeriesFit(long pixels, int width, long frameBytes, int block, int grid, boolean huge,
+                                       long availableBytes, long halFreeBytes) {
+        // Keep the 200 MP strip-merge reserve. Below it, allow for the native mosaic worker's memory share.
+        final double reserve = (huge ? 20.0 : 20.0 / 0.8) * pixels * grid * grid + frameBytes;
+        final double perFrame = frameBytes + 2.0 * pixels / (block * block) + 3800.0 * width;
+        return fitSeries(availableBytes, halFreeBytes, reserve, perFrame);
+    }
+
+    private static int fitSeries(long availableBytes, long halFreeBytes, double reserve, double perFrame) {
+        if (availableBytes < 0) return 65;
+        final double free = availableBytes + Math.max(0, halFreeBytes) - reserve;
+        return (int) Math.max(0, Math.min(65, Math.floor(free / perFrame)));
+    }
+
+    /**
+     * P721 (X300 Ultra log 2026-11-15, 8160x6128 Quad: «7 N asked, 4 by the memory», «1 of 4 ring frames + 0 N after the shutter
+     * (asked 7, budget 4 frames)» at 2228 - 2739 MB available; the worker then merged those 1 - 4 frames in 4 - 5 row bands of
+     * ~1044 - 1430 MB + ~405 - 691 MB of outputs within 60 % of MemAvailable): the frames the fast route holds - every frame's RAW
+     * (its memfd, read in place by every band) above {@link #FAST_MERGE_BYTES_PER_PX} per output pixel for the smallest row band and
+     * the frame's outputs. A frame the bands still cannot hold is left out by the worker itself (short frames first, P685 / P699).
+     */
+    static int fastSeriesFit(long outputPixels, long frameBytes, long availableBytes, long halFreeBytes) {
+        return fitSeries(availableBytes, halFreeBytes, FAST_MERGE_BYTES_PER_PX * outputPixels, frameBytes);
+    }
+
+    /** P721: the fast route's smallest row band plus the frame's outputs per output pixel (~1.45 GB at 50 MP in the log above). */
+    static final double FAST_MERGE_BYTES_PER_PX = 22.0;
 
     public static boolean available(String cameraId) {
         // P593: the size asked must have a row itself (an OPPO-family camera with two sizes: a dead «50 Мп» is no 200 MP session)

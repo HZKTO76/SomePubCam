@@ -2,7 +2,7 @@
 <!-- The camera screen (CameraFragment). Two layers on a black root:
      camera_stage - everything that keeps the photo's geometry: the preview (camera_viewfinder), the 3:4 frame anchor the bottom bar
        hangs from, the Pro panel and its LUT / «Oldstyle» neighbours, the quick-settings sheet with its scrim and handle, the zoom
-       readout and the message band. It starts under the top row, or at the top of a screen up to 16:9 (adjustCameraContainer).
+       readout and the message band. It starts under the top row.
      top_row and the pieces over it - the top row of 40dp items (camera_top_row), its grabber, the FULL sheet's scrim over the row
        and the recording readout. They stay out of camera_stage, so the stage's aspect handling never moves them. -->
 <layout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -25,7 +25,6 @@
                 style="@style/Cam.Wide"
                 android:layout_height="0dp"
                 android:animateLayoutChanges="true"
-                app:adjustCameraContainer="@{uimodel.screenAspectRatio}"
                 app:layout_constraintTop_toBottomOf="@id/top_row"
                 app:layout_constraintBottom_toBottomOf="parent">
 

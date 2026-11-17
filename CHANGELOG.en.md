@@ -2,6 +2,65 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 — Motion in Fast merge
+
+- Reduced ghosting and retained more texture on moving subjects.
+- Added an adjustable motion denoise SNR curve in Noise reduction and merge.
+- The viewfinder stays full width on displays with a small cutout.
+
+## 2026-11-17 — Viewfinder and saving
+
+- The viewfinder leaves the lens controls clear in compact windows.
+- The last JPEG strips encode while thumbnails and metadata are prepared.
+- Post-processing and 10-bit photo export do less computation and copying.
+
+## 2026-11-17 — Stability and large screens
+
+- The gallery responds immediately after a pinch. The grid adapts to the window width.
+- Camera and settings layouts adapt to tablets and foldables.
+- Fixed issues when opening the camera, processing RAW, and saving photos.
+
+## 2026-11-16 — Camera layout and processing
+
+- Camera controls stay within compact screens and clear display cutouts.
+- Post-processing optimizations for the LG V50 and other devices with Adreno 640 or older GPUs.
+
+## 2026-11-16 — Highlight merge
+
+- Noise reduction and merge adds an adaptive mode for ghosting and noise where the short exposure blends in.
+
+## 2026-11-16 — FULLRES and LOFIC
+
+- OPPO Find X7 Ultra retries 50 MP modes previously rejected by a camera session error.
+- Xiaomi 17 Ultra merges verified LOFIC short reads in 4:3 and 16:10 even when the camera omits their metadata flag.
+
+## 2026-11-16 — RAW (DNG)
+
+- RAW (DNG) saves the full-color burst merge at 1×, 1.5× and 2× resolution.
+- Mosaic DNG supports 1×, 1.5× and 2× at 50 MP and ISZ with remosaic off.
+- Quad and Tetra, including 200 MP and ISZ, size the burst for the selected merge mode’s memory use.
+
+## 2026-11-15 (day, 2) — realme 2×
+
+- realme 12 Pro+: the «2×» module (ISZ without remosaic) now takes its exposure from the app (Unspektra AE): the camera set none in this mode, hence the black frame.
+- realme 12 Pro+: the telephoto and the ultra wide open (the OPPO Find X7 Ultra's package); the earlier note «cannot be opened without root» was wrong.
+
+## 2026-11-15 (day) — realme
+
+- realme: the camera crash «Image is already closed» when a session closes is fixed.
+
+## 2026-11-15 — 50 MP, gallery, HDR and tone
+
+- X300 Ultra, 50 MP «Fast»: up to ~10 frames go into the merge instead of 4 — the memory reserve is sized for the fast merge.
+- The gallery no longer crashes when opening the details of large DNGs (50 MP and up).
+- Changed how «AE darkening limit» works: 1 by default (as in the stable v6 config); Why tone V2 is on by default, a saved V1 moves to V2 once.
+- realme: extra modules open the same way as on the OPPO Find X7 Ultra; the 12 Pro+ (RMX3840) gets a separate «2×» module with ISZ without remosaic (a sensor crop; if the sensor gives a remosaic, the module moves to a digital crop by itself).
+
+## 2026-11-14 (evening, 2) — Icon and LOFIC
+
+- A new app icon: a camera with depth and a highlight on a graphite background; the splash and themed icon to match.
+- Xiaomi 17 Ultra, DCG+LOFIC: the viewfinder no longer freezes — a refusal is caught in ~0.2 s, the failing 4:3 setups are skipped, the camera waits out a slow close and opens again.
+
 ## 2026-11-14 (night) — Settings modes
 
 - Settings modes: «Simple» (45 main settings, the rest tuned for the phone), «Custom» (you choose what is shown) and «Advanced» (as before).

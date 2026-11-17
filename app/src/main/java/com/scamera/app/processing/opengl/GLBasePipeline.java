@@ -199,30 +199,34 @@ public class GLBasePipeline implements AutoCloseable {
     public Bitmap runAllToBitmap() {
         // P616: the post's GPU queue kept a few blocks deep (the viewfinder's draws are not stuck behind it); P668: through the
         // final output's tiles as well (Xiaomi 12X, 31266: its 16 tiles went at once, «slow draw 182 / 243 ms ... after node Rotate»)
-        GpuPace.begin();
-        GLProg.postRunning = true; // P713: the warm-up beside the merge stops (GLProg.warmUpBesideMerge)
-        final Bitmap bitmap;
         try {
-            runNodes();
-            // P440 (step 0c): the final pass's draws and read-back start here (post_final .. post_readback)
-            if (!PostGlMode.legacy()) ShotTimeline.markIfShot("post_final");
-            GLGpuTimer.node("final output");
-            GLTexturePool.node("final output"); // P477: the inventory's node
-            GLProg.compileNode("final output"); // P602
+            GpuPace.begin();
+            GLProg.postRunning = true; // P713: the warm-up beside the merge stops (GLProg.warmUpBesideMerge)
+            final Bitmap bitmap;
             try {
-                bitmap = glIface.blockCtx.drawBlocksToBitmap();
+                runNodes();
+                // P440 (step 0c): the final pass's draws and read-back start here (post_final .. post_readback)
+                if (!PostGlMode.legacy()) ShotTimeline.markIfShot("post_final");
+                GLGpuTimer.node("final output");
+                GLTexturePool.node("final output"); // P477: the inventory's node
+                GLProg.compileNode("final output"); // P602
+                try {
+                    bitmap = glIface.blockCtx.drawBlocksToBitmap();
+                } finally {
+                    GLProg.compileNode(null);
+                }
             } finally {
-                GLProg.compileNode(null);
+                GLDeferredDraw.discard(); // P713: a run that failed half way: what it held is released
+                GLProg.postRunning = false;
+                GpuPace.end();
             }
+            GLGpuTimer.report("post");
+            GLTexturePool.report("post");
+            finishRun();
+            return bitmap;
         } finally {
-            GLDeferredDraw.discard(); // P713: a run that failed half way: what it held is released
-            GLProg.postRunning = false;
-            GpuPace.end();
+            GLGpuTimer.discard();
         }
-        GLGpuTimer.report("post");
-        GLTexturePool.report("post");
-        finishRun();
-        return bitmap;
     }
 
     protected boolean skipNode(Node node) { return false; }
@@ -240,7 +244,7 @@ public class GLBasePipeline implements AutoCloseable {
             GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, savedFramebuffer, 0);
             checkEglError("glGetIntegerv");
             final boolean sync = PostGlMode.syncNodes();
-            GLGpuTimer.begin(); // P479: post_sync only (profiling)
+            GLGpuTimer.begin();
             for (int i = 0; i < passList.size(); i++) {
                 // P713: the last full-size pass of a streamed JPEG drawn beside the final output's tiles (GLDeferredDraw)
                 final boolean defer = i == passList.size() - 2 && deferLastDraw(passList.get(i), passList.get(i + 1));
@@ -348,8 +352,6 @@ public class GLBasePipeline implements AutoCloseable {
     public void close() {
         final GLInterface gl = glIface;
         if (gl != null) {
-            // pending GPU work completes before the context goes (Adreno)
-            quietly(GLES30::glFinish);
             // glProcessing owns the EGL context (it extends GLContext); a separate glContext is closed too
             final GLCoreBlockProcessing processing = gl.blockCtx;
             if (processing != null) {
@@ -357,6 +359,10 @@ public class GLBasePipeline implements AutoCloseable {
                 gl.blockCtx = null;
             }
             if (gl.plainCtx != null && gl.plainCtx != processing) {
+                quietly(() -> {
+                    gl.plainCtx.makeCurrent();
+                    GLES30.glFinish();
+                });
                 quietly(gl.plainCtx::close);
                 gl.plainCtx = null;
             }

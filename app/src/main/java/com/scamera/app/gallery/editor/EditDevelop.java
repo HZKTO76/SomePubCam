@@ -20,8 +20,8 @@ import java.util.TreeMap;
 /**
  * P665 «Проявка» (owner, 2026-11-13: «доделай симуляцию плёнки в нашем проявщике в галерее, перенеси все настройки из нашей
  * камеры в проявщик» - «Все настройки обработки»): a DNG of ours developed by the camera's own post pipeline (DevelopRun) with the
- * shot's settings (its DevelopRecord) and the ones changed in the editor. The DNG holds the merge's RGB as a Bayer mosaic over its
- * headroom (P165): the RGB the pipeline takes is the DNG's level times the headroom, demosaiced here -
+ * shot's settings (its DevelopRecord) and the ones changed in the editor. Linear DNG supplies camera RGB directly, scaled
+ * by its recorded headroom. Older Bayer DNGs are demosaiced here -
  * <ul>
  * <li>the preview: the DNG binned so that a 2x2 cell of it is one pixel of at most {@link #PREVIEW_SIDE} (a cell's R, mean G, B:
  * no interpolation), developed in about a second; the settings' changes re-develop it (the editor debounces them);</li>
@@ -60,9 +60,8 @@ final class EditDevelop {
     }
 
     /**
-     * The developer of {@code source}: a DNG of ours with its record; P696: else a Bayer DNG the developer can take (ours by its
-     * Software, or any with its colour tags) with a record made from its tags ({@link #fromTags}); null: the editor's own RAW route
-     * only.
+     * The developer of {@code source}: a DNG of ours with its record, a SCAMERA Linear DNG, or a Bayer DNG with sufficient
+     * colour tags. The latter two use {@link #fromTags} if there is no record.
      */
     @Nullable
     static EditDevelop open(EditSource source) {
@@ -115,13 +114,12 @@ final class EditDevelop {
     }
 
     /**
-     * P696: why the developer cannot take a DNG without a record, null when it can: a Bayer mosaic of single sites (the demosaic
-     * here; a Quad / LinearRaw DNG is not one), an orientation without a mirror (the pipeline's turn), and - another app's DNG -
-     * its colour: a ColorMatrix and the as-shot white.
+     * The pipeline takes our Linear DNGs and single-site Bayer DNGs with a supported orientation. Bayer files from another app
+     * also need a ColorMatrix and the as-shot white.
      */
     @Nullable
     static String refusal(DngRaw.Info info) {
-        if (info.kind != DngRaw.KIND_BAYER) return "not a Bayer mosaic";
+        if (info.kind != DngRaw.KIND_BAYER && !(info.kind == DngRaw.KIND_RGB && ours(info))) return "not a Bayer mosaic";
         if (info.cell != 1) return "a Quad mosaic";
         if (rotation(info.orientation) < 0) return "a mirrored orientation " + info.orientation;
         if (!ours(info) && (info.colour == null || !info.colour.hasMatrices() || !info.asShotGiven))
@@ -192,13 +190,25 @@ final class EditDevelop {
     Bitmap preview(Map<String, Object> changes) throws Exception {
         synchronized (this) {
             if (previewRgb == null) {
-                final int[] size = DngRaw.probe(EditSource.map(dng)).size(1);
+                final ByteBuffer file = EditSource.map(dng);
+                final DngRaw.Info info = DngRaw.probe(file);
+                final int[] size = info.size(1);
                 dngW = size[0];
                 dngH = size[1];
-                final DngRaw.Image img = decode(binFor(size));
-                previewW = img.width / 2;
-                previewH = img.height / 2;
-                previewRgb = superpixel(img.linear, img.width, img.height, img.phase, record.headroom());
+                if (info.kind == DngRaw.KIND_RGB) {
+                    final int bin = (Math.max(dngW, dngH) - 1) / PREVIEW_SIDE + 1;
+                    final DngRaw.Image img = decode(file, bin);
+                    previewW = img.width;
+                    previewH = img.height;
+                    previewRgb = img.linear;
+                    final float headroom = record.headroom();
+                    for (int i = 0; i < previewRgb.length; i++) previewRgb[i] *= headroom;
+                } else {
+                    final DngRaw.Image img = decode(file, binFor(size));
+                    previewW = img.width / 2;
+                    previewH = img.height / 2;
+                    previewRgb = superpixel(img.linear, img.width, img.height, img.phase, record.headroom());
+                }
             }
         }
         final ByteBuffer rgb = allocate((long) previewW * previewH, false);
@@ -219,15 +229,33 @@ final class EditDevelop {
             // not recycled: a copy or the zoom may still read it (their readers do not own it); the GC takes it after them
             full = null;
             fullKey = null;
-            final DngRaw.Image img = decode(1);
-            final long pixels = (long) img.width * img.height;
+            final ByteBuffer file = EditSource.map(dng);
+            final DngRaw.Info info = DngRaw.probe(file);
+            final int[] size = info.size(1);
+            final long pixels = (long) size[0] * size[1];
             final boolean half = pixels > HALF_ABOVE;
             final ByteBuffer rgb = allocate(pixels, half);
             final long t0 = System.nanoTime();
-            if (half) mhc(img.linear, img.width, img.height, img.phase, record.headroom(), null, rgb.asShortBuffer());
-            else mhc(img.linear, img.width, img.height, img.phase, record.headroom(), rgb.asFloatBuffer(), null);
-            Log.i(TAG, "demosaiced " + img.width + "x" + img.height + " in " + (System.nanoTime() - t0) / 1_000_000 + " ms");
-            final Bitmap b = com.scamera.app.processing.opengl.postpipeline.DevelopRun.develop(record, rgb, img.width, img.height, half,
+            try {
+                final float headroom = record.headroom();
+                if (info.kind == DngRaw.KIND_RGB) {
+                    final ShortBuffer halves = half ? rgb.asShortBuffer() : null;
+                    final FloatBuffer floats = half ? null : rgb.asFloatBuffer();
+                    final DngRaw.RgbSink samples = half
+                            ? (i, v) -> halves.put(i, toHalf(v * headroom))
+                            : (i, v) -> floats.put(i, v * headroom);
+                    DngRaw.decodeRgbForDevelop(file, size[0], size[1], !fromTags(), samples);
+                } else {
+                    final DngRaw.Image img = decode(file, 1);
+                    if (half) mhc(img.linear, img.width, img.height, img.phase, headroom, null, rgb.asShortBuffer());
+                    else mhc(img.linear, img.width, img.height, img.phase, headroom, rgb.asFloatBuffer(), null);
+                }
+            } catch (IOException | RuntimeException | Error e) {
+                com.scamera.app.util.Allocator.free(rgb);
+                throw e;
+            }
+            Log.i(TAG, "RAW decoded " + size[0] + "x" + size[1] + " in " + (System.nanoTime() - t0) / 1_000_000 + " ms");
+            final Bitmap b = com.scamera.app.processing.opengl.postpipeline.DevelopRun.develop(record, rgb, size[0], size[1], half,
                     changes);
             full = b;
             fullKey = k;
@@ -246,12 +274,12 @@ final class EditDevelop {
         }
     }
 
-    private DngRaw.Image decode(int bin) throws IOException {
+    private DngRaw.Image decode(ByteBuffer file, int bin) throws IOException {
         // P706: the DNG's lens-shading GainMaps stay out of the decode: the pipeline applies the shot's map (the record's, or the
         // one made from those maps)
-        final DngRaw.Image img = DngRaw.decodeForDevelop(EditSource.map(dng), bin, !fromTags());
-        if (img.info.kind != DngRaw.KIND_BAYER || img.info.cell != 1 || img.linear == null)
-            throw new IOException("develop: not a Bayer DNG");
+        final DngRaw.Image img = DngRaw.decodeForDevelop(file, bin, !fromTags());
+        if ((img.info.kind == DngRaw.KIND_BAYER && img.info.cell != 1) || img.linear == null)
+            throw new IOException("develop: unsupported DNG samples");
         return img;
     }
 

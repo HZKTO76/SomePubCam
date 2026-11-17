@@ -5,6 +5,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -284,7 +285,7 @@ public class XiaomiLoficTest {
         assertFalse(p.usable()); // no result yet
         p.exposureCount = 1;
         p.result = org.mockito.Mockito.mock(android.hardware.camera2.TotalCaptureResult.class);
-        assertFalse(p.usable()); // a single exposure: the Short read is not usable
+        assertFalse(p.usable()); // the Short read still needs verification
         p.exposureCount = 2;
         assertTrue(p.usable());
         // NONE never enters; the ring keeps its newest pairs
@@ -313,6 +314,29 @@ public class XiaomiLoficTest {
         assertEquals(16_625_000L * 3, taken.get(1).timestamp()); // pair 4 skipped
         assertEquals(16_625_000L * 2, taken.get(2).timestamp());
         assertEquals(0, ring.size()); // the ring is emptied for the next press
+    }
+
+    @Test
+    public void confirmedPairAfterTheShutterDoesNotDiscardEarlierShortReads() {
+        final XiaomiLofic.Ring ring = new XiaomiLofic.Ring(3);
+        final ByteBuffer l = ByteBuffer.allocateDirect(4 * XiaomiLofic.LONG_ROW);
+        final ByteBuffer s = ByteBuffer.allocateDirect(4 * XiaomiLofic.SHORT_ROW);
+        final android.hardware.camera2.TotalCaptureResult r = org.mockito.Mockito.mock(android.hardware.camera2.TotalCaptureResult.class);
+        final long cutoff = 33_000_000L;
+        ring.store(XiaomiLofic.Stream.LONG, cutoff, l, l.capacity());
+        final XiaomiLofic.Pair candidate = ring.store(XiaomiLofic.Stream.SHORT, cutoff, s, s.capacity());
+        candidate.result = r;
+        candidate.exposureCount = 1;
+        ring.store(XiaomiLofic.Stream.LONG, cutoff * 2, l, l.capacity());
+        final XiaomiLofic.Pair confirmed = ring.store(XiaomiLofic.Stream.SHORT, cutoff * 2, s, s.capacity());
+        confirmed.result = r;
+        confirmed.exposureCount = 2;
+
+        final List<XiaomiLofic.Pair> taken = ring.take(3, cutoff);
+        assertEquals(1, taken.size());
+        assertSame(candidate, taken.get(0));
+        assertTrue(candidate.sameGrid());
+        assertFalse(candidate.usable());
     }
 
     // ---------------------------------------------------------------- the checks and the fallback
@@ -427,6 +451,27 @@ public class XiaomiLoficTest {
         assertEquals("cropped", XiaomiLofic.storedFailure("FP1|cropped", "FP1"));
         assertNull(XiaomiLofic.storedFailure("FP1|cropped", "FP2"));
         assertNull(XiaomiLofic.storedFailure(null, "FP1"));
+    }
+
+    /**
+     * P719 (build 4ed084d3, log 2026-11-14 19:26:56 / 19:27:53): 4:3+row and 4:3+row+yuv - both asking row 5 by current_mode - had
+     * every request refused and gave no frame, each try a frozen viewfinder and a 7.9 s close; 4:3 without the ask gave frames. A
+     * variant asking a row that gives no frame fails the others asking that row; a failure after frames, or of a setup asking no
+     * row, fails only itself.
+     */
+    @Test
+    public void aRowTheHalRefusesFailsEveryVariantAskingIt() {
+        assertEquals(Arrays.asList(XiaomiLofic.Setup.FOUR_THREE_COMPANION, XiaomiLofic.Setup.FOUR_THREE_CAPTURE),
+                XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_ROW, true));
+        assertEquals(Arrays.asList(XiaomiLofic.Setup.FOUR_THREE_ROW, XiaomiLofic.Setup.FOUR_THREE_CAPTURE),
+                XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_COMPANION, true));
+        assertTrue("frames came (the rows' check)", XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_ROW, false).isEmpty());
+        assertTrue("4:3 asks no row", XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE, true).isEmpty());
+        assertTrue("16:10 asks no row", XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.SIXTEEN_TEN, true).isEmpty());
+        // the log's run with the fix: 4:3 by its rows, 4:3+row by the HAL - then 16:10 is next, no second refused variant
+        final java.util.Set<XiaomiLofic.Setup> failed = java.util.EnumSet.of(XiaomiLofic.Setup.FOUR_THREE, XiaomiLofic.Setup.FOUR_THREE_ROW);
+        failed.addAll(XiaomiLofic.sameRowRefused(XiaomiLofic.Setup.FOUR_THREE_ROW, true));
+        assertEquals(Arrays.asList(XiaomiLofic.Setup.SIXTEEN_TEN), XiaomiLofic.ladder(failed, null, false));
     }
 
     /**

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
+<androidx.constraintlayout.widget.ConstraintLayout
         xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
-        android:orientation="vertical"
         android:background="@color/settings_page"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
@@ -9,8 +8,11 @@
     <androidx.appcompat.widget.Toolbar
             android:id="@+id/settings_toolbar"
             android:visibility="gone"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="@id/settings_container"
+            app:layout_constraintEnd_toEndOf="@id/settings_container"
             app:title="@string/prefs_prefscreen_title"
             app:titleTextColor="#F5F3F8"
             app:navigationIcon="@drawable/ic_baseline_arrow_back_24"
@@ -18,8 +20,12 @@
             style="@style/PreferenceActionBarStyle"
     />
     <FrameLayout
-            android:layout_gravity="bottom"
             android:id="@+id/settings_container"
-            android:layout_width="match_parent"
-            android:layout_height="fill_parent"/>
-</LinearLayout>
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            app:layout_constraintWidth_max="640dp"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/settings_toolbar"
+            app:layout_constraintBottom_toBottomOf="parent"/>
+</androidx.constraintlayout.widget.ConstraintLayout>

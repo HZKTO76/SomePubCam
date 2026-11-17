@@ -357,15 +357,17 @@ public class VivoSdkRawSessionTest {
         ordered(c, "private void leaseWithoutCamera() {", "if (mCameraDevice == null && !mCameraOpening.get()) {", "closeIszLease();",
                 "closeVivoSdkRawSession(mVivoSdkRawDevice);", "LeaseGuard.sweep(\"a camera closed\", 0);");
         // a refused open has no onClosed: each of its four exits gives the lease back
-        final String open = c.substring(c.indexOf("this.mCameraManager.openCamera(logicalID, mStateCallback,"), c.indexOf("private String mOpenRetryId"));
-        assertEquals(4, open.split("openRefused\\(lockHeld\\);", -1).length - 1);
-        ordered(c, "private void openRefused(boolean lockHeld) {", "closeVivoSdkRawSession(null);", "closeIszLease();",
+        final String open = c.substring(c.indexOf("this.mCameraManager.openCamera(logicalID, callback,"), c.indexOf("private String mOpenRetryId"));
+        assertEquals(4, open.split("openRefused\\(lockHeld, callback\\);", -1).length - 1);
+        ordered(c, "private void openRefused(boolean lockHeld, @Nullable DeviceStateCallback callback) {",
+                "closeVivoSdkRawSession(null);", "closeIszLease();",
                 "if (lockHeld) mCameraOpenCloseLock.release();");
         // before a camera opens: what is set and held by nobody goes back first
         ordered(c, "private void prepareVivoSdkRawSession() throws Exception {", "VivoSdkRawSession.sweep(ScameraApp.getAppContext());",
                 "closeIszLease();", "openIszLease(id);");
         // onClosed stays the second way
-        ordered(c, "public void onClosed(@NonNull CameraDevice cameraDevice) {", "closeVivoSdkRawSession(cameraDevice);", "closeIszLease();");
+        ordered(c, "public void onClosed(@NonNull CameraDevice cameraDevice) {", "closeVivoSdkRawSession(cameraDevice);",
+                "if (iszLease != null && mIszLease == iszLease) closeIszLease();");
         // the guard: its own process, nothing of the app in it, armed at the app's start; a crash gives back first
         final String manifest = source("src/main/AndroidManifest.xml");
         ordered(manifest, "android:name=\"com.scamera.app.capture.LeaseGuardService\"", "android:exported=\"false\"",
