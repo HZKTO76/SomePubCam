@@ -1638,7 +1638,12 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     // P712 fmOutTile: the output pass with its Quad filters on a shared-memory tile (the same output) where a filter runs and the
     // sabre step is within the tile's halo (2); else kFastOutput
     const bool outTiled=tune.fmOutTile!=0&&(moire>0.f||(quadLift&&validShorts>0))&&OW<=2*W&&g.outputTiledReady();
-    const int PO=outTiled?int(A::pOutputTiled):int(A::pOutput);
+    // P731: on a stream without a Quad filter, the lean output program for every group and the full one again for the groups the
+    // hole fill can change (every uniform and sampler given to the lean one goes to the fill one too)
+    const bool outSplit=!outTiled&&!stripMode&&tune.fmOutSplit!=0&&moire<=0.f&&!(quadLift&&validShorts>0)&&g.outputSplitReady();
+    const int PO=outTiled?int(A::pOutputTiled):outSplit?int(A::pOutputLean):int(A::pOutput);
+    if(outSplit){g.mirrorFrom=PO;g.mirrorTo=int(A::pOutputFill);}
+    struct MirrorOff { FastMergeGpu& g; ~MirrorOff(){g.mirrorFrom=g.mirrorTo=-1;} } mirrorOff{g};
     g.u1i(PO,"u_acc_row0",0);
     const auto& nr=tune.fastMotionDenoise;
     g.u2f(PO,"u_motion_nr_control",nr[6],float(motionNrDonors));
@@ -1707,13 +1712,30 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
         // P682: a fence after each band's output pass, flushed: the readback below takes band b once it is written (readBuffer's done)
         struct BandFences { std::vector<GLsync> f; ~BandFences(){for(GLsync s:f)if(s)glDeleteSync(s);} } bandDone;
         bandDone.f.assign(size_t(bands),nullptr);
+        // P731: the fill list (header + one entry per group of a band: OW / 4 x bandRows), zeroed once; the arguments pass resets the count
+        const bool fillPass=outSplit&&validShorts>0&&outFill>0;
+        GLuint fillList=0;
+        if(outSplit){
+            const size_t entries=8+size_t((OW+3)/4)*size_t(bandRows);
+            fillList=g.buffer(entries*4);
+            const std::vector<uint32_t> zero(8,0u);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER,fillList);glBufferSubData(GL_SHADER_STORAGE_BUFFER,0,32,zero.data());
+        }
         for(int b=0;b<bands;++b){
             const int y0=b*bandRows,rows=std::min(bandRows,OH-y0);
             bRgb[size_t(b)]=g.readBuffer(size_t(OW)*rows*6);
             bFlags[size_t(b)]=clipFlags?g.readBuffer(size_t(OW)*rows):unusedOutput;
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER,0,bRgb[size_t(b)]);glBindBufferBase(GL_SHADER_STORAGE_BUFFER,1,bFlags[size_t(b)]);
             g.u1i(PO,"u_row0",y0);g.u1i(PO,"u_rows",rows);
+            if(outSplit)glBindBufferBase(GL_SHADER_STORAGE_BUFFER,3,fillList);
             g.dispatch(PO,outTiled?(OW+31)/32:(OW/4+63)/64,outTiled?(rows+7)/8:rows);
+            if(fillPass){ // P731: the listed groups again with the fill (the arguments from the lean pass's count)
+                glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+                g.dispatch(A::pOutputFillArgs,1,1);
+                glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT|GL_COMMAND_BARRIER_BIT);
+                g.dispatchIndirect(A::pOutputFill,fillList);
+                glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            }
             if(bands>1){bandDone.f[size_t(b)]=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);glFlush();}
         }
         // P480: the base highlight mask (0x530) for the app's dezipper pass, only with the highlight path on (none: no pass, no trailer)
@@ -2115,7 +2137,7 @@ inline std::vector<float> hybridFastMerge(const HybridInput& input,const HybridT
     }
     char line[600];
     std::snprintf(line,sizeof(line),"HYBRID FAST MERGE GPU: %s%s, context %s%s %.0f ms (%s), objects+submit %.0f ms, first readback waited %.0f ms, readback %.0f ms (%s, %s; map %.0f, use %.0f, unmap %.0f)",
-        g.renderer.c_str(),(g.gpuPrio+", filter "+(g.rejFilterGather?"gather":"fetch")+", merge batch "+std::to_string(mergeBatch)+(outTiled?", output tiled":"")+(guideCells?", guide cells":"")).c_str(),prewarmed?"prewarmed":kept?"kept from the band before":"made",prewarmWhy.empty()?"":(" ("+prewarmWhy+")").c_str(),prewarmed?g.initMs:ms(gpuStarted,gpuReady),g.cacheNote().c_str(),
+        g.renderer.c_str(),(g.gpuPrio+", filter "+(g.rejFilterGather?"gather":"fetch")+", merge batch "+std::to_string(mergeBatch)+(outTiled?", output tiled":outSplit?", output split":"")+(guideCells?", guide cells":"")).c_str(),prewarmed?"prewarmed":kept?"kept from the band before":"made",prewarmWhy.empty()?"":(" ("+prewarmWhy+")").c_str(),prewarmed?g.initMs:ms(gpuStarted,gpuReady),g.cacheNote().c_str(),
         ms(gpuReady,submitted),waitMs,ms(submitted,readDone),outNote.c_str(),ahbAny?"cached hardware buffers":g.ahbFailed?"default storage (hardware buffer refused)":"default storage",g.mapMs,g.useMs,g.unmapMs);
     report(line);
     report("PERF fast merge buffers: ahb="+std::to_string(g.ahbUse)

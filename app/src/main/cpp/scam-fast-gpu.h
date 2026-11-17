@@ -449,6 +449,47 @@ inline std::string fastOutputTiledText(){
          "    int yb=int(gl_WorkGroupID.y)*TH+lid.y;\n",1);
     return s;
 }
+// P731 (owner, 2026-11-17: «Да, займись склейкой»; LG V50 / Adreno 640 and a Snapdragon 870 / Adreno 650: after the last donor's
+// submit the GPU still ran 1.0 - 2.2 s against the reference app's 0.1 s «Resolve» on the same phone, the viewfinder held up to 0.58 s):
+// kFastOutput carries the hole fill (8 rays of up to 24 steps, ~6 fetches a step) and the Quad filters in one program - their
+// registers are allocated for every invocation, the common path's too. On a stream without a Quad filter the pass is split: the lean
+// program (kFastOutput without the fill and the Quad filters) writes every group and lists the groups with a pixel the short frames
+// were refused at (refusal > 0 - the only pixels the fill can change); the full program then writes the listed groups again (an
+// indirect dispatch over the list). A listed group gets kFastOutput's own code; an unlisted one the same code less a branch it never
+// takes - the output is kFastOutput's (host check: the same floats). tune fmOutSplit 0: kFastOutput everywhere (A/B).
+// The list: fl_hdr[0..2] the dispatch's group counts, [3] the lean pass's count (atomic), [4] the count the fill pass reads.
+inline void fastOutputReplace(std::string& s,const std::string& a,const std::string& b,const char* what){
+    const size_t at=s.find(a);
+    if(at==std::string::npos||s.find(a,at+a.size())!=std::string::npos)throw std::runtime_error(std::string("FAST MERGE GPU: ")+what+": the text moved");
+    s.replace(at,a.size(),b);
+}
+inline std::string fastOutputLeanText(){
+    std::string s(kFastOutput);
+    fastOutputReplace(s,"layout(std430,binding=2) writeonly buffer Eff{float eff[];};",
+        "layout(std430,binding=2) writeonly buffer Eff{float eff[];};\nlayout(std430,binding=3) buffer FillList{uint fl_hdr[8];uint fl_list[];};","lean output");
+    fastOutputReplace(s,"    uint fl=0u;\n","    uint fl=0u;\n    bool needFill=false;\n","lean output");
+    const std::string from="        float af=0.0; // P686: how far the fill below replaced this pixel\n",to="        c[k]=v;\n";
+    const size_t a=s.find(from),b=a==std::string::npos?a:s.find(to,a);
+    if(a==std::string::npos||b==std::string::npos||s.find(from,a+1)!=std::string::npos)throw std::runtime_error("FAST MERGE GPU: lean output: the fill moved");
+    s.replace(a,b-a,"        if(u_fill>0&&refusal(p)>0.0)needFill=true; // P731: the fill pass takes this group\n");
+    fastOutputReplace(s,"    int o=(yb*u_size.x+q*4)*3/2;\n",
+        "    if(needFill){uint i=atomicAdd(fl_hdr[3],1u);fl_list[i]=uint(q)|(uint(yb)<<16);}\n    int o=(yb*u_size.x+q*4)*3/2;\n","lean output");
+    return s;
+}
+inline std::string fastOutputFillText(){
+    std::string s(kFastOutput);
+    fastOutputReplace(s,"layout(std430,binding=2) writeonly buffer Eff{float eff[];};",
+        "layout(std430,binding=2) writeonly buffer Eff{float eff[];};\nlayout(std430,binding=3) readonly buffer FillList{uint fl_hdr[8];uint fl_list[];};","fill output");
+    fastOutputReplace(s,"void main(){\n    int q=int(gl_GlobalInvocationID.x);\n    int yb=int(gl_GlobalInvocationID.y);\n",
+        "void main(){\n    uint li=gl_GlobalInvocationID.x;\n    if(li>=fl_hdr[4])return;\n    int q=int(fl_list[li]&65535u);\n    int yb=int(fl_list[li]>>16);\n","fill output");
+    return s;
+}
+static const char* kFastOutputFillArgs=R"FM(#version 310 es
+precision highp int;
+layout(local_size_x=1) in;
+layout(std430,binding=3) buffer FillList{uint fl_hdr[8];uint fl_list[];};
+void main(){uint n=fl_hdr[3];fl_hdr[0]=(n+63u)/64u;fl_hdr[1]=1u;fl_hdr[2]=1u;fl_hdr[4]=n;fl_hdr[3]=0u;}
+)FM";
 // P712 (X300 Ultra, 50 MP Quad bands: the guide 175 - 210 ms of each band's GPU time, ~40 ms a frame; the Quad / Tetra guide sh035):
 // sh035 reads the 5 x 5 cells around each HALF texel and turns each into its value - the mean of the square roots of its four gained
 // sites (Tetra: of its 2 x 2 cell block's mean) - 25 fetches and 100 square roots a texel (Tetra 100 fetches), every cell's value
@@ -691,6 +732,7 @@ public:
                 pFlowPick,pFlowBg,pCyclopsRescue, // P601: built with the rest when they can be (flowPickProgram / flowPickReady)
                 pOutputTiled, // P712: kFastOutput with its Quad filters on a shared-memory tile (outputTiledReady)
                 pQuadCells,pGuideQuadCells, // P712: the Quad / Tetra guide's cell values made once (guideCellsReady)
+                pOutputLean,pOutputFill,pOutputFillArgs, // P731: the output pass split (outputSplitReady)
                 kProgs };
     GLuint prog[kProgs]{};
     std::vector<GLuint> textures,fbos,buffers;
@@ -743,6 +785,7 @@ public:
             // build leaves the pick off for the merge (flowPickReady), not the route
             try{flowPickProgram(true);}catch(const std::exception& e){notes.push_back(std::string("FAST MERGE GPU: flow pick programs unavailable (")+e.what()+")");}
             outputTiledReady(); // P712 (a GPU whose compiler refuses it: kFastOutput, noted)
+            outputSplitReady(); // P731 (refused: kFastOutput, noted)
             guideCellsReady(); // P712 (refused: sh035 as before, noted)
             if(compiled>0)trimCache();
             check("init");
@@ -810,6 +853,25 @@ public:
         outputTiledTried=true;
         try{static const std::string text=fastmerge::fastOutputTiledText();prog[pOutputTiled]=cs(text.c_str());return true;}
         catch(const std::exception& e){notes.push_back(std::string("FAST MERGE GPU: tiled output off (")+e.what()+")");return false;}
+    }
+    // P731: the lean / fill output programs, built once at init (the prewarm caches them); false (and a note) when one does not build
+    bool outputSplitTried=false;
+    bool outputSplitReady(){
+        if(prog[pOutputLean]&&prog[pOutputFill]&&prog[pOutputFillArgs])return true;
+        if(outputSplitTried)return false;
+        outputSplitTried=true;
+        try{
+            static const std::string lean=fastmerge::fastOutputLeanText(),fill=fastmerge::fastOutputFillText();
+            prog[pOutputLean]=cs(lean.c_str());prog[pOutputFill]=cs(fill.c_str());prog[pOutputFillArgs]=cs(fastmerge::kFastOutputFillArgs);
+            return true;
+        }catch(const std::exception& e){
+            notes.push_back(std::string("FAST MERGE GPU: split output off (")+e.what()+")");
+            for(int q:{int(pOutputLean),int(pOutputFill),int(pOutputFillArgs)})if(prog[q]){glDeleteProgram(prog[q]);prog[q]=0;}
+            return false;
+        }
+    }
+    void dispatchIndirect(int p,GLuint args){
+        glUseProgram(prog[p]);glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER,args);glDispatchComputeIndirect(0);glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER,0);
     }
     void flowPickProgram(bool rescue){ // P601 (throws when one does not build)
         if(!prog[pFlowPick])prog[pFlowPick]=fs(fastmerge::kFastFlowPick);
@@ -890,18 +952,21 @@ public:
         auto it=locs.find(key);if(it!=locs.end())return it->second;
         const GLint l=glGetUniformLocation(prog[p],n);locs.emplace(key,l);return l;
     }
-    void u1i(int p,const char* n,int v){glProgramUniform1i(prog[p],L(p,n),v);}
-    void u1f(int p,const char* n,float v){glProgramUniform1f(prog[p],L(p,n),v);}
-    void u2i(int p,const char* n,int a,int b){glProgramUniform2i(prog[p],L(p,n),a,b);}
-    void u2f(int p,const char* n,float a,float b){glProgramUniform2f(prog[p],L(p,n),a,b);}
-    void u3f(int p,const char* n,float a,float b,float c){glProgramUniform3f(prog[p],L(p,n),a,b,c);}
-    void u4f(int p,const char* n,float a,float b,float c,float d){glProgramUniform4f(prog[p],L(p,n),a,b,c,d);}
-    void u4f(int p,const char* n,const std::array<float,4>& v){glProgramUniform4f(prog[p],L(p,n),v[0],v[1],v[2],v[3]);}
+    // P731: a program whose uniforms (and samplers) every setter also gives a second one (the split output's lean -> fill), -1 none
+    int mirrorFrom=-1,mirrorTo=-1;
+    void u1i(int p,const char* n,int v){glProgramUniform1i(prog[p],L(p,n),v);if(p==mirrorFrom)glProgramUniform1i(prog[mirrorTo],L(mirrorTo,n),v);}
+    void u1f(int p,const char* n,float v){glProgramUniform1f(prog[p],L(p,n),v);if(p==mirrorFrom)glProgramUniform1f(prog[mirrorTo],L(mirrorTo,n),v);}
+    void u2i(int p,const char* n,int a,int b){glProgramUniform2i(prog[p],L(p,n),a,b);if(p==mirrorFrom)glProgramUniform2i(prog[mirrorTo],L(mirrorTo,n),a,b);}
+    void u2f(int p,const char* n,float a,float b){glProgramUniform2f(prog[p],L(p,n),a,b);if(p==mirrorFrom)glProgramUniform2f(prog[mirrorTo],L(mirrorTo,n),a,b);}
+    void u3f(int p,const char* n,float a,float b,float c){glProgramUniform3f(prog[p],L(p,n),a,b,c);if(p==mirrorFrom)glProgramUniform3f(prog[mirrorTo],L(mirrorTo,n),a,b,c);}
+    void u4f(int p,const char* n,float a,float b,float c,float d){glProgramUniform4f(prog[p],L(p,n),a,b,c,d);if(p==mirrorFrom)glProgramUniform4f(prog[mirrorTo],L(mirrorTo,n),a,b,c,d);}
+    void u4f(int p,const char* n,const std::array<float,4>& v){u4f(p,n,v[0],v[1],v[2],v[3]);}
     void uMat4(int p,const char* n,const float* m){glProgramUniformMatrix4fv(prog[p],L(p,n),1,GL_FALSE,m);}
     // a sampler on a texture unit (fragment programs have no layout bindings; the compute programs' bindings are set the same way)
     void tex(int p,const char* n,int unit,GLuint t){
         glActiveTexture(GLenum(GL_TEXTURE0+unit));glBindTexture(GL_TEXTURE_2D,t);
         const GLint l=L(p,n);if(l>=0)glProgramUniform1i(prog[p],l,unit);
+        if(p==mirrorFrom){const GLint m=L(mirrorTo,n);if(m>=0)glProgramUniform1i(prog[mirrorTo],m,unit);}
     }
     // ---- objects
     uint64_t objBytes=0; // the bytes of the textures and buffers made (the merge reports it)

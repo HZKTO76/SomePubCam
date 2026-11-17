@@ -18,7 +18,10 @@ int main(){
         if(!g.selectReject(true)||!g.prog[scam::FastMergeGpu::pReject]||g.prog[scam::FastMergeGpu::pReject]==plain)throw std::runtime_error("the night motion rejection did not build");
         if(!g.selectReject(false)||g.prog[scam::FastMergeGpu::pReject]!=plain)throw std::runtime_error("the rejection without the night motion test not restored");
         scam::FastMergeGpu::check("night motion rejection");
-        std::printf("fast route programs built (%s), night motion rejection too\n",g.renderer.c_str());}
+        // P731: the split output's lean / fill / arguments programs built at init (a text that moved throws: kFastOutput alone)
+        if(!g.outputSplitReady()||!g.prog[scam::FastMergeGpu::pOutputLean]||!g.prog[scam::FastMergeGpu::pOutputFill]||!g.prog[scam::FastMergeGpu::pOutputFillArgs])
+            throw std::runtime_error("the split output programs did not build");
+        std::printf("fast route programs built (%s), night motion rejection and the split output too\n",g.renderer.c_str());}
     catch(const std::exception& e){std::printf("fast route programs: %s\n",e.what());return 1;}
     std::printf("check_fast_index_free: OK\n");
     return 0;

@@ -2,6 +2,10 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 (9) — End of the merge
+
+- The merge's last stage is lighter: the heavy fill of blown highlights runs only where it is needed. The merge finishes sooner and the viewfinder stalls less at its end. The result is unchanged.
+
 ## 2026-11-17 (8) — Honor
 
 - Fixed a crash at launch on Honor: the camera reported its sensitivity or exposure range with the bounds swapped; it is now read correctly.

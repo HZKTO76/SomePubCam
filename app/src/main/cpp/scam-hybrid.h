@@ -1281,6 +1281,8 @@ struct HybridTuning {
     // P712 fast-merge speed keys (1 = the faster program, the same result; 0 = the previous program, for an A/B on the phone):
     // fmOutTile: the output pass's Quad filters on a shared-memory tile (kFastOutput tiled: bit for bit the same output).
     int fmOutTile=1;
+    // P731 fmOutSplit: the output pass without the hole fill and the Quad filters, the fill's groups again with them (the same output)
+    int fmOutSplit=1;
     // fmGuideCells: the Quad / Tetra guide (sh035) reads its cells' values made once per frame (kFastQuadCells: bit for bit the same).
     int fmGuideCells=1;
     // fmLatticeTiled: the Quad lattice's 32-tap sums on shared memory, its phase medians by a network (the same output).
@@ -1771,7 +1773,7 @@ inline HybridTuning loadHybridTuning(const std::string& jobDir,const std::functi
             ||set("fastMotionDenoise16",&t.fastMotionDenoise[4])||set("fastMotionDenoise32",&t.fastMotionDenoise[5])
             ||set("fastMotionDenoise64",&t.fastMotionDenoise[6])
             ||set("fmFilterGather",nullptr,&t.fmFilterGather)||set("fmMergeBatch",nullptr,&t.fmMergeBatch)
-            ||set("fmOutTile",nullptr,&t.fmOutTile)||set("fmGuideCells",nullptr,&t.fmGuideCells)||set("fmLatticeTiled",nullptr,&t.fmLatticeTiled)||set("fmKeepContext",nullptr,&t.fmKeepContext)||set("fmChromaFused",nullptr,&t.fmChromaFused)||set("fmAhb",nullptr,&t.fmAhb) // P712
+            ||set("fmOutTile",nullptr,&t.fmOutTile)||set("fmOutSplit",nullptr,&t.fmOutSplit)||set("fmGuideCells",nullptr,&t.fmGuideCells)||set("fmLatticeTiled",nullptr,&t.fmLatticeTiled)||set("fmKeepContext",nullptr,&t.fmKeepContext)||set("fmChromaFused",nullptr,&t.fmChromaFused)||set("fmAhb",nullptr,&t.fmAhb) // P712
             ||set("fastMergeSport",nullptr,&t.fastMergeSport)||set("daylightPhotoMotion",nullptr,&t.daylightPhotoMotion)
             ||set("rejPixDiff",&t.rejPixDiff)||set("donorShiftMax",&t.donorShiftMax) // P488
             ||set("denoise",nullptr,&t.denoise); // P600
