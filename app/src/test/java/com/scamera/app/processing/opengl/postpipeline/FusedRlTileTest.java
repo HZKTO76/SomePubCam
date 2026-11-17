@@ -18,6 +18,15 @@ public class FusedRlTileTest {
         assertEquals(0, WhyLumaSharpen.fusedRlTile(2, 4, 0f, 16384));
     }
 
+    @Test public void computeStageByDefaultOnlyOnAdreno700AndNewer() {
+        org.junit.Assert.assertTrue(WhyLumaSharpen.fusedRlByDefault("Adreno (TM) 830"));
+        org.junit.Assert.assertTrue(WhyLumaSharpen.fusedRlByDefault("Adreno (TM) 710"));
+        org.junit.Assert.assertFalse("LG V50: slower than the fragment passes", WhyLumaSharpen.fusedRlByDefault("Adreno (TM) 640"));
+        org.junit.Assert.assertFalse(WhyLumaSharpen.fusedRlByDefault("Adreno (TM) 650"));
+        org.junit.Assert.assertFalse(WhyLumaSharpen.fusedRlByDefault("Mali-G925-Immortalis MC12"));
+        org.junit.Assert.assertFalse(WhyLumaSharpen.fusedRlByDefault(null));
+    }
+
     @Test public void dampingWiderPsfsAndLongStagesKeepTheFragmentPasses() {
         assertEquals("TV damping", 0, WhyLumaSharpen.fusedRlTile(2, 3, 0.5f, 32768));
         assertEquals("half 3 and up", 0, WhyLumaSharpen.fusedRlTile(3, 3, 0f, 1 << 20));

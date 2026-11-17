@@ -880,6 +880,15 @@ public final class WhyLumaSharpen extends Node {
      * {@code iters} iterations - its estimate and ratio of the tile and its halo in {@code maxShared} bytes of shared memory - or 0
      * when no tile of 16 or 32 fits (the fragment passes: TV damping, a wider PSF, more iterations).
      */
+    /**
+     * P729 (owner's log 2026-11-17, LG V50, Adreno 640, build 67dd1589: the sharpening 7.7 s with the compute stages against 5.3 s
+     * with the fragment passes, the viewfinder's draws held 300 - 430 ms behind them): the compute stage by default only on Adreno
+     * 700 and newer; the 6xx and older, Mali and the rest keep the fragment passes (scam_dev sharp_rl_cs 1 / 0 decides on any GPU).
+     */
+    static boolean fusedRlByDefault(String renderer) {
+        return com.scamera.app.processing.opengl.GpuPace.adrenoModel(renderer) >= 700;
+    }
+
     static int fusedRlTile(int half, int iters, float damping, int maxShared) {
         if (half < 1 || half > 2 || iters < 1 || iters > 4 || damping > 0.0001f) return 0;
         for (int tile : new int[]{32, 16}) {
@@ -898,7 +907,8 @@ public final class WhyLumaSharpen extends Node {
      */
     private GLTexture fusedRl(GLTexture obs, Point size, Psf k, int iters, float amount, float damping, float halo, float margin,
                               float macro, float edgeGuard, float protectShadows, float protectHighlights, int nb, List<GLTexture> pool) {
-        if (fusedRlFailed || com.scamera.app.processing.opengl.PostGlMode.legacy() || !PreferenceKeys.scamDevSwitch("sharp_rl_cs", true))
+        if (fusedRlFailed || com.scamera.app.processing.opengl.PostGlMode.legacy()
+                || !PreferenceKeys.scamDevSwitch("sharp_rl_cs", fusedRlByDefault(android.opengl.GLES20.glGetString(android.opengl.GLES20.GL_RENDERER))))
             return null;
         if (maxSharedBytes < 0) {
             final int[] v = new int[1];

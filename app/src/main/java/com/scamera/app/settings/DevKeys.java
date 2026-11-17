@@ -519,8 +519,8 @@ public final class DevKeys {
         k.add(s(post, "lpyr_mrt", true, Lang.t("Пирамида слияния: первый уровень всех трёх плоскостей за один проход (те же пиксели; выкл — три прохода, как раньше)",
                 "Fusion pyramid: level 1 of all three planes in one pass (the same pixels; off: three passes as before)")));
         // P725: an RL stage of the luma sharpening as one compute pass (the same terms; the stores' rounding of the GPU aside)
-        k.add(s(post, "sharp_rl_cs", true, Lang.t("RL-резкость: все итерации стадии за один вычислительный проход вместо шести полных (те же вычисления; выкл — как раньше)",
-                "RL sharpening: all iterations of a stage in one compute pass instead of six full passes (the same computation; off: as before)")));
+        k.add(sAuto(post, "sharp_rl_cs", Lang.t("RL-резкость: все итерации стадии за один вычислительный проход вместо шести полных (те же вычисления; выкл — как раньше; Авто — на Adreno 7xx и новее)",
+                "RL sharpening: all iterations of a stage in one compute pass instead of six full passes (the same computation; off: as before; Auto: on Adreno 7xx and newer)")));
         // P724: each band of a banded pass scissored to its viewport (the same pixels; a tiling GPU loads and stores only the band)
         k.add(s(post, "post_scissor", true, Lang.t("Полосы обработки с ножницами по своей области (те же пиксели, тайловый GPU не перечитывает весь кадр на каждую полосу; выкл — как раньше)",
                 "Processing bands scissored to their own area (the same pixels; a tiling GPU does not reload the whole frame for every band; off: as before)")));

@@ -2,6 +2,10 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 (6) — Processing on older phones
+
+- On phones with Adreno 6xx and older GPUs (the LG V50, for one) sharpening is computed the previous way again: the new one was slower there, and the viewfinder stuttered during processing.
+
 ## 2026-11-17 (5) — HDR photo
 
 - Changed how «HDR photo» works: on an HDR display only the highlights the regular photo compressed get brighter, the sky, clouds, lights and reflections with their detail. Mid tones and shadows stay as in the regular photo: a wider range, not just a brighter picture.

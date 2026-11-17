@@ -42,6 +42,22 @@ public class GpuPaceGpuTimeTest {
         next.close();
     }
 
+    @Test public void olderAdrenoKeepsTheWaitsSizing() {
+        GpuPace.forgetBands();
+        assertEquals(true, GpuPace.timerSizesBands("Adreno (TM) 830"));
+        assertEquals(true, GpuPace.timerSizesBands("Adreno (TM) 710"));
+        assertEquals("LG V50: its timer undercounts ~6 x", false, GpuPace.timerSizesBands("Adreno (TM) 640"));
+        assertEquals(false, GpuPace.timerSizesBands("Mali-G710"));
+        final Map<String, Float> seed = new HashMap<>();
+        seed.put("why/sharp_rl", 0.1f);
+        GpuPace.seed(seed);
+        final GpuPace.Pacer p = pacer(128);
+        p.timerSizing = false;
+        // the seed is also the waits' starting value (P683): 1e7 / (0.1 x 4032) = 24800 rows, but never above the 256 asked
+        assertEquals(256, p.bandRows("why/sharp_rl", 4032, 256, GpuPace.WIDE_BAND_ROWS));
+        p.close();
+    }
+
     @Test public void slowProgramStillGetsTenMillisecondBandsAboveTheMinimum() {
         GpuPace.forgetBands();
         final Map<String, Float> seed = new HashMap<>();

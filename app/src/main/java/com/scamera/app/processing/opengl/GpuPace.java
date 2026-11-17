@@ -158,6 +158,9 @@ public final class GpuPace {
             this(gpu, inFlight, bandMs, hidden, BAND_STEP);
         }
 
+        /** P729: the GPU timer's ns per pixel size the bands (false: the waits', P668). */
+        boolean timerSizing = true;
+
         Pacer(Gpu gpu, int inFlight, float bandMs, java.util.function.BooleanSupplier hidden, int minBandRows) {
             this.gpu = gpu;
             this.inFlight = Math.max(1, inFlight);
@@ -244,7 +247,7 @@ public final class GpuPace {
          */
         public int bandRows(String pass, int width, int maxRows, int limitRows) {
             if (bandNs <= 0 || pass == null || width <= 0 || hidden.getAsBoolean()) return maxRows;
-            final Float gpuNs = GPU_NS_PER_PIXEL.get(pass);
+            final Float gpuNs = timerSizing ? GPU_NS_PER_PIXEL.get(pass) : null;
             if (gpuNs != null && gpuNs > 0f && !gpuNs.isInfinite()) {
                 final int limit = Math.max(maxRows, limitRows);
                 if (limit <= minBandRows) return maxRows;
@@ -370,6 +373,23 @@ public final class GpuPace {
         return setting > 0f ? Math.min(1000f, Math.max(1f, setting)) : 0f;
     }
 
+    /**
+     * P729 (owner's log 2026-11-17, LG V50, Adreno 640, build 67dd1589: the GPU timer counted 2.1 s of the post, its bands' waits
+     * 13.0 s, the smallest 1.6 ms - each band's wait grows with its work: the timer undercounts this GPU's work about 6 x): the
+     * Adreno 6xx and older and every other GPU without a measurement of its own keep P668's sizing by the waits; Adreno 7xx and
+     * newer size by the timer (P724). The model number of {@code gpu}, or -1 (not an Adreno).
+     */
+    public static int adrenoModel(String gpu) {
+        if (gpu == null) return -1;
+        final java.util.regex.Matcher model = ADRENO_MODEL.matcher(gpu);
+        return model.find() ? Integer.parseInt(model.group(1)) : -1;
+    }
+
+    /** P729: whether the GPU timer's times size this GPU's bands (Adreno 700 and newer). */
+    static boolean timerSizesBands(String gpu) {
+        return adrenoModel(gpu) >= 700;
+    }
+
     static int minBandRowsFor(String gpu, float bandSetting) {
         if (!Float.isNaN(bandSetting) || gpu == null) return BAND_STEP;
         final java.util.regex.Matcher model = ADRENO_MODEL.matcher(gpu);
@@ -483,8 +503,12 @@ public final class GpuPace {
             n = 0;
             bandMs = 0f;
         }
-        if (n > 0) CURRENT.set(new Pacer(GL, n, bandMs, Boolean.TRUE.equals(REPLAY.get()) ? () -> false
-                : com.scamera.app.ui.camera.views.viewfinder.VfDrawMeter::hiddenNow, minBandRows));
+        if (n > 0) {
+            final Pacer p = new Pacer(GL, n, bandMs, Boolean.TRUE.equals(REPLAY.get()) ? () -> false
+                    : com.scamera.app.ui.camera.views.viewfinder.VfDrawMeter::hiddenNow, minBandRows);
+            p.timerSizing = timerSizesBands(renderer); // P729
+            CURRENT.set(p);
+        }
         // P683: the first shot of a process starts from the first-run calibration's ns per pixel (GpuProfile), not from 256 rows
         if (n > 0 && bandMs > 0f && SEEDED.compareAndSet(false, true)) {
             try {
