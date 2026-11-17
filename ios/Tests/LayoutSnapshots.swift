@@ -66,7 +66,7 @@ final class LayoutSnapshots: XCTestCase {
             let width = max(200, stage.column - 20)
             save(VStack(spacing: 16) {
                 CameraSegmented(labels: ["LUT", "Фильтр", "Плёнка", "Цвет"], selected: 2, dots: [true, false, false, false], onPick: { _ in })
-                LutTray(onAll: { _ in })
+                LutTray(onAll: { _ in }).frame(maxWidth: 620)
                 Spacer(minLength: 0)
             }
             .frame(width: width)

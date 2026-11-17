@@ -266,7 +266,9 @@ struct CameraView: View {
                                                 removal: .opacity.combined(with: .offset(y: 20))))
                 }
                 if lut.open && shadeDown {
+                    // on an iPad's wide column the tray keeps a phone's proportions (its tabs no longer spread over 900 pt)
                     LutTray(onAll: { lutPage = $0; lut.open = false })
+                        .frame(maxWidth: 620)
                         .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .top)))
                 }
             }

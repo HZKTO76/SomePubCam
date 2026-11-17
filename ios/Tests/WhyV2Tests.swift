@@ -38,7 +38,7 @@ final class WhyV2AeTests: XCTestCase {
         XCTAssertEqual(r.p98, v, accuracy: 1e-6)
         XCTAssertEqual(r.p995, v, accuracy: 1e-6)
         XCTAssertEqual(r.geo, v + 0.0001220703125, accuracy: 1e-5)
-        XCTAssertEqual(r.ae, 0.15 / r.geo, accuracy: 1e-5)
+        XCTAssertEqual(r.ae, max(p.minLimit, 0.15 / r.geo), accuracy: 1e-5) // the darkening limit (1 since P721)
         XCTAssertEqual(r.deficit, 1)
         XCTAssertEqual(r.effS, 0)
         XCTAssertEqual(r.effH, 0)
