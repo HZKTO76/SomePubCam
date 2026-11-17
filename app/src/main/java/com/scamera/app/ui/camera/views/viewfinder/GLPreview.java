@@ -32,6 +32,7 @@ public class GLPreview extends GLSurfaceView {
     MainRenderer mRenderer;
     /** The aspect the view is measured to (0: the parent's size). */
     private volatile long aspect;
+    private int heightLimit;
     private volatile TextureView.SurfaceTextureListener textureListener;
     private Handler main;
     /** The layout editor's stand-in: no GL there. */
@@ -211,7 +212,15 @@ public class GLPreview extends GLSurfaceView {
         post(this::requestLayout);
     }
 
-    /** Fits the full preview to the window width, keeping its aspect. Only the window itself bounds its height. */
+    /** UI-thread height budget for 4:3 in a short window, zero when the controls already fit. */
+    public boolean setHeightLimit(int limit) {
+        if (heightLimit == limit) return false;
+        heightLimit = limit;
+        requestLayout();
+        return true;
+    }
+
+    /** Fits the preview without stretching its aspect. Wide modes can draw under the controls. */
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
@@ -223,6 +232,8 @@ public class GLPreview extends GLSurfaceView {
         double scale = width / (double) aspectW;
         if (MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED)
             scale = Math.min(scale, MeasureSpec.getSize(heightMeasureSpec) / (double) aspectH);
+        if (heightLimit > 0 && 3L * aspectH <= 4L * aspectW)
+            scale = Math.min(scale, heightLimit / (double) aspectH);
         setMeasuredDimension((int) Math.round(aspectW * scale), (int) Math.round(aspectH * scale));
     }
 

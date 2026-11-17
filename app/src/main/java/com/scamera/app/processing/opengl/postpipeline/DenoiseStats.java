@@ -216,12 +216,17 @@ final class DenoiseStats {
         GLTexture atlas = null;
         try {
             atlas = tex(owned, new Point(bw, bh), GLFormat.DataType.UNSIGNED_32, 4, GL_NEAREST);
-            glProg.setLayout(16, 16, 1);
+            final boolean smallGroup = PreferenceKeys.scamDevSwitch("snr_cs_64", false);
+            glProg.setLayout(16, smallGroup ? 4 : 16, 1);
+            if (smallGroup) glProg.setDefine("SNR_SMALL_GROUP", 1);
             glProg.useAssetProgram("scamdn/stats_cs", true);
             glProg.setTexture("InputBuffer", rgb);
             glProg.setVar("modelU", sY, rY);
             glProg.setTextureCompute("outStats", atlas, true);
+            final boolean timing = smallGroup || com.scamera.app.processing.opengl.GLGpuTimer.measuring();
+            final long started = timing ? System.nanoTime() : 0L;
             glProg.computeManual(bw, bh, 1);
+            final long dispatched = timing ? System.nanoTime() : 0L;
             final int[] texels = readInts(atlas);
             final int error = android.opengl.GLES30.glGetError();
             if (error != android.opengl.GLES30.GL_NO_ERROR) {
@@ -230,7 +235,13 @@ final class DenoiseStats {
             }
             final float[] raw = statsOf(texels, bw, 0, 0, bw, bh);
             rawOut[0] = raw;
-            return NoiseMath.reduce(raw, bw * bh, 0.8f);
+            final long decoded = timing ? System.nanoTime() : 0L;
+            final float[] noise = NoiseMath.reduceLuma(raw, bw * bh, 0.8f);
+            if (timing) Log.i("SCAM_PIPELINE", "PERF finish noise compute group=16x" + (smallGroup ? 4 : 16)
+                    + " dispatchWait=" + (dispatched - started) / 1_000_000
+                    + " readDecode=" + (decoded - dispatched) / 1_000_000
+                    + " reduce=" + (System.nanoTime() - decoded) / 1_000_000.0 + " ms");
+            return noise;
         } catch (RuntimeException e) {
             Log.w("SCAM_PIPELINE", "finish noise compute pass: " + e + ", the two passes");
             return null;

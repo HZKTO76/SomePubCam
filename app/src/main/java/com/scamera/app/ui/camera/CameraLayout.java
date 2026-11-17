@@ -13,6 +13,8 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import com.scamera.app.R;
+import com.scamera.app.ui.camera.views.BottomChrome;
+import com.scamera.app.ui.camera.views.viewfinder.GLPreview;
 
 /**
  * Root view of {@code camera_screen.xml}.
@@ -24,7 +26,8 @@ import com.scamera.app.R;
  * run at runtime (no duplicated layout code).
  */
 public class CameraLayout extends ConstraintLayout {
-    private View stage, topRow, frame, shutter, shutterBox, bottomRow, modeSwitch, lenses, grabber;
+    private View stage, topRow, frame, shutter, shutterBox, bottomRow, modeSwitch, lenses, grabber, sheetHandle;
+    private GLPreview preview;
 
     public CameraLayout(@NonNull Context context) {
         super(context);
@@ -50,6 +53,8 @@ public class CameraLayout extends ConstraintLayout {
         modeSwitch = findViewById(R.id.mode_switch);
         lenses = findViewById(R.id.lens_strip);
         grabber = findViewById(R.id.more_button);
+        sheetHandle = findViewById(R.id.settings_sheet_handle_slot);
+        preview = findViewById(R.id.texture);
         if (isInEditMode()) {
             CameraFragment.preparePreviewLayout(this);
         } else {
@@ -67,7 +72,7 @@ public class CameraLayout extends ConstraintLayout {
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-        if (frame == null) return;
+        if (frame == null || preview == null) return;
 
         LayoutParams anchor = (LayoutParams) frame.getLayoutParams();
         final int width = getMeasuredWidth() - getPaddingLeft() - getPaddingRight();
@@ -75,10 +80,11 @@ public class CameraLayout extends ConstraintLayout {
         // The first pass may already have clipped the shutter row to the room below the preview.
         int minShutter = shutterBox.getLayoutParams().width + modeSwitch.getLayoutParams().height
                 + ((ViewGroup.MarginLayoutParams) bottomRow.getLayoutParams()).topMargin;
-        // The shade handle floats when it does not fit below the preview (BottomChrome). It is not part of the fixed rows.
-        int controls = Math.max(shutter.getMeasuredHeight(), minShutter) + grabber.getLayoutParams().height;
+        int controls = Math.max(shutter.getMeasuredHeight(), minShutter) + grabber.getLayoutParams().height
+                + sheetHandle.getLayoutParams().height;
         if (lenses.getVisibility() != GONE) {
             controls += lenses.getMeasuredHeight() + ((ViewGroup.MarginLayoutParams) lenses.getLayoutParams()).bottomMargin;
+            controls += Math.round(BottomChrome.CLEARANCE_DP * getResources().getDisplayMetrics().density);
         }
         final int stageHeight = stage.getMeasuredHeight();
         final int column = wideWindow(width, height) ? cameraColumnWidth(width, stageHeight, controls,
@@ -92,12 +98,13 @@ public class CameraLayout extends ConstraintLayout {
         }
         // Reserve room for the controls. The preview keeps the sensor aspect.
         final int limit = compactAnchorHeight(column > 0 ? column : width, stageHeight, controls, anchor.dimensionRatio);
+        final boolean previewChanged = preview.setHeightLimit(limit);
         final boolean anchorChanged = anchor.height != limit;
         if (anchorChanged) {
             anchor.height = limit;
             frame.requestLayout();
         }
-        if (columnChanged || anchorChanged) super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        if (columnChanged || anchorChanged || previewChanged) super.onMeasure(widthMeasureSpec, heightMeasureSpec);
     }
 
     /** A 3:4 preview alone would be taller than the window at full width. */

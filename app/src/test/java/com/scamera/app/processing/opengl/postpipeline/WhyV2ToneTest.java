@@ -27,6 +27,8 @@ import org.robolectric.annotation.Config;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.FloatBuffer;
+import java.nio.ShortBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
@@ -286,10 +288,8 @@ public class WhyV2ToneTest {
 
     @Test public void clipCeiling() {
         // the reference passes its highlight recovery factor (8) with short frames in the merge, whatever the data's maximum
-        assertEquals(1f, WhyV2Stats.clipCeiling(false, 6f), 0f);
-        assertEquals(8f, WhyV2Stats.clipCeiling(true, 1.02f), 0f);
-        assertEquals(8f, WhyV2Stats.clipCeiling(true, 3f), 0f);
-        assertEquals(8f, WhyV2Stats.clipCeiling(true, 40f), 0f);
+        assertEquals(1f, WhyV2Stats.clipCeiling(false), 0f);
+        assertEquals(8f, WhyV2Stats.clipCeiling(true), 0f);
         assertEquals(1f, WhyV2Ae.clipCeiling(1.05f), 0f);
         // short frames merged: the Bento route's flag, or the fast route's valid short frames in its report
         assertTrue(WhyV2Stats.shortFramesMerged(true, null));
@@ -303,6 +303,46 @@ public class WhyV2ToneTest {
         final WhyV2Ae.Hist h = new WhyV2Ae.Hist();
         WhyV2Ae.add(h, 2f, 2f, 2f, 4f, false);
         assertEquals(1, h.luma[(int) (0.5f * 4095.99f)]);
+    }
+
+    @Test public void halfSamplesAndFloatSamplesMatchTwoPassMetering() {
+        final int count = 1 << 16;
+        final FloatBuffer floats = FloatBuffer.allocate(count * 4);
+        final ShortBuffer halves = ShortBuffer.allocate(count * 4);
+        for (int i = 0; i < count; i++) {
+            for (int c = 0; c < 4; c++) {
+                final int bits = (i + 151 * c) & 0xffff;
+                final int exponent = bits >> 10 & 31, mantissa = bits & 1023;
+                final float magnitude = exponent == 31 ? (mantissa == 0 ? Float.POSITIVE_INFINITY : Float.NaN)
+                        : Math.scalb((float) (exponent == 0 ? mantissa : 1024 + mantissa), Math.max(exponent, 1) - 25);
+                floats.put(i * 4 + c, bits < 0x8000 ? magnitude : -magnitude);
+                halves.put(i * 4 + c, (short) bits);
+            }
+        }
+        for (boolean shorts : new boolean[]{false, true}) {
+            final float clip = WhyV2Stats.clipCeiling(shorts);
+            float max = 0f;
+            for (int i = 0; i < count; i++) {
+                for (int c = 0; c < 3; c++) {
+                    final float v = floats.get(i * 4 + c);
+                    if (v > max && Float.isFinite(v)) max = v;
+                }
+            }
+            final WhyV2Ae.Hist expected = new WhyV2Ae.Hist();
+            for (int i = 0; i < count; i++) {
+                final int o = i * 4;
+                WhyV2Ae.add(expected, floats.get(o), floats.get(o + 1), floats.get(o + 2), clip, false);
+            }
+            final WhyV2Ae.Hist halfHist = new WhyV2Ae.Hist(), floatHist = new WhyV2Ae.Hist();
+            assertEquals(Float.floatToRawIntBits(max), Float.floatToRawIntBits(WhyV2Stats.measureSamples(floats, count, clip, floatHist)));
+            assertEquals(Float.floatToRawIntBits(max), Float.floatToRawIntBits(WhyV2Stats.measureSamples(halves, count, clip, halfHist)));
+            assertArrayEquals(expected.luma, floatHist.luma);
+            assertArrayEquals(expected.hl, floatHist.hl);
+            assertEquals(expected.total, floatHist.total);
+            assertArrayEquals(expected.luma, halfHist.luma);
+            assertArrayEquals(expected.hl, halfHist.hl);
+            assertEquals(expected.total, halfHist.total);
+        }
     }
 
     @Test public void ownerFloatsAndNativeDefaults() {

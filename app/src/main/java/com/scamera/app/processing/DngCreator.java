@@ -4,6 +4,7 @@ import android.os.Build;
 
 import com.scamera.app.processing.color.DngColour;
 import com.scamera.app.processing.render.Parameters;
+import com.scamera.app.settings.PreferenceKeys;
 import com.scamera.app.util.DeviceName;
 import com.scamera.app.util.Log;
 
@@ -13,6 +14,11 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.util.Arrays;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * One DNG file of a shot, built by the native writer (library dngCreator, dngCreator.cpp): {@link #setParameters} hands it
@@ -210,6 +216,7 @@ public class DngCreator {
                            boolean half, float headroom, boolean lossless) throws IOException {
         if (!(out instanceof ChannelSink) || !(((ChannelSink) out).channel instanceof FileChannel))
             throw new IOException("Linear DNG requires a seekable file");
+        final long started = System.nanoTime();
         final FileChannel channel = (FileChannel) ((ChannelSink) out).channel;
         final long rowBytesLong = 6L * width;
         if (width <= 0 || width > 65520 || height <= 0
@@ -231,31 +238,109 @@ public class DngCreator {
         final ByteBuffer source = rgb.slice();
         final ByteBuffer strip = ByteBuffer.allocateDirect(rows * rowBytes);
         final byte[] coded = compress ? new byte[4 * strip.capacity() + 4096] : null;
+        final boolean parallel = compress && strips > 1 && strip.capacity() <= STREAM_PIECE && (long) width * height <= 16_000_000L
+                && Runtime.getRuntime().availableProcessors() >= 4 && PreferenceKeys.scamDevSwitch("dng_linear_parallel", false);
         channel.position(bytes.length);
-        for (int y = 0, index = 0; y < height; index++) {
-            final int h = Math.min(rows, height - y);
-            final long start = channel.position();
-            if (!nLinearStrip(source, half, width, y, h, headroom, strip, compress ? rows : h))
-                throw new IOException("Linear DNG: invalid RGB strip");
-            if (coded != null) {
-                final int n = nLinearCompress(strip, width, rows, coded);
-                if (n <= 0) throw new IOException("Linear DNG: lossless JPEG failed");
-                out.write(coded, 0, n);
-            } else {
-                strip.clear().limit(h * rowBytes);
-                while (strip.hasRemaining()) channel.write(strip);
+        final boolean parallelUsed;
+        try (LinearStripWorker worker = parallel ? LinearStripWorker.create(strip.capacity(), coded.length) : null) {
+            parallelUsed = worker != null;
+            Future<Integer> pending = null;
+            for (int y = 0, index = 0; y < height; index++) {
+                final int h = Math.min(rows, height - y);
+                final long start = channel.position();
+                if (pending != null) {
+                    out.write(worker.coded, 0, worker.result(pending));
+                    pending = null;
+                } else if (coded != null) {
+                    final int next = y + h;
+                    if (worker != null && next < height) {
+                        pending = worker.executor.submit(() -> compressLinearStrip(source, half, width, next,
+                                Math.min(rows, height - next), headroom, rows, worker.strip, worker.coded));
+                    }
+                    out.write(coded, 0, compressLinearStrip(source, half, width, y, h, headroom, rows, strip, coded));
+                } else {
+                    if (!nLinearStrip(source, half, width, y, h, headroom, strip, h))
+                        throw new IOException("Linear DNG: invalid RGB strip");
+                    strip.clear().limit(h * rowBytes);
+                    while (strip.hasRemaining()) channel.write(strip);
+                }
+                final long end = channel.position();
+                if (end > 0xffffffffL) throw new IOException("Linear DNG exceeds classic TIFF offsets");
+                header.putInt(offsets + 4 * index, (int) start);
+                header.putInt(counts + 4 * index, (int) (end - start));
+                y += h;
             }
-            final long end = channel.position();
-            if (end > 0xffffffffL) throw new IOException("Linear DNG exceeds classic TIFF offsets");
-            header.putInt(offsets + 4 * index, (int) start);
-            header.putInt(counts + 4 * index, (int) (end - start));
-            y += h;
         }
         writtenBytes = channel.position();
         channel.position(0);
         out.write(bytes);
         Log.i("PERF", "Linear DNG written: " + (writtenBytes >> 10) + " KB, " + width + "x" + height
-                + (compress ? ", lossless JPEG" : ", uncompressed"));
+                + (compress ? ", lossless JPEG" : ", uncompressed") + ", " + (parallelUsed ? 2 : 1) + " worker(s), "
+                + (System.nanoTime() - started) / 1_000_000 + " ms");
+    }
+
+    private static int compressLinearStrip(ByteBuffer source, boolean half, int width, int y, int h, float headroom,
+                                           int rows, ByteBuffer strip, byte[] coded) throws IOException {
+        if (!nLinearStrip(source, half, width, y, h, headroom, strip, rows))
+            throw new IOException("Linear DNG: invalid RGB strip");
+        final int n = nLinearCompress(strip, width, rows, coded);
+        if (n <= 0) throw new IOException("Linear DNG: lossless JPEG failed");
+        return n;
+    }
+
+    /** One additional strip, compressed beside the caller. The caller alone writes the file in strip order. */
+    private static final class LinearStripWorker implements AutoCloseable {
+        final ByteBuffer strip;
+        final byte[] coded;
+        final ExecutorService executor;
+
+        private LinearStripWorker(int stripBytes, int codedBytes) {
+            strip = ByteBuffer.allocateDirect(stripBytes);
+            coded = new byte[codedBytes];
+            executor = Executors.newSingleThreadExecutor(task -> {
+                final Thread thread = new Thread(task, "SCAMERA-linear-dng");
+                thread.setPriority(Thread.NORM_PRIORITY - 1);
+                return thread;
+            });
+        }
+
+        static LinearStripWorker create(int stripBytes, int codedBytes) {
+            try {
+                return new LinearStripWorker(stripBytes, codedBytes);
+            } catch (OutOfMemoryError e) {
+                Log.i("PERF", "Linear DNG: parallel scratch unavailable, sequential strips");
+                return null;
+            }
+        }
+
+        int result(Future<Integer> pending) throws IOException {
+            try {
+                return pending.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Linear DNG: interrupted", e);
+            } catch (ExecutionException e) {
+                throw new IOException("Linear DNG: lossless JPEG worker failed", e.getCause());
+            }
+        }
+
+        @Override
+        public void close() {
+            executor.shutdown();
+            boolean interrupted = false;
+            // The caller frees the source after this returns, even if writing to the channel failed.
+            try {
+                while (true) {
+                    try {
+                        if (executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)) return;
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+        }
     }
 
     public static float linearHeadroom(ByteBuffer rgb, boolean half) {

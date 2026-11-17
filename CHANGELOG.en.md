@@ -2,6 +2,12 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 — Viewfinder and saving
+
+- The viewfinder leaves the lens controls clear in compact windows.
+- The last JPEG strips encode while thumbnails and metadata are prepared.
+- Post-processing and 10-bit photo export do less computation and copying.
+
 ## 2026-11-17 — Stability and large screens
 
 - The gallery responds immediately after a pinch. The grid adapts to the window width.

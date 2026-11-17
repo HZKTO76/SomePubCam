@@ -106,6 +106,8 @@ final class StreamedJpegSink implements GLCoreBlockProcessing.RgbaSink {
                 Runnable undo = null;
                 try {
                     if (draws) undo = plan.draw(pixels, w, h, stride);
+                    // The pixels are final now. Encode the remaining strips while wrap builds the EXIF and thumbnails.
+                    if (encoder != null) encoder.rows(h);
                     final OutputStream sink = plan != null ? plan.wrap(file, w, h, pixels, stride) : file;
                     if (encoder != null) encoder.finish(sink);
                     else JpegliEncoder.compress(pixels, w, h, stride, quality, sink);

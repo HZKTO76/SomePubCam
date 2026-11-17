@@ -466,7 +466,7 @@ public final class ScamLabRun {
         final Map<String, Float> reference = new HashMap<>(devLines(shot));
         final Map<String, Float> candidate = new HashMap<>(reference);
         for (String key : new String[]{"post_gpu_timer", "post_gpu_pace", "post_band_ms", "post_pbo_ring",
-                "post_stream_gl_state", "post_skip_unused_sun", "hybrid_fm_ahb"}) {
+                "post_stream_gl_state", "post_skip_unused_sun", "snr_cs_64", "hybrid_fm_ahb"}) {
             reference.remove(key);
             candidate.remove(key);
             if (now.containsKey(key)) candidate.put(key, now.get(key));

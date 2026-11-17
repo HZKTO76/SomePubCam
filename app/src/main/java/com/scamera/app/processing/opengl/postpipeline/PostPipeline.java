@@ -900,10 +900,14 @@ public class PostPipeline extends GLBasePipeline {
         return new Node[]{new WhyV2Stats(), sharpen, new WhyV2Highlights(), new WhyV2Fusion(), new WhyV2Tone()};
     }
 
-    /** Uses the assembled route, including the fallbacks for film and large grids. */
-    boolean hasWhyV2Tone() {
-        for (Node node : passList) if (node instanceof WhyV2Tone) return true;
-        return false;
+    /** The trial covers the assembled alternate tone route when it has no glow-map consumer. */
+    boolean glowMapsUnused() {
+        boolean alternateTone = false;
+        for (Node node : passList) {
+            if (node instanceof WhyCombine) return false;
+            alternateTone |= node instanceof WhyV2Tone;
+        }
+        return alternateTone;
     }
 
     /**

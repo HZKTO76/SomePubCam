@@ -67,10 +67,10 @@ public final class DevKeys {
             "sharpen_stripes", // P713: the sharpening above 100 MP on stripes (the same plane, less memory)
             "prewarm_give_up", // P656: whether a prewarm that keeps crashing is run (speed only: the shot compiles the same programs)
             "ahb_transport", // P482: the merge RGB in the app's hardware buffer instead of the memfd (the same bytes)
-            "post_noise_quantile_gpu",
+            "post_noise_quantile_gpu", "snr_cs_64",
             "jpeg_aq", "jpeg_fast_tables", // P443: how the JPEG is written, not the replayed image
             "hybrid_la_threads", "hybrid_la_stream", "hybrid_la_scam", "hybrid_rgb_half", "worker_gpu_normal_priority",
-            "isp_preview_off_always", "hybrid_isp_ccm", "hybrid_clip_flags", "dng_colour_jpeg",
+            "isp_preview_off_always", "hybrid_isp_ccm", "hybrid_clip_flags", "dng_colour_jpeg", "dng_linear_parallel",
             "dng_white_spec", // P370 (A1): the scene light and calibration weight of the shot's Parameters
             "pedestal_memory", // P386: the black of the shot's Parameters (the lab replays it as measured at the shot)
             "hybrid_sharp_select", // P331: picks the frames of the saved burst at the shot
@@ -460,6 +460,8 @@ public final class DevKeys {
                 "Keep the highlight landing map on the GPU; with file logging its statistics are read at the end of the processing, the shot is processed as without the log (P602; off: the original route: read at once, an empty map dropped)")));
         k.add(s(post, "snr_cs", true, Lang.t("SNR перед шумодавом одним compute-проходом (тот же результат); выкл — два прохода как раньше",
                 "The SNR before the denoise in one compute pass (the same result); off: the two passes as before")));
+        k.add(s(post, "snr_cs_64", false, Lang.t("Опыт: группы 16×4 в замере SNR перед шумодавом",
+                "Experimental: 16×4 workgroups for SNR before denoise")));
         k.add(s(post, "hl_chanprep_cs", true, Lang.t("Цвет пересветов (chanprep) compute-проходом (тот же результат); выкл — фрагментный как раньше",
                 "The highlight colour (chanprep) as a compute pass (the same result); off: the fragment pass as before")));
         // P479: the same output, faster passes; off = the previous route
@@ -965,6 +967,8 @@ public final class DevKeys {
         // P681: the merged DNG written on its own thread beside the post pipeline (ScamProcessor, DngReport.offPostPath)
         k.add(s(post, "dng_async", true, Lang.t("Склеенный DNG пишется в отдельном потоке параллельно с обработкой фото (только больше 8 ГБ памяти и до 100 Мп; файл тот же). Выкл — DNG записывается до обработки, как до P681",
                 "The merged DNG is written on its own thread beside the photo's processing (only above 8 GB of RAM and up to 100 MP; the same file). Off: the DNG is written before the processing, as before P681")));
+        k.add(s(post, "dng_linear_parallel", false, Lang.t("Опыт: два потока для сжатия Linear DNG до 16 Мп",
+                "Experimental: two threads for Linear DNG compression up to 16 MP")));
         // P625: the RAW crop moves the kept rows inside the frames' own slots; the burst preparation's Java loop compiled ahead
         k.add(s(post, "raw_crop_in_place", true, Lang.t("Обрезка RAW (X200 Pro, ручные поля, кроп зума) на месте: строки сдвигаются в своём буфере кадра, без нового буфера на все кадры, воркер, запущенный при нажатии, остаётся в деле. Выкл — копия в новый буфер, как до P625",
                 "The RAW crop (X200 Pro, manual margins, the zoom's crop) in place: the rows move inside each frame's own buffer, no new buffer for the whole burst, the worker started at the press stays usable. Off: copied into a new buffer, as before P625")));

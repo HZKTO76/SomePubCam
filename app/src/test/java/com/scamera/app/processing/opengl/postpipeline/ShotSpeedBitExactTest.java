@@ -60,8 +60,11 @@ public class ShotSpeedBitExactTest {
         for (int count : counts) {
             for (int levels : new int[]{0, 3, 16, 256}) {
                 float[] b = blocks(r, count, levels);
+                final float[] reference = NoiseMath.reduceLegacy(b, count, 0.8f);
                 assertSameBits("count " + count + " levels " + levels,
-                        NoiseMath.reduceLegacy(b, count, 0.8f), NoiseMath.reduce(b, count, 0.8f));
+                        reference, NoiseMath.reduce(b, count, 0.8f));
+                assertSameBits("luma at count " + count + " levels " + levels,
+                        reference == null ? null : new float[]{reference[0]}, NoiseMath.reduceLuma(b, count, 0.8f));
             }
         }
         // Fewer than 16 valid blocks: null in both.

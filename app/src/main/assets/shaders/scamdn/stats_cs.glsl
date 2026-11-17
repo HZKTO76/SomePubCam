@@ -1,4 +1,5 @@
 #define LAYOUT //
+#define SNR_SMALL_GROUP 0
 LAYOUT
 precision highp float; precision highp int; precision highp sampler2D; precision highp uimage2D;
 // P473 (speed): scamdn/stats of the finish level 0 as one work group per 16 x 16 block (the fragment version reads ~1500 texels
@@ -81,13 +82,19 @@ void main() {
     ivec2 blk = ivec2(gl_WorkGroupID.xy), o = blk * 16;
     int lid = int(gl_LocalInvocationIndex);
     bool inside = o.x + 4 * sub <= size.x && o.y + 4 * sub <= size.y;
+#if SNR_SMALL_GROUP
+    // The smaller workgroup loads the same 256 pixels, four per invocation. All of the reductions below are unchanged.
+    for (int pixel = lid; pixel < 256; pixel += int(gl_WorkGroupSize.x * gl_WorkGroupSize.y)) {
+#else
     {
-        ivec2 p = min(o + ivec2(lid % 16, lid / 16), size - 1);
+        int pixel = lid;
+#endif
+        ivec2 p = min(o + ivec2(pixel % 16, pixel / 16), size - 1);
         vec3 c = texelFetch(InputBuffer, p, 0).rgb;
         c = vec3(finite1(c.r), finite1(c.g), finite1(c.b));
-        px[lid] = half3(vec3(dot(c, vec3(0.2126, 0.7152, 0.0721996)),
-                             dot(c, vec3(-0.162450244, -0.546494309, 0.708944715)),
-                             dot(c, vec3(0.999996748, -0.908302439, -0.091693333))));
+        px[pixel] = half3(vec3(dot(c, vec3(0.2126, 0.7152, 0.0721996)),
+                               dot(c, vec3(-0.162450244, -0.546494309, 0.708944715)),
+                               dot(c, vec3(0.999996748, -0.908302439, -0.091693333))));
     }
     barrier();
     if (lid < 16) {

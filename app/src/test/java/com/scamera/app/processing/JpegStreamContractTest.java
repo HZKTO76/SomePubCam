@@ -66,4 +66,16 @@ public class JpegStreamContractTest {
         assertTrue("a result whose buffer was lost is dropped", post.contains("if (!glproc.sinkTook) streamedJpeg = null;"));
         assertFalse("never for the 10-bit output", post.contains("rgbaSink = jpegQuality > 0 && !legacyRun && tenBitOutput"));
     }
+
+    @Test public void theLastRowsAreSubmittedAfterMarksAndBeforeMetadata() throws IOException {
+        final String src = read("src/main/java/com/scamera/app/processing/opengl/postpipeline/StreamedJpegSink.java");
+        final String finish = src.substring(src.indexOf("public boolean finish()"));
+        final int draw = finish.indexOf("plan.draw(pixels, w, h, stride)");
+        final int rows = finish.indexOf("encoder.rows(h)");
+        final int wrap = finish.indexOf("plan.wrap(file, w, h, pixels, stride)");
+        final int join = finish.indexOf("encoder.finish(sink)");
+        assertTrue("the encoder only reads final rows, overlapped with building metadata", draw >= 0 && draw < rows && rows < wrap && wrap < join);
+        final int abort = finish.indexOf("encoder.close()");
+        assertTrue("a fallback joins the encoder before restoring pixels", join < abort && abort < finish.indexOf("undoDrawing(undo)"));
+    }
 }

@@ -1341,11 +1341,10 @@ public final class ScamRgb extends Node {
             passOut=p.getMain();shaderProg.drawBlocks(passOut);shaderProg.closed=true;
             if(purpleBound!=null){purpleBound.close();purpleBound=null;}
             if(oppGpu!=null){oppGpu.close();oppGpu=null;}
-            // WhyV2Tone only releases these two maps. WhyCombine is their image consumer.
-            final boolean v2Maps = (hybrid && flagsTex != null || opposed) && p.hasWhyV2Tone();
-            final boolean skipMaps = v2Maps && !PostGlMode.legacy() && !ScamDiagnostics.active()
+            final boolean unusedMaps = ((hybrid && flagsTex != null) || opposed) && p.glowMapsUnused();
+            final boolean skipMaps = unusedMaps && !PostGlMode.legacy() && !ScamDiagnostics.active()
                     && PreferenceKeys.scamDevSwitch("post_skip_unused_sun", false);
-            final long mapsStarted = v2Maps ? System.nanoTime() : 0L;
+            final long mapsStarted = unusedMaps ? System.nanoTime() : 0L;
             if (!skipMaps) {
                 final int shorter=wholeShorter(p.frozen,WhyTone.lowFactor(p.shotParams),size);
                 if(hybrid&&flagsTex!=null){
@@ -1357,7 +1356,7 @@ public final class ScamRgb extends Node {
                     p.opposedShareSize=p.opposedShare!=null?new Point(size):null;p.opposedShareBlock=shareBlock(shorter);
                 }
             }
-            if (v2Maps) com.scamera.app.util.Log.i("PERF", "WHY V2 highlight maps skipped=" + skipMaps
+            if (unusedMaps) com.scamera.app.util.Log.i("PERF", "highlight glow maps skipped=" + skipMaps
                     + " submit_us=" + (System.nanoTime() - mapsStarted) / 1_000);
             final String chromaLog=chromaNear!=null?chromaNear.size.x+"x"+chromaNear.size.y+" block "+block:"neutral";
             // Clip band: the dashed orange/blue line where a slanted clip edge alternates between clipped-mean and

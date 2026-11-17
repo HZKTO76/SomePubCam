@@ -841,8 +841,10 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
     private Bitmap drawBlocksToBitmap1010102(OutputTiming timing) {
         requireTileBuffer();
         final Bitmap dst = Bitmap.createBitmap(outW, outH, Bitmap.Config.RGBA_1010102);
+        final boolean nativeRows = !PostGlMode.legacy() && !PostGlMode.tileReadback();
+        TileBlitter blitter = null;
         boolean done = false;
-        try (TileBlitter blitter = new TileBlitter(dst, stripRows())) {
+        try {
             glBindFramebuffer(GL_FRAMEBUFFER, tileFramebuffer[0]);
             final GLBlockDivider tiles = new GLBlockDivider(outH, GLDrawParams.TILE_ROWS);
             final int[] tile = new int[2];
@@ -863,7 +865,11 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
                         return drawBlocksToBitmap();
                     }
                 }
-                blitter.blit(tileBuffer, tile[0], tile[1]);
+                // Same packed words as the strip's SRC copy, without the intermediate bitmap copy.
+                if (!nativeRows || blitter != null || !JpegliEncoder.copyRows(tileBuffer, dst, tile[0], tile[1], 1)) {
+                    if (blitter == null) blitter = new TileBlitter(dst, stripRows());
+                    blitter.blit(tileBuffer, tile[0], tile[1]);
+                }
                 timing.copied();
                 timing.tiles++;
             }
@@ -873,6 +879,7 @@ public class GLCoreBlockProcessing extends GLContext implements AutoCloseable {
             timing.log("tiles 10-bit", outW, outH);
             return dst;
         } finally {
+            if (blitter != null) blitter.close();
             if (!done && !dst.isRecycled()) dst.recycle();
         }
     }
