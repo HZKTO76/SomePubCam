@@ -228,6 +228,10 @@ extension PhotoCapture {
             burst.report.append("N: the RAW + HEIC request refused (\(reason)), RAW only")
             first = try await capturePhotos(request(withProcessed: false), timeout: timeout)
         }
+        if !first.contains(where: \.isRawPhoto) {
+            lost += 1
+            burst.report.append("N: request 1 of \(count) lost: \(first.count) photo(s), no RAW")
+        }
         try take(first, into: &burst)
         if count > 1 {
             let window = ZslSingles.window
@@ -239,15 +243,23 @@ extension PhotoCapture {
                     next += 1
                     let settings = request(withProcessed: false)
                     group.addTask {
-                        let photos = (try? await self.capturePhotos(settings, timeout: timeout)) ?? []
-                        return (k, ZslSingles.Photos(photos))
+                        do {
+                            return (k, ZslSingles.Photos(try await self.capturePhotos(settings, timeout: timeout)))
+                        } catch {
+                            return (k, ZslSingles.Photos([], failure: error.localizedDescription))
+                        }
                     }
                 }
                 while next < count && next - due < window { issue() }
+                var why: [Int: String] = [:]
                 while let (k, box) = try await group.next() {
                     ready[k] = box.photos
+                    if let f = box.failure { why[k] = f }
                     while let photos = ready.removeValue(forKey: due) {
-                        if !photos.contains(where: \.isRawPhoto) { lost += 1 }
+                        if !photos.contains(where: \.isRawPhoto) {
+                            lost += 1
+                            burst.report.append("N: request \(due + 1) of \(count) lost: " + (why[due] ?? "\(photos.count) photo(s), no RAW"))
+                        }
                         try take(photos, into: &burst)
                         due += 1
                     }
@@ -576,7 +588,8 @@ enum ZslSingles {
 
     final class Photos: @unchecked Sendable {
         let photos: [AVCapturePhoto]
-        init(_ photos: [AVCapturePhoto]) { self.photos = photos }
+        let failure: String?
+        init(_ photos: [AVCapturePhoto], failure: String? = nil) { self.photos = photos; self.failure = failure }
     }
 
     /// Each N frame's sensor time against the press (negative: exposed before it - zero shutter lag)

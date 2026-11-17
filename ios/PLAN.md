@@ -1025,3 +1025,18 @@ same code reproduces the host's reference bit for bit. So the Android merge itse
 llvmpipe ~55 dB), Metal sits at the same distance from both, and the texture filter is not the main cause (its emulation moved
 Metal 0.2 dB): the spread starts where the GPUs' float results cross thresholds (corner selection, KLT, rejection). SCAMGL_FILTER
 stays a replay switch (off in the app).
+
+## The iPad's burst and log of 2026-11-15 (build e774fde6; Drive folder Bursts / diagnostics)
+- Zero shutter lag does not serve RAW: in all 8 shots 0 N frames before the press, the first 61-117 ms after it; the single requests
+  run at the sensor's rate (29 frames in 1335 ms at 40 ms, 46 ms a frame: faster than the brackets' 23 in 1.9-2.4 s) - kept.
+- The AE moved within a series (17:55:04: 41 x 30.3 ms ISO 200, then 5 x 20 ms ISO 250): Android's ring rule on the newest exposure
+  kept 2 N of 49. Fixed: the camera AE is held (.locked) for the series, as the focus.
+- Discarding the streamed NCH waited for its queued writes (1.2 GB): press -> last frame 8480 ms. Fixed: the queued planes are skipped.
+- One request of the N lost in 7 of 8 shots, reason unknown: its error is now in the log («N: request k of n lost: ...»).
+- The first frame's DNG was empty once (dng=0 bytes); the newest N's DNG replaced it.
+- Manual long frames: the learned shutter cap 76.9 ms (1/13 s) - the iPad gives no longer bracket shutter; with N at ISO 500 (outside the
+  RAW gain range 35..200) the deep-shadow L reached x1.75 / x3.85 of the x4 planned.
+- «Спорт» (owner, 19:25 shot 1/100 s ISO 160): the ceiling was rounded to the half period of the region's mains (BY: 100 Hz -> 10 ms) since
+  «Авто» took the region (01e6ef6d). Fixed: only a set «Мерцание ламп» rounds the Sport ceiling.
+- Plan: a flicker detector for «Авто» as Android's MotionShutter (P111 / P496: the AE's shutters vote, row bands on short frames latch,
+  six band-free frames clear it) - then «Авто» rounds the Sport ceiling, the L shutters and ETTR only under lamps that flicker.

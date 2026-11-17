@@ -2,6 +2,10 @@
 
 English copy of ios/CHANGELOG.md; the build post carries both, section for section (same version, same place).
 
+## 0.3.4 — capture fixes
+- «Спорт»: the shutter is again no longer than the one set (with «Мерцание ламп: Авто» it was rounded to 1/100).
+- The exposure no longer changes in the middle of a series; the series no longer hangs for seconds.
+
 ## 0.3.3 — capture as on Android
 - The series' normal frames are single auto-exposure requests (the system may serve them with zero shutter lag) and are selected as on Android; the focus holds during the series.
 - «Auto» lamp flicker follows the region; the camera remembers the ISO and shutter the lens really gives.

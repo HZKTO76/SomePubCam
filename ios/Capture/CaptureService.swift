@@ -264,17 +264,26 @@ actor CaptureService {
 
     func captureBayerBurst(count: Int, pressed: Date) async throws -> BayerBurst {
         guard let device = activeInput?.device else { throw CameraError.videoDeviceUnavailable }
-        // the bracket requests' «AF без нового сканирования»: the lens held where it is for the series, the continuous AF back after
-        let focusWas = device.focusMode
-        var held = false
-        if focusWas == .continuousAutoFocus, device.isFocusModeSupported(.locked), (try? device.lockForConfiguration()) != nil {
-            device.focusMode = .locked
+        // the bracket requests' «AF без нового сканирования»: the lens held where it is for the series, the continuous AF back after;
+        // the camera AE held at the press's exposure (Android's N: the ring's frames at the AE of the press; the iPad's AE moved
+        // within a 2.4 s series and the newest exposure's frames were 2 of 49)
+        let focusWas = device.focusMode, exposureWas = device.exposureMode
+        var heldFocus = false, heldExposure = false
+        if (try? device.lockForConfiguration()) != nil {
+            if focusWas == .continuousAutoFocus, device.isFocusModeSupported(.locked) {
+                device.focusMode = .locked
+                heldFocus = true
+            }
+            if exposureWas == .continuousAutoExposure, device.isExposureModeSupported(.locked) {
+                device.exposureMode = .locked
+                heldExposure = true
+            }
             device.unlockForConfiguration()
-            held = true
         }
         defer {
-            if held, (try? device.lockForConfiguration()) != nil {
-                if device.focusMode == .locked { device.focusMode = focusWas }
+            if (heldFocus || heldExposure), (try? device.lockForConfiguration()) != nil {
+                if heldFocus, device.focusMode == .locked { device.focusMode = focusWas }
+                if heldExposure, device.exposureMode == .locked { device.exposureMode = exposureWas }
                 device.unlockForConfiguration()
             }
         }
@@ -331,7 +340,7 @@ actor CaptureService {
 
     /// «Спорт»'s shutter ceiling in ns: 1/pref_scam_hybrid_mm_shutter s (MotionShutter.settingNs; hybridValue: scam_dev
     /// "hybrid_mm_shutter" first; 0 none). P496 «Движение: учитывать мерцание» (pref_scam_hybrid_mm_flicker, default on) under a set
-    /// «Мерцание ламп» (100 / 120 Hz; «Авто»: the region's mains, MainsRegion - the iPhone reports no measured one): the
+    /// «Мерцание ламп» (100 / 120 Hz as set; «Авто» none: the iPhone detects no flicker, see below): the
     /// ceiling in whole half periods of the mains, at least one (MotionShutter.quantizeDown: an action shutter too) - one lamp pulse
     /// per frame. 0 outside the mode.
     static func motionCeilingNs() -> Int64 {
@@ -339,7 +348,10 @@ actor CaptureService {
         let denominator = HybridPlan.value("mm_shutter", 250)
         guard denominator > 0, denominator.isFinite else { return 0 }
         var ns = HybridPlan.round(1e9 / Double(denominator))
-        let hz = HybridPlan.antibandingHz
+        // only a set «Мерцание ламп» rounds it: Android's «Авто» rounds when the camera saw the flicker (MotionShutter: the AE's
+        // shutters vote, the frames' row bands decide); the iPhone has no such detector, and the region's mains would round
+        // every Sport ceiling to 10 / 8.3 ms, also outdoors
+        let hz = HybridPlan.setAntibandingHz
         if HybridPlan.on("mm_flicker", true), hz > 0 {
             let half = HybridPlan.round(1e9 / Double(hz))
             if half > 0 { ns = max(half, ns / half * half) }

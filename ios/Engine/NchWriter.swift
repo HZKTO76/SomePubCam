@@ -121,7 +121,7 @@ final class NchStream: @unchecked Sendable {
         planes += 1
         let plane = width * height * 2, planePages = (plane + NchWriter.page - 1) / NchWriter.page
         queue.async { [self] in
-            guard failure == nil, let handle else { return }
+            guard failure == nil, !isCancelled, let handle else { return }
             do {
                 guard raw.count == plane else { throw CocoaError(.fileWriteInvalidFileName) }
                 try handle.write(contentsOf: raw)
@@ -148,12 +148,20 @@ final class NchStream: @unchecked Sendable {
         }
     }
 
-    /// Not used: the file goes (a refused shot, the plain writer instead)
+    /// Not used: the file goes (a refused shot, the plain writer instead). The planes still queued are not written: the capture
+    /// does not wait for them (a 49-frame series' 1.2 GB of queued writes held the iPad's capture 5.4 s)
     func discard() {
-        queue.sync {
+        cancelLock.lock()
+        cancelled = true
+        cancelLock.unlock()
+        queue.async { [self] in
             try? handle?.close()
             handle = nil
+            try? FileManager.default.removeItem(at: url)
         }
-        try? FileManager.default.removeItem(at: url)
     }
+
+    private let cancelLock = NSLock()
+    private var cancelled = false
+    private var isCancelled: Bool { cancelLock.lock(); defer { cancelLock.unlock() }; return cancelled }
 }

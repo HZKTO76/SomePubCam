@@ -148,6 +148,9 @@ enum HybridPlan {
 
     /// PreferenceKeys.getAntibandingHz: «Мерцание ламп» as set (100 / 120, 0 off); «Авто» (-1) is the Android camera's measured mains
     /// (MainsFlicker), which the iPhone does not report: the region's mains then (MainsRegion; 0 where unknown)
+    /// «Мерцание ламп» only as set (100 / 120; «Авто» and «Выкл.» 0)
+    static var setAntibandingHz: Int { max(0, Int(StoredPrefs.string("pref_antibanding_hz_key", "-1")) ?? -1) }
+
     static var antibandingHz: Int {
         let hz = Int(StoredPrefs.string("pref_antibanding_hz_key", "-1")) ?? -1
         return hz < 0 ? MainsRegion.flickerHz : hz
