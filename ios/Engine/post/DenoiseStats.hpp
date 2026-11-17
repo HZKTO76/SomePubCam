@@ -124,7 +124,10 @@ inline std::optional<std::vector<float>> finishNoiseCs(GLProg& prog, GLTexture& 
     for (int i = 0; i < 8 && glGetError() != GL_NO_ERROR; i++) {}
     try {
         GLTexture atlas({bw, bh}, GLFormat(DataType::UNSIGNED_32, 4), nullptr, GL_NEAREST, GL_CLAMP_TO_EDGE);
-        prog.setLayout(16, 16, 1);
+        // the experiment's 16 x 4 work groups (scam_dev snr_cs_64): the same 256 pixels a block, four an invocation
+        const bool smallGroup = Settings::current().scamDevSwitch("snr_cs_64", false);
+        prog.setLayout(16, smallGroup ? 4 : 16, 1);
+        if (smallGroup) prog.setDefine("SNR_SMALL_GROUP", 1);
         prog.useAssetProgram("scamdn/stats_cs", true);
         prog.setTexture("InputBuffer", rgb);
         prog.setVar("modelU", sY, rY);
@@ -134,7 +137,7 @@ inline std::optional<std::vector<float>> finishNoiseCs(GLProg& prog, GLTexture& 
         if (glGetError() != GL_NO_ERROR) { failed = true; return std::nullopt; }
         rawOut = statsOf(texels, bw, 0, 0, bw, bh);
         failed = false;
-        return NoiseMath::reduce(rawOut, bw * bh, 0.8f);
+        return NoiseMath::reduceLuma(rawOut, bw * bh, 0.8f);
     } catch (const std::exception& e) {
         logI("SCAM_PIPELINE", std::string("finish noise compute pass: ") + e.what() + ", the two passes");
         failed = true;

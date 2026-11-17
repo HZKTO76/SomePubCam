@@ -33,7 +33,9 @@ constexpr unsigned short TIFF_ASCII = 2, TIFF_SHORT = 3, TIFF_LONG = 4, TIFF_RAT
 /// dngCreator.cpp's scamdng::DngFile (DngWriter.cpp): the setters store as the JNI natives do; build lays the file out.
 class DngFile {
 public:
-    DngFile();
+    /// linear: a Linear DNG (dngCreator.cpp DngFile(true): LinearRaw, three samples a pixel, black 0 / white 65535 a plane, the
+    /// lens shading as one GainMap a plane, BaselineExposure as an SRATIONAL); written by buildLinear only
+    explicit DngFile(bool linear = false);
     ~DngFile();
     DngFile(const DngFile&) = delete;
     DngFile& operator=(const DngFile&) = delete;
@@ -65,6 +67,14 @@ public:
     void setGainMap(const float* interleaved, int xmin, int ymin, int xmax, int ymax, int w, int h);
     /// the whole file for a w x h 16-bit mosaic (empty on failure); the samples are read only
     std::vector<uint8_t> build(uint16_t* mosaic, int w, int h);
+    /// DngCreator.writeLinearBuffer: the whole Linear DNG of the merge's camera RGB (w x h x 3 IEEE halves with half, else floats,
+    /// rows top-down, 1 = the white of the base frame) over the headroom, 16 bit; lossless: LJ92 tiles of the image's width when
+    /// it is a multiple of 16, else uncompressed strips of at most 1 MB; parallel: DngCreator's second strip worker (the same
+    /// file). Empty on failure (logged).
+    std::vector<uint8_t> buildLinear(const uint8_t* rgb, size_t bytes, bool half, int w, int h, float headroom, bool lossless,
+                                     bool parallel = false);
+    /// DngCreator.linearHeadroom: the highest finite sample of the RGB, at least 1
+    static float linearHeadroom(const uint8_t* rgb, size_t bytes, bool half);
 
 private:
     struct Impl;
@@ -510,9 +520,8 @@ inline std::array<double, 9> wide(const std::vector<float>& v) {
     return o;
 }
 
-/// DngCreator.setParameters + writeColour, in their order; then the compression («DNG без потерь») and the file
-inline std::vector<uint8_t> writeDng(const Parameters& p, const DngFacts& s, std::vector<uint16_t>& mosaic, int w, int h) {
-    DngFile f;
+/// DngCreator.setParameters + writeColour, in their order
+inline void setParameters(DngFile& f, const Parameters& p, const DngFacts& s) {
     f.setMosaicBlock(p.dngMosaicBlock);
     f.setDescription(dngDescription(p));
     f.setSoftware(s.software);
@@ -585,16 +594,30 @@ inline std::vector<uint8_t> writeDng(const Parameters& p, const DngFacts& s, std
     if (quarter >= 0 && quarter <= 8) f.setOrientation(quarter < 4 ? ORIENTATION_OF_QUARTER[quarter] : 0);
     if (p.gainMap && p.mapSize && p.rawSize && p.gainMap->size() >= size_t(4) * p.mapSize->x * p.mapSize->y && p.mapSize->x > 0 && p.mapSize->y > 0)
         f.setGainMap(p.gainMap->data(), 0, 0, p.rawSize->x, p.rawSize->y, p.mapSize->x, p.mapSize->y);
+}
+
+/// DngCreator.setParameters; then the compression («DNG без потерь») and the file
+inline std::vector<uint8_t> writeDng(const Parameters& p, const DngFacts& s, std::vector<uint16_t>& mosaic, int w, int h) {
+    DngFile f;
+    setParameters(f, p, s);
     f.setCompression(s.lossless);
     return f.build(mosaic.data(), w, h);
 }
 
-/// ScamProcessor's P165 block for the merge's mosaic (16 bit over its headroom): the levels scaled to 65535, BaselineExposure
-/// log2(headroom), the NoiseProfile of the merged level (P214c), the JPEG's colour (P243, scam_dev dng_colour_jpeg), RAW=merged burst.
-/// p: the shot's Parameters as the DNG is written (rawSize = the mosaic's grid); mergeFrames NaN: the worker gave none.
-inline std::vector<uint8_t> writeMergedDng(Parameters p, DngFacts s, std::vector<uint16_t>& mosaic, float mergedHeadroom, double mergeFrames,
-                                           float noiseFactor, const Settings& settings, const std::function<void(const std::string&)>& log) {
-    if (!p.rawSize || size_t(p.rawSize->x) * size_t(p.rawSize->y) != mosaic.size()) throw std::runtime_error("merged DNG: the mosaic is not the DNG's grid");
+/// ImageSaver.saveLinearRaw: DngCreator(true).setParameters, then writeLinearBuffer of the RGB at rawSize («DNG без потерь»: LJ92)
+inline std::vector<uint8_t> writeLinearDng(const Parameters& p, const DngFacts& s, const uint8_t* rgb, size_t bytes, bool half, float headroom,
+                                           bool parallel) {
+    if (!p.rawSize) throw std::runtime_error("Linear DNG: no size");
+    DngFile f(true);
+    setParameters(f, p, s);
+    return f.buildLinear(rgb, bytes, half, p.rawSize->x, p.rawSize->y, headroom, s.lossless, parallel);
+}
+
+/// ScamProcessor's P165 block, the tags of a merged DNG over its headroom (p and s as the file is written): the JPEG's colour (P243,
+/// scam_dev dng_colour_jpeg), the levels scaled to 65535, BaselineExposure log2(headroom) above `baselineAbove` (the mosaic's
+/// 1.0001, the Linear DNG's 1), the NoiseProfile of the merged level (P214c), RAW=merged burst.
+inline void mergedTags(Parameters& p, DngFacts& s, float headroom, float baselineAbove, double mergeFrames, float noiseFactor,
+                       const Settings& settings, const std::function<void(const std::string&)>& log) {
     if ((settings.scamDevSwitch("dng_colour_jpeg", true) || !colourMatrixUsable(p.ColorMatrix1)) && p.CCT) {
         s.colour = DngColour::jpegProfile(p.sensorToProPhoto, std::optional<std::vector<float>>(p.CCT->matrix), p.whitePoint, p.sceneCct);
         if (!s.colour) log("DNG colour: the JPEG's matrices are not usable, the camera's profile is written");
@@ -602,12 +625,11 @@ inline std::vector<uint8_t> writeMergedDng(Parameters p, DngFacts s, std::vector
     const std::vector<float> black = p.blackLevel ? *p.blackLevel : std::vector<float>(4, 0.f);
     const int white = p.whiteLevel;
     const float k = 65535.f / float(white);
-    const float headroom = std::max(1.f, mergedHeadroom);
     std::vector<float> scaled(4, 0.f);
     for (size_t i = 0; i < 4 && i < black.size(); i++) scaled[i] = float((long long)std::floor(double(black[i] * k) + 0.5));
     p.blackLevel = scaled;
     p.whiteLevel = 65535;
-    s.baselineExposure = headroom > 1.0001f ? float(std::log(double(headroom)) / std::log(2.0)) : 0.f;
+    s.baselineExposure = headroom > baselineAbove ? float(std::log(double(headroom)) / std::log(2.0)) : 0.f;
     const bool framesKnown = std::isfinite(mergeFrames) && mergeFrames >= 1;
     if (p.noiseModeler) {
         const auto camera = DngMetadata::planes(framesKnown ? p.noiseModeler->baseModel : p.noiseModeler->computeModel);
@@ -615,17 +637,54 @@ inline std::vector<uint8_t> writeMergedDng(Parameters p, DngFacts s, std::vector
     }
     p.dngMosaicBlock = 1;
     p.dngMerged = true;
+}
+
+inline void mergedNoiseLog(const DngFacts& s, float headroom, double mergeFrames, float noiseFactor,
+                           const std::function<void(const std::string&)>& log) {
+    if (!s.noiseProfile) return;
+    const bool framesKnown = std::isfinite(mergeFrames) && mergeFrames >= 1;
+    char line[200];
+    std::snprintf(line, sizeof line, "DNG: NoiseProfile G %.4g / %.4g (frames %s, headroom x%.3f, noise x%.3f)", (*s.noiseProfile)[2],
+                  (*s.noiseProfile)[3], framesKnown ? javaFixed(mergeFrames, 2).c_str() : "unknown: legacy model", double(headroom),
+                  double(noiseFactor));
+    log(line);
+}
+
+/// ScamProcessor's P165 block for the merge's mosaic (16 bit over its headroom): mergedTags, then the file.
+/// p: the shot's Parameters as the DNG is written (rawSize = the mosaic's grid); mergeFrames NaN: the worker gave none.
+inline std::vector<uint8_t> writeMergedDng(Parameters p, DngFacts s, std::vector<uint16_t>& mosaic, float mergedHeadroom, double mergeFrames,
+                                           float noiseFactor, const Settings& settings, const std::function<void(const std::string&)>& log) {
+    if (!p.rawSize || size_t(p.rawSize->x) * size_t(p.rawSize->y) != mosaic.size()) throw std::runtime_error("merged DNG: the mosaic is not the DNG's grid");
+    const float headroom = std::max(1.f, mergedHeadroom);
+    mergedTags(p, s, headroom, 1.0001f, mergeFrames, noiseFactor, settings, log);
     std::vector<uint8_t> out = writeDng(p, s, mosaic, p.rawSize->x, p.rawSize->y);
     char line[200];
     std::snprintf(line, sizeof line, "DNG: merged burst RAW (N, bracketed and ultrashort frames), 16-bit, headroom x%.3f, BaselineExposure %+.2f EV",
                   double(headroom), double(s.baselineExposure));
     log(line);
-    if (s.noiseProfile) {
-        std::snprintf(line, sizeof line, "DNG: NoiseProfile G %.4g / %.4g (frames %s, headroom x%.3f, noise x%.3f)", (*s.noiseProfile)[2],
-                      (*s.noiseProfile)[3], framesKnown ? javaFixed(mergeFrames, 2).c_str() : "unknown: legacy model", double(headroom),
-                      double(noiseFactor));
-        log(line);
-    }
+    mergedNoiseLog(s, headroom, mergeFrames, noiseFactor, log);
+    return out;
+}
+
+/// ScamProcessor's P165 block for the Linear DNG (6a4d3a46: a Bayer burst merged on the GPU, header flag 128): the merge's camera
+/// RGB as the pipeline takes it (halves with half, else floats; rawSize = its size) over the headroom - the worker's ceiling
+/// (`bound`, «HYBRID DNG: linear RGB, ceiling=») down to the RGB's highest sample when that is lower - then mergedTags and
+/// ImageSaver.saveLinearRaw. headroom: the headroom written (ScamHybridBurst.lastMergedDngHeadroom after a written DNG).
+inline std::vector<uint8_t> writeLinearMergedDng(Parameters p, DngFacts s, const std::vector<uint8_t>& rgb, bool half, float bound,
+                                                 double mergeFrames, float noiseFactor, const Settings& settings,
+                                                 const std::function<void(const std::string&)>& log, float& headroom) {
+    if (!p.rawSize || size_t(p.rawSize->x) * size_t(p.rawSize->y) * (half ? 6 : 12) != rgb.size())
+        throw std::runtime_error("Linear DNG: the RGB is not the DNG's size");
+    bound = std::max(1.f, bound);
+    headroom = bound > 1.f ? std::min(bound, DngFile::linearHeadroom(rgb.data(), rgb.size(), half)) : bound;
+    mergedTags(p, s, headroom, 1.f, mergeFrames, noiseFactor, settings, log);
+    std::vector<uint8_t> out = writeLinearDng(p, s, rgb.data(), rgb.size(), half, headroom, settings.scamDevSwitch("dng_linear_parallel", false));
+    if (out.empty()) throw std::runtime_error("Linear DNG not written");
+    char line[200];
+    std::snprintf(line, sizeof line, "DNG: merged burst RAW %dx%d, 16-bit, headroom x%.3f, BaselineExposure %+.2f EV", p.rawSize->x, p.rawSize->y,
+                  double(headroom), double(s.baselineExposure));
+    log(line);
+    mergedNoiseLog(s, headroom, mergeFrames, noiseFactor, log);
     return out;
 }
 

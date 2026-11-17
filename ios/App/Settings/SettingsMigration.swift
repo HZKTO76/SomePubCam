@@ -574,6 +574,12 @@ enum SettingsMigration {
         once(&p, values, "pref_scam_hybrid_cct_sat_rev") { p in
             if let v = values[pre + "why_cct_sat"], isNumber(v, 1.25) { p[pre + "why_cct_sat"] = number(v, 1.1) }
         }
+        // P721 (config arkburial_stable_v6): a stored former default moves to the new one once (AE «Мин. предел» 0.5 -> 1,
+        // «Why тон» V1 -> V2), a value chosen by hand stays
+        once(&p, values, "pref_scam_hybrid_config_v6_rev") { p in
+            if let v = values[pre + "why_ae_min_limit"], isNumber(v, 0.5) { p[pre + "why_ae_min_limit"] = number(v, 1) }
+            if let v = values[pre + "tone_version"] as? String, v == "v1" { p[pre + "tone_version"] = "v2" }
+        }
         once(&p, values, "pref_scam_hybrid_v2_merge_rev") { p in
             for (v2, v1, v2Default, v1Default) in v2Merged {
                 let from = pre + "why_v2_" + v2, to = pre + "why_" + v1
@@ -669,7 +675,7 @@ enum SettingsMigration {
                          "pref_scamhdr_defaults_rev": NSNumber(value: 1)]
         for rev in ["zsl_frames", "mosaic_frames", "p68_defaults", "p497_us", "precision", "night_thresh", "low_light_dn", "mosaic_kernel",
                     "fullres50_frames", "detail_defaults", "glow_defaults", "cell_clip", "config_defaults", "config_v33", "config_stable",
-                    "cct_sat", "v2_merge", "vibrance", "fringe_light", "yuv_10bit", "dnmerge", "tone_group"] {
+                    "cct_sat", "config_v6", "v2_merge", "vibrance", "fringe_light", "yuv_10bit", "dnmerge", "tone_group"] {
             m["pref_scam_hybrid_" + rev + "_rev"] = NSNumber(value: 1)
         }
         return m

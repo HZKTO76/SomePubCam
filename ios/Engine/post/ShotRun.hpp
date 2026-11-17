@@ -271,8 +271,13 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
         std::fstream f(mergePath, std::ios::in | std::ios::out | std::ios::binary);
         if (!f) throw std::runtime_error("no burst " + mergePath);
         const bool clipFlags = s.hybridSwitch("clip_flags", true) && s.hybridValue("highlight_recovery", 100.f) > 0.f;
-        // P165: header flag 2, the merged Bayer RAW for the DNG (ScamHybridBurst.mergedDng: RAW saving on)
-        const uint32_t flags = (dngRequest ? 2u : 0u) | (clipFlags ? 4u : 0u) | (plan.strictTwoX ? 8u : 0u) | (plan.effectiveMap() ? 0u : 16u);
+        // P165: header flag 2, the merged RAW for the DNG (ScamHybridBurst.mergedDng: RAW saving on); 6a4d3a46: a Bayer burst's is
+        // the Linear DNG of the merge's RGB (flag 128, linearDng: no mosaic trailer); fd81835e: a scaled (Sabre) output with the
+        // DNG is merged strict (flag 8, sabreDng), the DNG at the selected scale. No flag 64 (sabreDng without linearDng: a Quad /
+        // Tetra mosaic DNG, no iPhone burst)
+        const bool mergedDng = dngRequest != nullptr;
+        const uint32_t flags = (mergedDng ? 2u : 0u) | (clipFlags ? 4u : 0u) | (plan.strictTwoX || plan.sabreDng(mergedDng) ? 8u : 0u)
+                               | (plan.effectiveMap() ? 0u : 16u) | (plan.linearDng(mergedDng) ? 128u : 0u);
         const std::array<int, 2> sabre = plan.words();
         const uint32_t grid = uint32_t(plan.grid()), sabreW = uint32_t(sabre[0]), sabreH = uint32_t(sabre[1]);
         f.seekp(44);
@@ -295,7 +300,9 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     ShotColour::reCalcColor(colour, dng.colour, [](const std::string&) {});
     // P366: the base frame's EV100 (the merge's base; without the sidecar the DNG's frame)
     const float sceneEv = picked ? picked->sceneEv : HybridTuning::sceneEv100(dng.exposure, std::max(1, dng.iso), dng.aperture);
-    std::string tuning = HybridTuning::text(s) + HybridTuning::burstOverride(sceneEv, *colour.whitePoint, plan.strictTwoX);
+    // ScamHybridBurst.sabreDng: the merged DNG wanted while the merge's output is a Sabre grid (its "dngMosaic 0" line)
+    std::string tuning = HybridTuning::text(s) + HybridTuning::burstOverride(sceneEv, *colour.whitePoint, plan.strictTwoX,
+                                                                             dngRequest && plan.grid() == 2);
 #if defined(__APPLE__)
     // iOS: the viewfinder draws on a Metal queue of its own, not behind the merge in a shared ring (P662's reason): the «Качество»
     // merge hands its dispatches over per pass (gpuPace 0: the same commands, barriers and order, the output bit for bit) instead
@@ -418,9 +425,41 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
     if (labParameters) labParameters(par);
     p.scamRgb = readWorkerOutput(p.merge, std::move(bytes), report, merged.width, merged.height, w, h, merged.rgbHalf, effectiveMap, clipFlags,
                                  highlightMask);
-    // P165 ScamProcessor: the merged DNG before the pipeline - the shot's Parameters on the merge's sensor grid (the window, the
-    // frames' rows), 16 bit over the headroom; P27: the DNG is optional, the photo is not
-    if (dngRequest && !mergedMosaic.empty()) {
+    // P165 ScamProcessor: the merged DNG before the pipeline - the shot's Parameters on the DNG's grid (the window, the frames'
+    // rows), 16 bit over the headroom; P27: the DNG is optional, the photo is not. 6a4d3a46: the Linear DNG of the merge's RGB as
+    // the pipeline takes it, at the merged size («Разрешение» 1x / 1.5x / 2x, fd81835e); the mosaic trailer's DNG (sensor grid)
+    // only for a burst that gave one
+    int dngW = w, dngH = h;
+    if (dngRequest && mergedMosaic.empty() && !p.scamRgb.empty()) {
+        try {
+            Parameters d = par;
+            d.rawSize = Point{merged.width, merged.height};
+            d.multiFrameCount = dngRequest->frames;
+            d.cameraID = dngRequest->cameraID;
+            d.filmRecipe = dngRequest->filmRecipe;
+            d.physicalID = dngRequest->physicalId;
+            const double mergeFrames = dng::DngMetadata::mergeFrames(report);
+            dng::dngLog() = log;
+            dng::DngFacts facts = dngRequest->facts;
+            facts.lossless = s.getBoolean("pref_dng_lossless", false); // PreferenceKeys.isDngLossless
+            if (!window && zoom > 1.005f && facts.focal35 > 0) facts.focal35 = int(std::floor(facts.focal35 / double(zoom) + 0.5));
+            struct LogReset { ~LogReset() { dng::dngLog() = [](const std::string&) {}; } } logReset;
+            // ScamNeuralClient: a Linear DNG's bound is the worker's ceiling (no mosaic headroom); the headroom written becomes
+            // lastMergedDngHeadroom (the develop record's)
+            const float bound = std::max(1.f, Report::number(report, "HYBRID DNG:", "ceiling=", 1.f));
+            float headroom = bound;
+            out.dng = dng::writeLinearMergedDng(d, facts, p.scamRgb, p.merge.lastRgbHalf, bound, mergeFrames, p.merge.lastNoiseFactor, s, log,
+                                                headroom);
+            p.merge.lastMergedDngHeadroom = headroom;
+            dngW = merged.width;
+            dngH = merged.height;
+            log("DNG: " + std::to_string(out.dng.size()) + " bytes, Linear DNG " + std::to_string(dngW) + "x" + std::to_string(dngH)
+                + (facts.lossless ? " (lossless JPEG when it fits)" : " (uncompressed)"));
+        } catch (const std::exception& e) {
+            out.dng.clear();
+            log(std::string("DNG not saved: ") + e.what());
+        }
+    } else if (dngRequest && !mergedMosaic.empty()) {
         try {
             Parameters d = par;
             d.rawSize = Point{w, h};
@@ -454,7 +493,7 @@ inline ShotOutput runShot(const std::string& nchPath, const std::vector<uint8_t>
         return out;
     }
     // P665: the record right before the pipeline (DevelopCapture.take's moment), from copies; only beside a merged DNG
-    if (!out.dng.empty()) out.develop = developRecord(par, p.merge, w, h, window ? 1.f : zoom, build, log);
+    if (!out.dng.empty()) out.develop = developRecord(par, p.merge, dngW, dngH, window ? 1.f : zoom, build, log);
     const auto pipelineStart = std::chrono::steady_clock::now();
     out.gapMs = std::chrono::duration<double, std::milli>(pipelineStart - mergeEnd).count();
     out.photo = runPostPipeline(p);

@@ -42,6 +42,7 @@ int main(int argc, char** argv) {
         t.illuminant1 = a.calibrationIlluminant1; t.illuminant2 = a.calibrationIlluminant2;
         t.neutral = *a.whitePoint;
         Parameters p;
+        const int tuningBad = bad; // the verdict below counts the colour's differences only
         ShotColour::reCalcColor(p, t, [](const std::string& l) { std::printf("  %s\n", l.c_str()); });
         auto cmp = [&](const char* name, const std::vector<float>& x, const std::vector<float>& y) {
             for (size_t i = 0; i < x.size() && i < y.size(); i++)
@@ -55,7 +56,7 @@ int main(int argc, char** argv) {
                         a.sceneDuv, a.colourSource.c_str());
             bad++;
         }
-        std::printf("colour: %s\n", bad ? "DIFFERS" : "identical (matrices, neutral, scene light)");
+        std::printf("colour: %s\n", bad != tuningBad ? "DIFFERS" : "identical (matrices, neutral, scene light)");
         if (argc >= 5 && std::string(argv[3]) == "--dng") {
             const std::string bytes = readText(argv[4]);
             const DngShot dng = readDng(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());

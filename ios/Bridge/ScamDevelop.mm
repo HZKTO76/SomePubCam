@@ -39,6 +39,8 @@ static NSError *developError(const std::string &what) {
     bool _list1Maps;
     /// P696: a record from the tags carries the DNG's OpcodeList2 map as the shot's lens shading (else a flat one)
     bool _tagsShading;
+    /// 6a4d3a46: a Linear DNG (the merge's camera RGB, no demosaic)
+    bool _linear;
     std::vector<float> _previewRgb;
     int _previewW, _previewH, _dngW, _dngH;
     SCAMDevelopPicture *_full;
@@ -52,10 +54,12 @@ static NSError *developError(const std::string &what) {
     if (!r) return [self loadFromTags:dng shaders:shaders settings:settings] ? self : nil;
     try {
         const scam_edit::DngRaw::Info info = scam_edit::DngRaw::probe(p, dng.length);
-        if (info.kind != scam_edit::DngRaw::KIND_BAYER || info.cell != 1) return nil;
+        // a Bayer DNG of single sites (demosaiced here) or 6a4d3a46's Linear DNG (the merge's RGB as it is)
+        if (!(info.kind == scam_edit::DngRaw::KIND_RGB || (info.kind == scam_edit::DngRaw::KIND_BAYER && info.cell == 1))) return nil;
         const auto size = info.size(1);
         _dngW = size[0];
         _dngH = size[1];
+        _linear = info.kind == scam_edit::DngRaw::KIND_RGB;
         // the DNG's OpcodeList2 lens shading stays out (P706: the pipeline applies the shot's map); OpcodeList1's maps (read as
         // OpcodeList2 before P706) stay out when the shot's Parameters carry the map, as before
         const scam_post::Parameters shot = scam_post::Parameters::fromJson(r->meta["params"]);
@@ -86,6 +90,7 @@ static NSError *developError(const std::string &what) {
         _record = scam_post::DevelopDefaults::record(f, now, build);
         _dngW = f.width;
         _dngH = f.height;
+        _linear = info.kind == scam_edit::DngRaw::KIND_RGB;
         // P706: the DNG's OpcodeList2 maps stay out when they are the Camera2 map the record's Parameters carry
         _fromRecord = false;
         _list1Maps = true;
@@ -199,6 +204,16 @@ static NSError *developError(const std::string &what) {
 
 - (nullable SCAMDevelopPicture *)previewWithChanges:(NSString *)changes error:(NSError **)error {
     try {
+        if (_previewRgb.empty() && _linear) {
+            // EditDevelop.preview of a Linear DNG: binned to at most PREVIEW_SIDE, its RGB times the headroom (no 2x2 cell)
+            const uint8_t *p = static_cast<const uint8_t *>(_dng.bytes);
+            const int bin = scam_edit::develop::linearBinFor(_dngW, _dngH);
+            scam_edit::DngRaw::Image img = scam_edit::DngRaw::decodeForDevelop(p, _dng.length, bin, _fromRecord, _list1Maps);
+            if (img.info.kind != scam_edit::DngRaw::KIND_RGB || img.linear.empty()) throw std::runtime_error("develop: unsupported DNG samples");
+            _previewW = img.width;
+            _previewH = img.height;
+            _previewRgb = scam_edit::develop::linearPreview(std::move(img.linear), _record.headroom());
+        }
         if (_previewRgb.empty()) {
             const uint8_t *p = static_cast<const uint8_t *>(_dng.bytes);
             const int bin = scam_edit::develop::binFor(_dngW, _dngH);
@@ -227,7 +242,17 @@ static NSError *developError(const std::string &what) {
         std::vector<uint8_t> rgb;
         int w = 0, h = 0;
         bool half = false;
-        {
+        if (_linear) {
+            // EditDevelop.full of a Linear DNG: decoded straight into the pipeline's RGB, times the headroom
+            const uint8_t *p = static_cast<const uint8_t *>(_dng.bytes);
+            w = _dngW;
+            h = _dngH;
+            half = (long long)w * h > scam_edit::develop::HALF_ABOVE;
+            const auto t0 = std::chrono::steady_clock::now();
+            rgb = scam_edit::develop::linearFull(p, _dng.length, w, h, _fromRecord, _list1Maps, _record.headroom(), half);
+            NSLog(@"SCAMDevelop RAW decoded %dx%d in %d ms", w, h,
+                  int(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()));
+        } else {
             const uint8_t *p = static_cast<const uint8_t *>(_dng.bytes);
             const scam_edit::DngRaw::Image img = scam_edit::DngRaw::decodeForDevelop(p, _dng.length, 1, _fromRecord, _list1Maps);
             if (img.info.kind != scam_edit::DngRaw::KIND_BAYER || img.info.cell != 1 || img.linear.empty())

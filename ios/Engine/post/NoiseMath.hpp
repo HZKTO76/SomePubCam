@@ -47,16 +47,20 @@ inline float snr(float mu, float g01, float sG, float rG, float rhoS, float rhoR
 
 inline float whiteGain(int level, bool chroma) { return float(2.0 * std::pow(chroma ? 0.09765625 : 0.19269013, level)); }
 
+/// validBlock: 1e-5 < mean Y < clip, gY1 > 0 and every statistic of the block finite
+inline bool validBlock(const std::vector<float>& blocks, size_t o, float clip) {
+    const float y = blocks[o];
+    bool ok = y > 1e-5f && y < clip && blocks[o + 2] > 0.f;
+    for (int k = 1; k < 8 && ok; k++) ok = std::isfinite(blocks[o + size_t(k)]);
+    return ok;
+}
+
 /// reduce: {gY1, gY2, gU1, gU2, gV1, gV2, uvsU1, uvsU2, uvsV1, uvsV2, blocks used}, null below 16 valid blocks
 inline std::optional<std::vector<float>> reduce(const std::vector<float>& blocks, int count, float clip) {
     std::vector<int> valid;
     valid.reserve(size_t(count));
     for (int i = 0; i < count; i++) {
-        const size_t o = size_t(8 * i);
-        const float y = blocks[o];
-        bool ok = y > 1e-5f && y < clip && blocks[o + 2] > 0.f;
-        for (int k = 1; k < 8 && ok; k++) ok = std::isfinite(blocks[o + size_t(k)]);
-        if (ok) valid.push_back(i);
+        if (validBlock(blocks, size_t(8 * i), clip)) valid.push_back(i);
     }
     const int n = int(valid.size());
     if (n < 16) return std::nullopt;
@@ -88,6 +92,24 @@ inline std::optional<std::vector<float>> reduce(const std::vector<float>& blocks
         }
     out[10] = float(m);
     return out;
+}
+
+/// reduceLuma: {gY1} of reduce alone (the finish SNR reads only it): its median over the same flattest quarter of the valid blocks
+/// (the texture ties broken by the block index, the order of reduce's compacted indices), null below 16 valid blocks
+inline std::optional<std::vector<float>> reduceLuma(const std::vector<float>& blocks, int count, float clip) {
+    std::vector<int64_t> keys;
+    keys.reserve(size_t(count));
+    for (int i = 0; i < count; i++) {
+        const size_t o = size_t(8 * i);
+        if (validBlock(blocks, o, clip)) keys.push_back((int64_t(sortableBits(blocks[o + 1])) << 32) | int64_t(uint32_t(i)));
+    }
+    const int n = int(keys.size());
+    if (n < 16) return std::nullopt;
+    const int m = std::max(16, n / 4);
+    if (m < n) std::nth_element(keys.begin(), keys.begin() + (m - 1), keys.end());
+    std::vector<float> gains(static_cast<size_t>(m));
+    for (int i = 0; i < m; i++) gains[size_t(i)] = blocks[size_t(8 * int(uint32_t(keys[size_t(i)])) + 2)];
+    return std::vector<float>{medianSelect(gains.data(), m)};
 }
 
 } // namespace NoiseMath

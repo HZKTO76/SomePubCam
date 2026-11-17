@@ -1083,3 +1083,25 @@ stays a replay switch (off in the app).
   balance (R x2.5, B x1.8) turned it pink. RawWhite.lowestPlateau: the plateau of all the samples and of each CFA site's, the lowest
   found (this burst: 14271 from red and blue, every frame N / L / ES); a sensor clipping alike on every site gives the same plateau
   either way (Android's rule unchanged there). The burst is in the full-burst replay (iphone15pro-window-20261116).
+
+## Android main 0c6bed2a..a8827cf9 on iOS (2026-11-17)
+Merged (eecd841f): the shared merge (scam-fast-merge/-gpu/-shaders, scam-hybrid, scam-highlight-merge: motion in the fast merge,
+adaptive highlight merge, Sabre / Linear DNG output) and the shaders. Ported on the iOS side:
+- Post: WhyV2Ae / WhyTone darkening limit 1 (P721), «Why тон» V2 by default; WhyV2Stats one-pass samples; NoiseMath validBlock /
+  reduceLuma and DenoiseStats' snr_cs_64 (SNR_SMALL_GROUP); ScamRgb's unused glow maps skip (post_skip_unused_sun, off by default);
+  HybridOutput sabreSize(dngBlock) / sabreDng / linearDng / mergedRawPixels. Skipped (speed / Android only, same output): optics
+  OKLAB_CACHE 2, GpuPace flushes, PostAb, PerfReplay, ScamLab, neural client / worker su path, JPEG strip sink.
+- Settings / tuning: «Слияние светов» (adaptiveHighlights 1), the motion SNR curve (fastMotionDenoise<snr> from
+  pref_scam_hybrid_fast_motion_denoise_<snr>, its SwiftUI graph MotionDenoiseCurve.swift), daylightPhotoMotion 1, fmAhb 0..7, dngMosaic 0;
+  config v6 migration (why_ae_min_limit 0.5 -> 1, tone_version v1 -> v2, once); viewfinder V2 AE minLimit 1; pref_root_enabled removed.
+  shot_params_check's colour verdict counts the colour's differences only.
+- RAW: with RAW saving an SHDR shot saves a Linear DNG (LinearRaw, 3 x 16 bit, headroom from the merge's ceiling=) at the chosen
+  «Разрешение» (header flags 8 / 128; ScamMergeCore as scam-neural-worker); DngWriter's dngCreator port (lossless tiles or 1 MB
+  strips, optional second strip worker dng_linear_parallel); the gallery developer opens SCAMERA Linear DNGs (EditDevelop, DngRaw
+  decodeRgbForDevelop, ScamDevelop). The Bayer merged DNG is byte-identical where still written. Memory to watch on the phone: the
+  Linear DNG is built in memory (~6 B per output pixel: 73 MB at 12 MP, ~290 MB at 2x).
+- Not ported (device-specific): realme, Xiaomi, OPPO, vivo, LOFIC, Quad / Tetra / 50-200 MP budgets, YUV merge, Adreno 640 paths;
+  HybridPlan.limitedTo (Quad / Tetra only).
+- The owner's iPhone 15 Pro window burst on the host (whole shot, defaults): before the update the window white (P558 fix), after it
+  the window's frame and the curtain show (the merge's highlight path, Why V2); 28.75 dB against the pre-update photo, as Android.
+  The Android reference (Robolectric) was not run here: CI's ios-post-check is the bit-identity gate.

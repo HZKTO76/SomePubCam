@@ -24,6 +24,21 @@ inline float clamp01(float v) { return std::isnan(v) ? 0.f : std::max(0.f, std::
 inline long round(float v) { return Settings::javaRound(v); }
 
 inline bool fastProcessing(const Settings& s) { return s.hybridString("processing", "fast") != "quality"; }
+/// PreferenceKeys.adaptiveHighlightMerge: «Слияние светов» (pref_scam_hybrid_highlight_merge) «Адаптивное»
+inline bool adaptiveHighlightMerge(const Settings& s) { return s.hybridString("highlight_merge", "classic") == "adaptive"; }
+
+/// PreferenceKeys.FAST_MOTION_DENOISE_*: «Шумоподавление движения», the fast merge's strength (0..100 %) at seven SNR points,
+/// stored under pref_scam_hybrid_fast_motion_denoise_<snr>
+inline const std::string FAST_MOTION_DENOISE_PREFIX = "fast_motion_denoise_";
+constexpr int FAST_MOTION_DENOISE_SNR[7] = {2, 3, 4, 8, 16, 32, 64};
+constexpr int FAST_MOTION_DENOISE_DEFAULT[7] = {65, 65, 65, 45, 22, 8, 0};
+constexpr int fastMotionDenoisePoints() { return 7; }
+/// PreferenceKeys.fastMotionDenoisePercent
+inline float fastMotionDenoisePercent(const Settings& s, int point) {
+    const int fallback = FAST_MOTION_DENOISE_DEFAULT[point];
+    const float value = s.hybridValue(FAST_MOTION_DENOISE_PREFIX + std::to_string(FAST_MOTION_DENOISE_SNR[point]), float(fallback));
+    return std::isfinite(value) ? std::max(0.f, std::min(100.f, value)) : float(fallback);
+}
 inline int shastaMode(const Settings& s) {
     if (s.isMotionMode()) return 0;
     if (!s.hybridSwitch("shasta", true)) return 0;
@@ -58,6 +73,7 @@ inline std::optional<float> parseFloat(const std::string& v) {
 /// PreferenceKeys.hybridTuningText
 inline std::string text(const Settings& s) {
     std::string out;
+    if (adaptiveHighlightMerge(s)) out += "adaptiveHighlights 1\n";
     const bool motion = s.isMotionMode(), noHdr = s.noHdrFrames();
     for (const TuningKeyRow& k : kTuningKeys) {
         const std::string key = k.key;
@@ -99,9 +115,10 @@ inline std::string text(const Settings& s) {
     if (s.hybridValue("fm_lattice_tiled", 1.f) == 0.f) out += "fmLatticeTiled 0\n";
     if (s.hybridValue("fm_keep_context", 1.f) == 0.f) out += "fmKeepContext 0\n";
     if (s.hybridValue("fm_chroma_fused", 1.f) == 0.f) out += "fmChromaFused 0\n";
-    // P712: where the fast merge's readback (bit 1) and RAW upload ring (bit 2) live (worker fmAhb, 3 the default)
+    // P712: where the fast merge's readback (bit 1) and RAW upload ring (bit 2) live (worker fmAhb, 3 the default); bit 4
+    // additionally tests submitting the unpack before the next upload's fence wait
     const float ahb = s.hybridValue("fm_ahb", 3.f);
-    if (ahb != 3.f) out += "fmAhb " + std::to_string(round(std::max(0.f, std::min(3.f, ahb)))) + "\n";
+    if (ahb != 3.f) out += "fmAhb " + std::to_string(round(std::max(0.f, std::min(7.f, ahb)))) + "\n";
     if (s.hybridValue("us_weak_hom", 1.f) == 0.f) out += "usWeakHom 0\n";
     if (s.hybridValue("us_clip_vote", 1.f) == 0.f) out += "usClipVote 0\n";
     if (s.hybridValue("strip_guard", 1.f) == 0.f) out += "stripGuard 0\n";
@@ -167,8 +184,15 @@ inline std::string text(const Settings& s) {
     const long fastSport = round(s.hybridValue("fast_merge_sport", motion ? 3.f : 0.f));
     if (pixDiff > 0.f) out += "rejPixDiff " + f(std::min(1.f, pixDiff)) + "\n";
     if (shiftMax > 0.f) out += "donorShiftMax " + f(shiftMax) + "\n";
-    if (fastSport > 0 && fastProcessing(s)) out += "fastMergeSport " + std::to_string(fastSport & 3) + "\n";
-    if (fastProcessing(s)) out += FAST_TUNING;
+    const bool fast = fastProcessing(s);
+    if (fast && !motion && !s.scamDevValue("hybrid_fast_merge_sport")) out += "daylightPhotoMotion 1\n";
+    if (fastSport > 0 && fast) out += "fastMergeSport " + std::to_string(fastSport & 3) + "\n";
+    if (fast) {
+        if (s.hybridSwitch(FAST_MOTION_DENOISE_PREFIX + "enabled", true))
+            for (int i = 0; i < fastMotionDenoisePoints(); i++)
+                out += "fastMotionDenoise" + std::to_string(FAST_MOTION_DENOISE_SNR[i]) + " " + f(fastMotionDenoisePercent(s, i) / 100.f) + "\n";
+        out += FAST_TUNING; // P474: last, over the lines above
+    }
     if (!s.hybridSwitch("denoise", true)) out += "denoise 0\n"; // DenoiseStages.workerTuning
     return out;
 }
@@ -181,9 +205,11 @@ inline float sceneEv100(double exposureSeconds, int iso, float aperture) {
 }
 
 /// ScamHybridBurst.tuningOverride for a plain Bayer burst: the remosaic line, the base frame's EV100 and the neutral
-inline std::string burstOverride(float sceneEv, const std::vector<float>& whitePoint, bool strictTwoX) {
+/// (sabreDng: the merged DNG wanted on a Sabre output grid, ScamHybridBurst.sabreDng - its "dngMosaic 0" line)
+inline std::string burstOverride(float sceneEv, const std::vector<float>& whitePoint, bool strictTwoX, bool sabreDng = false) {
     char buf[96];
     std::string out = "mosaicRemosaic 1\n";
+    if (sabreDng) out += "dngMosaic 0\n";
     if (std::isfinite(sceneEv)) { std::snprintf(buf, sizeof buf, "usSceneEv %.2f\n", double(sceneEv)); out += buf; }
     if (whitePoint.size() >= 3 && whitePoint[1] > 0.f && std::isfinite(whitePoint[1])) {
         const float r = whitePoint[0] / whitePoint[1], b = whitePoint[2] / whitePoint[1];

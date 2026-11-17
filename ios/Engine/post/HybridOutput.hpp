@@ -23,11 +23,16 @@ namespace HybridOutput {
 /// Math.round(double): floor(x + 0.5) as a long
 inline long long roundD(double v) { return std::isnan(v) ? 0 : (long long)std::floor(v + 0.5); }
 
-/// sabreSize: the merged size of a w x h stream in output mode ("2x", "1.5x": the width on 4 px, the height on 2 px, else w x h)
-inline Point sabreSize(int w, int h, const std::string& mode) {
+/// sabreSize: the merged size of a w x h stream in output mode ("2x", "1.5x": the width on max(4, 2 x dngBlock) px, the height on
+/// 2 x dngBlock px - a Bayer stream's 4 / 2 - else w x h); dngBlock: the colour block of a mosaic-only DNG (1 Bayer)
+inline Point sabreSize(int w, int h, const std::string& mode, int dngBlock = 1) {
     if (mode == "2x") return {2 * w, 2 * h};
-    if (mode == "1.5x")
-        return {std::min(2 * w, int(Settings::javaRound(float(w) * 1.5f / 4.f)) * 4), std::min(2 * h, int(Settings::javaRound(float(h) * 1.5f / 2.f)) * 2)};
+    if (mode == "1.5x") {
+        const int period = 2 * dngBlock;
+        const int stepX = std::max(4, period);
+        return {std::min(2 * w, int(Settings::javaRound(float(w) * 1.5f / float(stepX))) * stepX),
+                std::min(2 * h, int(Settings::javaRound(float(h) * 1.5f / float(period))) * period)};
+    }
     return {w, h};
 }
 
@@ -114,6 +119,14 @@ struct Plan {
 
     int grid() const { return outWidth == width && outHeight == height ? 1 : 2; }
     std::array<int, 2> words() const { return sabreWords(width, height, outWidth, outHeight); }
+    /// ScamHybridBurst.sabreDng: a merged DNG of a scaled (Sabre) output, on the output grid (header flag 8 with it)
+    bool sabreDng(bool mergedDng) const { return mergedDng && (outWidth != width || outHeight != height); }
+    /// ScamHybridBurst.linearDng: the merged DNG as Linear DNG (a Bayer stream: dngMosaic 1; header flag 128, no mosaic trailer)
+    bool linearDng(bool mergedDng) const { return mergedDng; }
+    /// ScamHybridBurst.mergedRawPixels: the merged RAW on the Sabre output grid when the merge scaled the output
+    long long mergedRawPixels(bool mergedDng) const {
+        return sabreDng(mergedDng) ? (long long)outWidth * outHeight : (long long)width * height;
+    }
     bool effectiveMap() const { return !huge(outWidth, outHeight); }
     /// outputScale: the returned RGB against the sensor grid
     float outputScale() const { return float(outWidth) / float(width); }
@@ -135,21 +148,24 @@ inline Plan plan(const Settings& s, int width, int height, int gpuMaxSide, int m
     const Point fin = keepCrop ? Point{width, height} : hybridFinalSize(s, width, height);
     p.outputMode = s.hybridOutputMode();
     const int dngMosaic = 1; // a Bayer stream (dngOnlyBlock: a Quad / Tetra stream without the remosaic is no iPhone burst)
-    p.strictTwoX = !window && !keepCrop && dngMosaic == 1 && p.outputMode == "2x";
-    const bool outputMode2x = !keepCrop && dngMosaic == 1 && (window ? window->sabre() : p.outputMode != "sensor");
+    // a mosaic-only DNG takes the chosen merge scale even where a cropped photo keeps its sensor size (no conservative retry here)
+    const bool scaleOutput = !keepCrop || dngMosaic > 1;
+    p.strictTwoX = !window && scaleOutput && p.outputMode == "2x";
+    const bool outputMode2x = scaleOutput && (window ? window->sabre() : p.outputMode != "sensor");
     const bool wants2x = outputMode2x && mosaicBlock <= 4;
     if (p.strictTwoX && !wants2x) throw std::runtime_error("SHDR: Sabre 2x is unavailable for colour block " + std::to_string(mosaicBlock));
     p.twoX = wants2x && sabre2xFits(width, height, gpuMaxSide);
     if (p.strictTwoX && !p.twoX)
         throw std::runtime_error("SHDR: Sabre 2x " + std::to_string(2LL * width) + "x" + std::to_string(2LL * height) + " exceeds GPU side "
                                  + std::to_string(gpuMaxSide) + " or one FP16 RGB buffer (2 GB)");
-    const Point sabre = window ? Point{window->outWidth, window->outHeight} : sabreSize(width, height, p.outputMode);
+    const Point sabre = window ? Point{window->outWidth, window->outHeight} : sabreSize(width, height, p.outputMode, dngMosaic);
     p.outWidth = p.twoX ? sabre.x : width;
     p.outHeight = p.twoX ? sabre.y : height;
     p.rgbHalf = transportHalf(p.outWidth, p.outHeight, s.scamDevSwitch("hybrid_rgb_half", true));
     // P576: the window's photo size comes after the pipeline (the remaining crop, then the photo's size)
-    p.finalWidth = window ? p.outWidth : fin.x;
-    p.finalHeight = window ? p.outHeight : fin.y;
+    const bool keepsOutputSize = window || dngMosaic > 1;
+    p.finalWidth = keepsOutputSize ? p.outWidth : fin.x;
+    p.finalHeight = keepsOutputSize ? p.outHeight : fin.y;
     return p;
 }
 

@@ -19,7 +19,23 @@ public:
     /// the reference's highlight recovery factor (pref_highlight_recovery_factor, 8 in the owner's configuration)
     static constexpr float MAX_CEILING = 8.f;
 
-    static float clipCeiling(bool bento, float /*max*/) { return bento ? MAX_CEILING : 1.f; }
+    /// the clip ceiling (u_clip_ceiling): 1 without short frames in the merge, with them the highlight recovery factor itself (the
+    /// samples' maximum is only logged)
+    static float clipCeiling(bool shorts) { return shorts ? MAX_CEILING : 1.f; }
+
+    /// measureSamples: the samples' maximum (logged) and the histogram at the clip, the samples and channels in the Java order
+    static float measureSamples(const float* data, int count, float clip, WhyV2Ae::Hist& histogram) {
+        float max = 0.f;
+        for (int i = 0; i < count; i++) {
+            const size_t offset = size_t(i) * 4;
+            const float r = data[offset], g = data[offset + 1], b = data[offset + 2];
+            if (r > max && jmath::isFinite(r)) max = r;
+            if (g > max && jmath::isFinite(g)) max = g;
+            if (b > max && jmath::isFinite(b)) max = b;
+            WhyV2Ae::add(histogram, r, g, b, clip, false);
+        }
+        return max;
+    }
 
     /// whether the merge fused short frames: Bento applied, or the fast route's «N valid short frame(s)» with N > 0
     static bool shortFramesMerged(bool bentoApplied, const std::string& report) {
@@ -192,22 +208,13 @@ public:
             const std::vector<uint8_t> px = samplesTex->textureBuffer(GLFormat(DataType::FLOAT_16, 4));
             std::vector<float> f(px.size() / 4);
             std::memcpy(f.data(), px.data(), f.size() * 4);
-            float max = 0.f;
-            for (size_t i = 0; i < size_t(sw) * size_t(sh); i++)
-                for (size_t c = 0; c < 3; c++) {
-                    const float v = f[i * 4 + c];
-                    if (v > max && jmath::isFinite(v)) max = v;
-                }
             const bool shorts = shortFramesMerged(pipeline.merge.lastBentoApplied, pipeline.merge.lastReport);
-            const float ceiling = clipCeiling(shorts, max);
+            const float ceiling = clipCeiling(shorts);
             const float clip = WhyV2Ae::clipCeiling(ceiling);
             // no face: the reference's photo path never fills its AE's face rect
             WhyV2Ae::Hist h;
-            for (int y = 0; y < sh; y++)
-                for (int x = 0; x < sw; x++) {
-                    const size_t o = (size_t(y) * size_t(sw) + size_t(x)) * 4;
-                    WhyV2Ae::add(h, f[o], f[o + 1], f[o + 2], clip, false);
-                }
+            // (the Java's half readback, where the driver widens RGBA16F exactly, reads the same values: the float route here)
+            const float max = measureSamples(f.data(), sw * sh, clip, h);
             const std::array<float, 2> noise = referenceNoise(pipeline.mParameters.noiseModeler);
             const WhyV2Ae::Result r = WhyV2Ae::finish(h, v2->params, ceiling, noise[0], noise[1]);
             v2->ae = r;

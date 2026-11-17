@@ -41,6 +41,13 @@ inline MergeResult mergeBurst(const std::string& jobDir, const std::string& burs
     scam::MappedHybridBurst burst(burstPath, false);
     if (!burst.hybrid) throw std::runtime_error("not an NCH v10-v12 hybrid burst");
     scam::HybridInput hin = burst.input;
+    // the worker's DNG outputs (scam-neural-worker.cpp): header flag 128 (ScamHybridBurst.linearDng) - the merge's camera RGB is
+    // the DNG (the app writes the Linear DNG from it), no CFA trailer, only the highlight ceiling reported; flag 64 (sabreDng) -
+    // the CFA trailer written from the RGB at the output size, after its resize. Either takes the merge's ceiling here instead of
+    // the sensor-grid mosaic.
+    float sabreDngCeiling = 0.f;
+    if (burst.sabreDng || hin.linearDng) hin.sabreDngCeiling = &sabreDngCeiling;
+    if (hin.linearDng) hin.mergedDng = false; // camera RGB already goes to the app, with no CFA trailer
     MergeResult out;
     out.sensorPixels = size_t(hin.w) * hin.h;
     out.rgbHalf = jobMarker(jobDir, "rgb-half");
@@ -74,6 +81,7 @@ inline MergeResult mergeBurst(const std::string& jobDir, const std::string& burs
         int g = 0;
         for (int k = 1; k <= 2; ++k) if (px == size_t(hin.w) * k * size_t(hin.h) * k) g = k;
         if (!g) throw std::runtime_error("Hybrid: a result of " + std::to_string(px) + " px is no grid of the burst");
+        if ((burst.sabreDng || hin.linearDng) && g != 2) throw std::runtime_error("DNG: the merge returned the sensor grid");
         scam::hybridResampleResult(out.rgb, hin.w * g, hin.h * g, hin.outW, hin.outH, out.effMap.empty() ? nullptr : &out.effMap,
                                    out.clipFlags.empty() ? nullptr : &out.clipFlags);
         report("HYBRID SABRE OUTPUT: the " + std::to_string(hin.w * g) + "x" + std::to_string(hin.h * g) + " result resampled to "
@@ -85,6 +93,17 @@ inline MergeResult mergeBurst(const std::string& jobDir, const std::string& burs
         out.height = hin.outH;
     } else {
         for (int k = 1; k <= 2; ++k) if (px == size_t(hin.w) * k * size_t(hin.h) * k) { out.width = hin.w * k; out.height = hin.h * k; }
+    }
+    if (hin.linearDng) {
+        const float ceiling = sabreDngCeiling > 0.f ? sabreDngCeiling : scam::hybridDngCeiling(hin);
+        report("HYBRID DNG: linear RGB, ceiling=" + std::to_string(ceiling));
+    } else if (burst.sabreDng) {
+        const int w = hin.outW > 0 ? hin.outW : hin.w * 2, h = hin.outH > 0 ? hin.outH : hin.h * 2;
+        const float ceiling = sabreDngCeiling > 0.f ? sabreDngCeiling : scam::hybridDngCeiling(hin);
+        const int block = tuning.dngMosaic != 0 && (hin.mosaic == 2 || hin.mosaic == 4) ? hin.mosaic : 1;
+        const float headroom = scam::hybridWriteSabreDng(out.mergedDng, w, h, hin, out.rgb, tuning.dngDither != 0, block, ceiling);
+        report(scam::hybridDngReport(headroom, w, h, ceiling, tuning.dngDither != 0));
+        report("HYBRID DNG SABRE: " + std::to_string(w) + "x" + std::to_string(h) + ", CFA block " + std::to_string(block));
     }
     out.ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     double sum = 0;

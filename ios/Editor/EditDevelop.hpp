@@ -48,11 +48,11 @@ inline int rotation(int orientation) {
     }
 }
 
-/// P696: why the developer cannot take a DNG without a record, none when it can: a Bayer mosaic of single sites (the demosaic
-/// here; a Quad / LinearRaw DNG is not one), an orientation without a mirror (the pipeline's turn), and - another app's DNG - its
-/// colour: a ColorMatrix and the as-shot white.
+/// P696 / 6a4d3a46: why the developer cannot take a DNG without a record, none when it can: our Linear DNGs and single-site Bayer
+/// DNGs (the demosaic here; a Quad DNG is not one, nor another app's LinearRaw) with an orientation without a mirror (the
+/// pipeline's turn); a Bayer DNG of another app also needs its colour: a ColorMatrix and the as-shot white.
 inline std::optional<std::string> refusal(const DngRaw::Info& info) {
-    if (info.kind != DngRaw::KIND_BAYER) return std::string("not a Bayer mosaic");
+    if (info.kind != DngRaw::KIND_BAYER && !(info.kind == DngRaw::KIND_RGB && ours(info))) return std::string("not a Bayer mosaic");
     if (info.cell != 1) return std::string("a Quad mosaic");
     if (rotation(info.orientation) < 0) return "a mirrored orientation " + std::to_string(info.orientation);
     if (!ours(info) && (!info.colour.hasMatrices() || !info.asShotGiven))
@@ -203,6 +203,32 @@ inline int mirror(int i, int n) {
 }
 
 inline float at(const float* m, int w, int h, int x, int y) { return m[size_t(mirror(y, h)) * w + mirror(x, w)]; }
+
+/// 6a4d3a46 EditDevelop.preview of a Linear DNG: the bin that gives at most PREVIEW_SIDE on the longer side (no 2x2 cell)
+inline int linearBinFor(int w, int h) { return (std::max(w, h) - 1) / PREVIEW_SIDE + 1; }
+
+/// EditDevelop.preview of a Linear DNG: its decoded RGB (DngRaw::decodeForDevelop's floats) times the record's headroom
+inline std::vector<float> linearPreview(std::vector<float> rgb, float headroom) {
+    for (float& v : rgb) v *= headroom;
+    return rgb;
+}
+
+/// EditDevelop.full of a Linear DNG: the whole RGB times the headroom as the pipeline takes it - float32 RGB (12 B a pixel) or,
+/// with half, IEEE halves (6 B a pixel), native order - decoded straight into it (DngRaw::decodeRgbForDevelop)
+inline std::vector<uint8_t> linearFull(const uint8_t* data, size_t size, int w, int h, bool fromRecord, bool list1, float headroom, bool half) {
+    std::vector<uint8_t> out(size_t(w) * h * (half ? 6 : 12));
+    uint8_t* base = out.data();
+    const DngRaw::RgbSink sink = half ? DngRaw::RgbSink([base, headroom](size_t i, float v) {
+        const uint16_t hv = toHalf(v * headroom);
+        std::memcpy(base + i * 2, &hv, 2);
+    })
+                                      : DngRaw::RgbSink([base, headroom](size_t i, float v) {
+        const float f = v * headroom;
+        std::memcpy(base + i * 4, &f, 4);
+    });
+    DngRaw::decodeRgbForDevelop(data, size, w, h, fromRecord, list1, sink);
+    return out;
+}
 
 /// one pixel of mhc (without the gain) into out
 inline void mhcAt(const float* m, int w, int h, int phase, int x, int y, float out[3]) {

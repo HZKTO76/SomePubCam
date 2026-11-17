@@ -346,7 +346,7 @@ public:
         return hybridString("downsampler", "lanczos");
     }
     /// P614 whyToneV2: «Why тон» V2 chosen (pref_scam_hybrid_tone_version "v2"; scam_dev "hybrid_tone_version 0|1")
-    bool whyToneV2() const { return hybridString("tone_version", "v1") == "v2"; }
+    bool whyToneV2() const { return hybridString("tone_version", "v2") == "v2"; } // P721: V2 by default
     /// P718 monoFilter: «Чёрно-белый» (pref_scam_hybrid_colour_mono) on - an entry of ColourLook.MONO past "off"
     bool monoFilter() const {
         static const char* const MONO[7] = {"off", "neutral", "yellow", "orange", "red", "green", "blue"}; // ColourLook.MONO

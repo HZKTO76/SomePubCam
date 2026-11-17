@@ -2141,8 +2141,8 @@
    "k": "hybrid_fm_ahb",
    "n": true,
    "t": {
-    "en": "«Fast»: where the merge's GPU buffers live - the result's readback (1) and the RAW upload (2) in hardware buffers (3 as before, 0 both in the driver's memory); to compare the output's and the unpack's time (the same photo)",
-    "ru": "«Быстрый»: где лежат буферы склейки на GPU - чтения результата (1) и загрузки RAW (2) в аппаратных буферах (3 как раньше, 0 оба в памяти драйвера); для сравнения времени выхода и распаковки (снимок тот же)"
+    "en": "Fast merge: 1 uses hardware buffers for readback, 2 for RAW upload, 3 for both (default), 0 for driver storage. 7 uses the same buffers as 3 and queues unpack before waiting for the next RAW buffer",
+    "ru": "«Быстрый»: 1 — чтение через аппаратный буфер, 2 — загрузка RAW через него, 3 — оба (по умолчанию), 0 — память драйвера. 7 — как 3, с запуском распаковки перед ожиданием следующего буфера RAW"
    }
   },
   {
@@ -2416,6 +2416,19 @@
    "t": {
     "en": "The SNR before the denoise in one compute pass (the same result); off: the two passes as before",
     "ru": "SNR перед шумодавом одним compute-проходом (тот же результат); выкл — два прохода как раньше"
+   }
+  },
+  {
+   "d": "0",
+   "g": {
+    "en": "Processing",
+    "ru": "Обработка"
+   },
+   "k": "snr_cs_64",
+   "n": false,
+   "t": {
+    "en": "Experimental: 16×4 workgroups for SNR before denoise",
+    "ru": "Опыт: группы 16×4 в замере SNR перед шумодавом"
    }
   },
   {
@@ -5422,6 +5435,32 @@
    }
   },
   {
+   "d": "0",
+   "g": {
+    "en": "Processing",
+    "ru": "Обработка"
+   },
+   "k": "post_stream_gl_state",
+   "n": false,
+   "t": {
+    "en": "Experiment: reuse GPU bindings between streamed JPEG strips. Compare performance and JPEG output in the lab",
+    "ru": "Опыт: переиспользовать состояние GPU между полосами потокового JPEG. Сравнить скорость и JPEG в лаборатории"
+   }
+  },
+  {
+   "d": "0",
+   "g": {
+    "en": "Processing",
+    "ru": "Обработка"
+   },
+   "k": "post_skip_unused_sun",
+   "n": false,
+   "t": {
+    "en": "Experiment: skip preparing unused glow maps in WHY V2. Compare performance and JPEG output in the lab",
+    "ru": "Опыт: пропускать расчёт неиспользуемых карт свечения в WHY V2. Сравнить скорость и JPEG в лаборатории"
+   }
+  },
+  {
    "d": "1",
    "g": {
     "en": "Processing",
@@ -5523,6 +5562,19 @@
    "t": {
     "en": "The merged DNG is written on its own thread beside the photo's processing (only above 8 GB of RAM and up to 100 MP; the same file). Off: the DNG is written before the processing, as before P681",
     "ru": "Склеенный DNG пишется в отдельном потоке параллельно с обработкой фото (только больше 8 ГБ памяти и до 100 Мп; файл тот же). Выкл — DNG записывается до обработки, как до P681"
+   }
+  },
+  {
+   "d": "0",
+   "g": {
+    "en": "Processing",
+    "ru": "Обработка"
+   },
+   "k": "dng_linear_parallel",
+   "n": false,
+   "t": {
+    "en": "Experimental: two threads for Linear DNG compression up to 16 MP",
+    "ru": "Опыт: два потока для сжатия Linear DNG до 16 Мп"
    }
   },
   {
@@ -6298,9 +6350,19 @@
    "pref_scam_hybrid_chroma_diff",
    "pref_scam_hybrid_dilate",
    "pref_scam_hybrid_dilate_floor",
+   "pref_scam_hybrid_fast_motion_denoise_16",
+   "pref_scam_hybrid_fast_motion_denoise_2",
+   "pref_scam_hybrid_fast_motion_denoise_3",
+   "pref_scam_hybrid_fast_motion_denoise_32",
+   "pref_scam_hybrid_fast_motion_denoise_4",
+   "pref_scam_hybrid_fast_motion_denoise_64",
+   "pref_scam_hybrid_fast_motion_denoise_8",
+   "pref_scam_hybrid_fast_motion_denoise_enabled",
+   "pref_scam_hybrid_fast_motion_denoise_graph",
    "pref_scam_hybrid_filter_variance",
    "pref_scam_hybrid_fwe",
    "pref_scam_hybrid_gain_measured",
+   "pref_scam_hybrid_highlight_merge",
    "pref_scam_hybrid_hot_base_sigma",
    "pref_scam_hybrid_hot_cap",
    "pref_scam_hybrid_hot_cross",
@@ -6612,6 +6674,14 @@
     "6",
     "12"
    ],
+   "scam_hybrid_highlight_merge_entries": [
+    "Standard",
+    "Adaptive"
+   ],
+   "scam_hybrid_highlight_merge_values": [
+    "classic",
+    "adaptive"
+   ],
    "scam_hybrid_la_engine_entries": [
     "Auto (default)",
     "GPU",
@@ -6714,8 +6784,8 @@
    ],
    "scam_hybrid_output_entries": [
     "1.0× (sensor size, default)",
-    "1.5× (≈28 MP)",
-    "2.0× (≈50 MP)"
+    "1.5×",
+    "2.0×"
    ],
    "scam_hybrid_output_values": [
     "sensor",
@@ -7590,8 +7660,6 @@
    "prefs_raw_stream_format_title": "RAW stream format",
    "prefs_root_about_title": "About",
    "prefs_root_colour_title": "Image settings",
-   "prefs_root_enabled_summary": "Not required. Only a build in which the processor is not installed as part of the app needs it: then it starts through su.",
-   "prefs_root_enabled_title": "Root access",
    "prefs_root_lab_title": "Lab",
    "prefs_root_lenses_title": "Camera modules and lenses",
    "prefs_root_logs_title": "Logs",
@@ -7601,6 +7669,17 @@
    "prefs_root_shoot_title": "General settings",
    "prefs_scam_diagnostics_screen_summary": "The app's log, processing stages and reports, to look into a failure or an odd photo.",
    "prefs_scam_diagnostics_screen_title": "Logs",
+   "prefs_scam_fast_motion_denoise_enabled_title": "Use the SNR curve",
+   "prefs_scam_fast_motion_denoise_graph_title": "SNR curve",
+   "prefs_scam_fast_motion_denoise_snr16": "SNR 16",
+   "prefs_scam_fast_motion_denoise_snr2": "SNR 2",
+   "prefs_scam_fast_motion_denoise_snr3": "SNR 3",
+   "prefs_scam_fast_motion_denoise_snr32": "SNR 32",
+   "prefs_scam_fast_motion_denoise_snr4": "SNR 4",
+   "prefs_scam_fast_motion_denoise_snr64": "SNR 64",
+   "prefs_scam_fast_motion_denoise_snr8": "SNR 8",
+   "prefs_scam_fast_motion_denoise_summary": "Set the strength from 0 to 100% at seven local signal-to-noise ratios (SNR). Applies to rendered photos from Fast RAW processing. DNG saves the merge result before this step.",
+   "prefs_scam_fast_motion_denoise_title": "Motion noise reduction",
    "prefs_scam_hybrid_artifacts_screen_summary": "Recovering blown highlights and fighting the colour fringes and dotted lines at bright edges.",
    "prefs_scam_hybrid_artifacts_screen_title": "Chromatic aberrations and highlights",
    "prefs_scam_hybrid_auto2x_summary": "The 2× grid is used only in good light and when the frames really add detail. Otherwise the shot is simply enlarged: faster and without grid traces.",
@@ -7696,6 +7775,8 @@
    "prefs_scam_hybrid_highlight_defringe_title": "Defringe radius",
    "prefs_scam_hybrid_highlight_glow_summary": "Blown white sources such as the sun, headlights and lamps, and the brightest zone round them, stay white without coloured rings, such as a yellow ring round the sun. Coloured sources keep their colour. Higher: stronger. Zero turns it off.",
    "prefs_scam_hybrid_highlight_glow_title": "White glow around clipped lights",
+   "prefs_scam_hybrid_highlight_merge_summary": "Adaptive reduces ghosting and noise where the short exposure blends into the base.",
+   "prefs_scam_hybrid_highlight_merge_title": "Highlight merge",
    "prefs_scam_hybrid_highlight_recovery_summary": "Rebuilds the true colour of blown highlights from the sensor channels that survived. Higher: tries harder to bring the colour back. Lower: a natural fade to white stays. Zero turns it off.",
    "prefs_scam_hybrid_highlight_recovery_title": "Blown highlight colour recovery",
    "prefs_scam_hybrid_hot_base_sigma_summary": "The same for random spikes in the base frame. Lower: more is removed. Zero turns it off.",
@@ -7854,7 +7935,7 @@
    "prefs_scam_hybrid_oldstyle_vf_smooth_title": "Viewfinder smoothing, s",
    "prefs_scam_hybrid_oldstyle_vf_tone_summary": "The viewfinder shows the look of the ScamMaster photo to come: the 2.7 / 3.1 tone module builds a small copy of the photo from the viewfinder's frame, and the picture on the screen is carried to its tone and colour part by part (the detail stays the camera's). Off: the viewfinder exactly as in “Photo” (the style only); the photo is not affected.",
    "prefs_scam_hybrid_oldstyle_vf_tone_title": "Tone in the viewfinder",
-   "prefs_scam_hybrid_output_summary": "How many pixels the photo gets. 2× gives more detail but takes about four times longer to process.",
+   "prefs_scam_hybrid_output_summary": "Resolution of the merged photo and DNG. At 2×, the merge produces four times as many pixels as at 1×.",
    "prefs_scam_hybrid_output_title": "Resolution",
    "prefs_scam_hybrid_post_snr_summary": "At night the Resolve denoise smooths the grain of flat areas (sky, walls, skin) more and leaves texture and edges as they are; some fine grain stays. By day and off: as set.",
    "prefs_scam_hybrid_post_snr_title": "Adapt to the light (SNR)",
@@ -8797,6 +8878,14 @@
     "6",
     "12"
    ],
+   "scam_hybrid_highlight_merge_entries": [
+    "Обычное",
+    "Адаптивное"
+   ],
+   "scam_hybrid_highlight_merge_values": [
+    "classic",
+    "adaptive"
+   ],
    "scam_hybrid_la_engine_entries": [
     "Авто (по умолчанию)",
     "GPU",
@@ -8899,8 +8988,8 @@
    ],
    "scam_hybrid_output_entries": [
     "1.0× (размер сенсора, по умолчанию)",
-    "1.5× (≈28 МП)",
-    "2.0× (≈50 МП)"
+    "1.5×",
+    "2.0×"
    ],
    "scam_hybrid_output_values": [
     "sensor",
@@ -9775,8 +9864,6 @@
    "prefs_raw_stream_format_title": "Формат RAW-потока",
    "prefs_root_about_title": "О приложении",
    "prefs_root_colour_title": "Настройки изображения",
-   "prefs_root_enabled_summary": "Не обязателен. Нужен только сборке, в которой обработчик не установлен как часть приложения: тогда он запускается через su.",
-   "prefs_root_enabled_title": "Root-доступ",
    "prefs_root_lab_title": "Лаборатория",
    "prefs_root_lenses_title": "Модули камеры и линзы",
    "prefs_root_logs_title": "Логи",
@@ -9786,6 +9873,17 @@
    "prefs_root_shoot_title": "Основные настройки",
    "prefs_scam_diagnostics_screen_summary": "Журнал приложения, этапы обработки и отчёты — чтобы разобраться со сбоем или странным снимком.",
    "prefs_scam_diagnostics_screen_title": "Логи",
+   "prefs_scam_fast_motion_denoise_enabled_title": "Применять кривую SNR",
+   "prefs_scam_fast_motion_denoise_graph_title": "Кривая SNR",
+   "prefs_scam_fast_motion_denoise_snr16": "SNR 16",
+   "prefs_scam_fast_motion_denoise_snr2": "SNR 2",
+   "prefs_scam_fast_motion_denoise_snr3": "SNR 3",
+   "prefs_scam_fast_motion_denoise_snr32": "SNR 32",
+   "prefs_scam_fast_motion_denoise_snr4": "SNR 4",
+   "prefs_scam_fast_motion_denoise_snr64": "SNR 64",
+   "prefs_scam_fast_motion_denoise_snr8": "SNR 8",
+   "prefs_scam_fast_motion_denoise_summary": "Настройте силу от 0 до 100% для семи значений отношения сигнала к шуму (SNR). Кривая действует на готовые фото после быстрой RAW-склейки. DNG сохраняет результат склейки до этого шага.",
+   "prefs_scam_fast_motion_denoise_title": "Шумоподавление движения",
    "prefs_scam_hybrid_artifacts_screen_summary": "Восстановление пересветов и борьба с цветной каймой и пунктиром у ярких краёв.",
    "prefs_scam_hybrid_artifacts_screen_title": "Хроматические аберрации и света",
    "prefs_scam_hybrid_auto2x_summary": "Сетка 2× включается только при хорошем свете и когда кадры действительно дают новые детали. В остальных случаях снимок просто увеличивается: быстрее и без следов сетки.",
@@ -9881,6 +9979,8 @@
    "prefs_scam_hybrid_highlight_defringe_title": "Радиус удаления каймы (Defringe)",
    "prefs_scam_hybrid_highlight_glow_summary": "Пересвеченные белые источники — солнце, фары, лампы — и самая яркая зона вокруг них остаются белыми, без цветных колец: например, без жёлтого кольца вокруг солнца. Цветные источники сохраняют цвет. Больше — сильнее, на нуле выключено.",
    "prefs_scam_hybrid_highlight_glow_title": "Белое свечение вокруг засветов",
+   "prefs_scam_hybrid_highlight_merge_summary": "Адаптивное подавляет двоение и шум в зоне перехода к короткой экспозиции.",
+   "prefs_scam_hybrid_highlight_merge_title": "Слияние светов",
    "prefs_scam_hybrid_highlight_recovery_summary": "Восстанавливает настоящий цвет в выбитых светах по уцелевшим каналам сенсора. Больше — сильнее пытается вернуть цвет. Меньше — остаётся естественный переход в белый. На нуле выключено.",
    "prefs_scam_hybrid_highlight_recovery_title": "Восстановление цвета пересветов",
    "prefs_scam_hybrid_hot_base_sigma_summary": "То же для случайных выбросов основного кадра. Меньше — удаляется больше, на нуле выключено.",
@@ -10039,7 +10139,7 @@
    "prefs_scam_hybrid_oldstyle_vf_smooth_title": "Плавность видоискателя, с",
    "prefs_scam_hybrid_oldstyle_vf_tone_summary": "Видоискатель показывает вид будущего снимка ScamMaster: модуль тона 2.7 / 3.1 строит маленькую копию снимка из кадра видоискателя, и картинка на экране переносится в её тон и цвет по частям кадра (детали остаются от камеры). Выкл — видоискатель точно как в «Фото» (только стиль); на снимок не влияет.",
    "prefs_scam_hybrid_oldstyle_vf_tone_title": "Тон в видоискателе",
-   "prefs_scam_hybrid_output_summary": "Сколько пикселей получает фото. 2× даёт больше деталей, но обработка идёт примерно вчетверо дольше.",
+   "prefs_scam_hybrid_output_summary": "Разрешение склейки для фото и DNG. При 2× получается вчетверо больше пикселей, чем при 1×.",
    "prefs_scam_hybrid_output_title": "Разрешение",
    "prefs_scam_hybrid_post_snr_summary": "Ночью шумоподавление Resolve сильнее сглаживает зерно ровных участков (небо, стены, кожа), не трогая фактуру и края; лёгкое зерно остаётся. Днём и выкл — как задано.",
    "prefs_scam_hybrid_post_snr_title": "Подстройка под свет (SNR)",
@@ -10595,6 +10695,21 @@
    {
     "children": [
      {
+      "default": "classic",
+      "entries": "scam_hybrid_highlight_merge_entries",
+      "icon": "cs_ic_sun",
+      "key": "pref_scam_hybrid_highlight_merge",
+      "segmented": true,
+      "summary": {
+       "s": "prefs_scam_hybrid_highlight_merge_summary"
+      },
+      "title": {
+       "s": "prefs_scam_hybrid_highlight_merge_title"
+      },
+      "type": "list",
+      "values": "scam_hybrid_highlight_merge_values"
+     },
+     {
       "children": [
        {
         "default": true,
@@ -10607,6 +10722,126 @@
          "s": "prefs_scam_hybrid_denoise_title"
         },
         "type": "switch"
+       },
+       {
+        "children": [
+         {
+          "default": true,
+          "key": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_enabled_title"
+          },
+          "type": "switch"
+         },
+         {
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "key": "pref_scam_hybrid_fast_motion_denoise_graph",
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_graph_title"
+          },
+          "type": "custom:MotionDenoiseCurvePreference"
+         },
+         {
+          "default": "65",
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "float": false,
+          "key": "pref_scam_hybrid_fast_motion_denoise_2",
+          "max": 100.0,
+          "min": 0.0,
+          "step": 1.0,
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_snr2"
+          },
+          "type": "slider"
+         },
+         {
+          "default": "65",
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "float": false,
+          "key": "pref_scam_hybrid_fast_motion_denoise_3",
+          "max": 100.0,
+          "min": 0.0,
+          "step": 1.0,
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_snr3"
+          },
+          "type": "slider"
+         },
+         {
+          "default": "65",
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "float": false,
+          "key": "pref_scam_hybrid_fast_motion_denoise_4",
+          "max": 100.0,
+          "min": 0.0,
+          "step": 1.0,
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_snr4"
+          },
+          "type": "slider"
+         },
+         {
+          "default": "45",
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "float": false,
+          "key": "pref_scam_hybrid_fast_motion_denoise_8",
+          "max": 100.0,
+          "min": 0.0,
+          "step": 1.0,
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_snr8"
+          },
+          "type": "slider"
+         },
+         {
+          "default": "22",
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "float": false,
+          "key": "pref_scam_hybrid_fast_motion_denoise_16",
+          "max": 100.0,
+          "min": 0.0,
+          "step": 1.0,
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_snr16"
+          },
+          "type": "slider"
+         },
+         {
+          "default": "8",
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "float": false,
+          "key": "pref_scam_hybrid_fast_motion_denoise_32",
+          "max": 100.0,
+          "min": 0.0,
+          "step": 1.0,
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_snr32"
+          },
+          "type": "slider"
+         },
+         {
+          "default": "0",
+          "dependency": "pref_scam_hybrid_fast_motion_denoise_enabled",
+          "float": false,
+          "key": "pref_scam_hybrid_fast_motion_denoise_64",
+          "max": 100.0,
+          "min": 0.0,
+          "step": 1.0,
+          "title": {
+           "s": "prefs_scam_fast_motion_denoise_snr64"
+          },
+          "type": "slider"
+         }
+        ],
+        "icon": "cs_ic_motion",
+        "key": "scam_hybrid_fast_motion_denoise_screen",
+        "summary": {
+         "s": "prefs_scam_fast_motion_denoise_summary"
+        },
+        "title": {
+         "s": "prefs_scam_fast_motion_denoise_title"
+        },
+        "type": "screen"
        },
        {
         "default": true,
@@ -12255,7 +12490,7 @@
     "type": "screen"
    },
    {
-    "default": "v1",
+    "default": "v2",
     "entries": "scam_hybrid_tone_version_entries",
     "icon": "cs_ic_sun",
     "key": "pref_scam_hybrid_tone_version",
@@ -12497,7 +12732,7 @@
           "type": "slider"
          },
          {
-          "default": "0.5",
+          "default": "1",
           "float": true,
           "key": "pref_scam_hybrid_why_ae_min_limit",
           "max": 1.0,
@@ -18915,18 +19150,6 @@
        "s": "prefs_developer_settings_screen_title"
       },
       "type": "screen"
-     },
-     {
-      "default": false,
-      "icon": "cs_ic_lock",
-      "key": "pref_root_enabled",
-      "summary": {
-       "s": "prefs_root_enabled_summary"
-      },
-      "title": {
-       "s": "prefs_root_enabled_title"
-      },
-      "type": "switch"
      }
     ],
     "key": "root_logs",

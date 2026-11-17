@@ -167,7 +167,7 @@ constexpr int BINS = 4096;
 
 /// WhyV2Ae.Params: the reference tone's parameters (the owner's configuration of it as the defaults)
 struct Params {
-    float aeTarget = 0.14999999f, maxBoost = 5.0f, minLimit = 0.5f, facePriority = 0.7f;
+    float aeTarget = 0.14999999f, maxBoost = 5.0f, minLimit = 1.0f, facePriority = 0.7f; // P721: minLimit 1 (the owner's config v6)
     float nightDim = 0.049999997f, hlOverflow = 2.0f, hlBlend = 0.5f;
     float brightThresh = 0.90000004f, darkThresh = 12.5f, darkPixelThresh = 22.f, hlBoost = 1.1f, contrastBoost = 0.3f;
     float expEv = 0.f;

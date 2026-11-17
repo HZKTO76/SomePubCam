@@ -155,7 +155,8 @@ struct SettingsAvailability {
         "pref_scam_hybrid_oldstyle_vf_match", "pref_scam_hybrid_oldstyle_vf_smooth",
     ]
 
-    private var toneV2: Bool { text("pref_scam_hybrid_tone_version", "v1").trimmingCharacters(in: .whitespaces) == "v2" }
+    /// P614: «Why тон» V2 is chosen (P721: V2 by default)
+    private var toneV2: Bool { text("pref_scam_hybrid_tone_version", "v2").trimmingCharacters(in: .whitespaces) == "v2" }
 
     private static let V1_ONLY: Set<String> = [
         WHY + "metering", WHY + "night_dim", WHY + "agx_look", COLOUR + "hue_lock", WHY + "curve_boost",
@@ -229,8 +230,16 @@ struct SettingsAvailability {
         "scam_hybrid_merge_align_category", "scam_hybrid_merge_reject_category", "scam_hybrid_merge_final_category",
     ]
 
+    /// «Шумоподавление движения» (its page and its pref_scam_hybrid_fast_motion_denoise_* rows): «Быстрый» only
+    static func fastMotionDenoiseKey(_ key: String) -> Bool {
+        key == "scam_hybrid_fast_motion_denoise_screen" || key.hasPrefix(HYB + "fast_motion_denoise_")
+    }
+
     func routeReason(_ key: String) -> String? {
         let quality = text(Self.HYB + "processing", "fast").trimmingCharacters(in: .whitespaces) == "quality"
+        if Self.fastMotionDenoiseKey(key) && quality {
+            return Lang.t("Только для режима «Быстро» (Режим обработки).", "“Fast” processing mode only (Processing mode).")
+        }
         if Self.QUALITY_ONLY.contains(key) && !quality {
             return Lang.t("Только для режима «Качество» (Режим обработки).", "“Quality” processing mode only (Processing mode).")
         }
@@ -246,7 +255,8 @@ struct SettingsAvailability {
     ]
 
     static func rawMergeOnly(_ key: String) -> Bool {
-        RAW_MERGE_ONLY.contains(key) || QUALITY_ONLY.contains(key) || key.hasPrefix(HYB + "mm_") || key.hasPrefix(HYB + "mosaic_")
+        RAW_MERGE_ONLY.contains(key) || QUALITY_ONLY.contains(key) || fastMotionDenoiseKey(key)
+            || key.hasPrefix(HYB + "mm_") || key.hasPrefix(HYB + "mosaic_")
     }
 
     func yuvReason(_ key: String) -> String? {
@@ -309,7 +319,7 @@ struct SettingsAvailability {
                               "No effect with a film simulation at 100 %: the film sets the tone, colour and texture. Below 100 % its influence is reduced.")
             }
         }
-        if (key.hasPrefix("pref_scam_hybrid_dn_") || key.hasPrefix("pref_scam_hybrid_why_dn_") || key.hasPrefix("pref_scam_hybrid_why_ms_")
+        if (Self.fastMotionDenoiseKey(key) || key.hasPrefix("pref_scam_hybrid_dn_") || key.hasPrefix("pref_scam_hybrid_why_dn_") || key.hasPrefix("pref_scam_hybrid_why_ms_")
             || key.hasPrefix("pref_scam_hybrid_resolve_speckle_")
             || any(key, "pref_scam_hybrid_why_bracket_denoise", "pref_scam_hybrid_why_chroma_denoise"))
             && !on("pref_scam_hybrid_denoise", true) {
@@ -518,7 +528,6 @@ struct SettingsAvailability {
     /// DCP profiles), and the neural parts the iOS pipeline does not have.
     func iPhoneReason(_ key: String) -> String? {
         switch key {
-        case "pref_root_enabled": return L("set.na.root")
         // the developed-RAW viewfinder (LiveRawRenderer / LiveWhyTone: a RAW stream drawn per frame): the iPhone shows the system
         // camera preview (Android greys it no longer: P705 lets every phone turn it on)
         case "pref_live_viewfinder_raw_key": return L("set.na.raw_viewfinder")

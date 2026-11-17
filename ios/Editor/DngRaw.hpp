@@ -808,6 +808,33 @@ public:
         return r.run(std::max(1, bin));
     }
 
+    /// DngRaw.RgbSink: one decoded sample (its index in the w x h x 3 RGB, 1.0 = the white level, never below 0)
+    using RgbSink = std::function<void(size_t index, float value)>;
+
+    /// 6a4d3a46 DngRaw.decodeRgbForDevelop: the whole linear RGB of a Linear DNG (width x height: its size(1)) straight into the
+    /// caller's buffer through sink - every sample once, no float copy of the image; the GainMaps as decodeForDevelop takes them.
+    static void decodeRgbForDevelop(const uint8_t* data, size_t size, int width, int height, bool fromRecord, bool list1, const RgbSink& sink) {
+        DngFile p(data, size);
+        DngRaw r(p, pick(p));
+        r.setup();
+        if (r.info_.kind != KIND_RGB || r.info_.cropWidth != width || r.info_.cropHeight != height
+            || (long long)width * height > 2147483647LL / 3)
+            throw std::runtime_error("DNG: wrong linear RGB size");
+        const bool keep2 = !(fromRecord || r.info_.shadingMap);
+        r.gainMaps_.clear();
+        if (list1) r.gainMaps_.insert(r.gainMaps_.end(), r.list1Maps_.begin(), r.list1Maps_.end());
+        if (keep2) r.gainMaps_.insert(r.gainMaps_.end(), r.list2Maps_.begin(), r.list2Maps_.end());
+        r.info_.gainMap = !r.gainMaps_.empty();
+        r.bin_ = 1;
+        r.step_ = 1;
+        r.outW_ = width;
+        r.outH_ = height;
+        r.rgbSink_ = &sink;
+        if (r.f_.compression == 1) r.uncompressed();
+        else r.lossless();
+        if (r.rgbSamples_ != 3LL * width * height) throw std::runtime_error("DNG: incomplete linear RGB");
+    }
+
     static float autoLift(const Image& img) {
         const int w = img.width, h = img.height;
         const int stride = std::max(1, int(std::sqrt(double(w) * h / 40000.0)));
@@ -872,6 +899,9 @@ private:
     bool linearOut_ = false;
     std::vector<float> fout_;
     float finv_ = 0;
+    /// decodeRgbForDevelop's sink and the samples it took
+    const RgbSink* rgbSink_ = nullptr;
+    long long rgbSamples_ = 0;
 
     DngRaw(const DngFile& p, const DngIfd& f) : p_(p), f_(f) {}
 
@@ -1133,8 +1163,13 @@ private:
                 s *= g.at((ay + 0.5) / aaH_, (ax + 0.5) / aaW_, plane - g.plane);
             }
         }
-        if (s <= 0) return;
         const size_t i = size_t((oy * outW_ + ox) * (info_.kind == KIND_RGB ? 3 : 1) + (info_.kind == KIND_RGB ? ch : 0));
+        if (rgbSink_) {
+            (*rgbSink_)(i, s > 0 ? float(s) : 0.f);
+            rgbSamples_++;
+            return;
+        }
+        if (s <= 0) return;
         if (linearOut_) {
             fout_[i] += float(s) * finv_;
             return;

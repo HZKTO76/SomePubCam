@@ -263,8 +263,17 @@ def java_block(text, start):
         j += 1
 
 
-def develop():
-    """DevelopCatalog's groups, ScamLabFragment's AT_SHOT / BURST_FRAMES and PreferenceKeys.TUNING_KEYS (the merge's keys)"""
+def tree_keys(n):
+    """every preference key of a node of the tree and of its rows"""
+    keys = [n['key']] if n.get('key') else []
+    for c in n.get('children', []):
+        keys += tree_keys(c)
+    return keys
+
+
+def develop(tree):
+    """DevelopCatalog's groups, ScamLabFragment's AT_SHOT / BURST_FRAMES and PreferenceKeys.mergeTuningKey (the merge's keys:
+    TUNING_KEYS, and its own suffixes - `"x".equals(suffix)` and `suffix.startsWith(PREFIX)` - over the tree's keys)"""
     catalog = (JAVA / 'ui/settings/DevelopCatalog.java').read_text()
     names = java_constants(JAVA / 'ui/settings/DevelopCatalog.java')
     named = {'FilmLut': java_constants(JAVA / 'processing/color/FilmLut.java'),
@@ -285,9 +294,17 @@ def develop():
     at_shot = re.findall(r'"(\w+)"', java_block(lab, 'AT_SHOT = new java.util.HashSet<>'))
     burst = re.findall(r'"(\w+)"', java_block(lab, 'BURST_FRAMES = new java.util.HashSet<>'))
     keys = (JAVA / 'settings/PreferenceKeys.java').read_text()
-    tuning = re.findall(r'\{"\w+",\s*"(\w+)"\}', java_block(keys, 'private static final String[][] TUNING_KEYS ='))
+    tuning = set(re.findall(r'\{"\w+",\s*"(\w+)"\}', java_block(keys, 'private static final String[][] TUNING_KEYS =')))
+    rule = java_block(keys, 'public static boolean mergeTuningKey(String key)')
+    tuning |= set(re.findall(r'"(\w+)"\.equals\(suffix\)', rule))
+    constants = java_constants(JAVA / 'settings/PreferenceKeys.java')
+    prefixes = [constants[c] for c in re.findall(r'suffix\.startsWith\(([A-Z][A-Z0-9_]*)\)', rule)]
+    prefixes += re.findall(r'suffix\.startsWith\("(\w+)"\)', rule)
+    for k in tree_keys(tree):
+        if k.startswith('pref_scam_hybrid_') and any(k[len('pref_scam_hybrid_'):].startswith(x) for x in prefixes):
+            tuning.add(k[len('pref_scam_hybrid_'):])
     return {'groups': groups, 'atShot': sorted(at_shot), 'burstFrames': sorted(burst),
-            'mergeTuning': sorted('pref_scam_hybrid_' + k for k in set(tuning))}
+            'mergeTuning': sorted('pref_scam_hybrid_' + k for k in tuning)}
 
 
 LITERAL = r'"(?:[^"\\]|\\.)*"'
@@ -419,7 +436,7 @@ def render():
                 'arrays': {k: arrays.get(k, fallback_a[k]) if len(arrays.get(k, [])) == len(fallback_a[k]) else fallback_a[k]
                            for k in sorted(used_arrays)}}
     doc = {'generated': 'ios/tools/gen_settings_ui.py from app/src/main/res: do not edit', 'tree': tree,
-           'en': table(EN_S, EN_A, EN_S, EN_A), 'ru': table(RU_S, RU_A, EN_S, EN_A), 'develop': develop(),
+           'en': table(EN_S, EN_A, EN_S, EN_A), 'ru': table(RU_S, RU_A, EN_S, EN_A), 'develop': develop(tree),
            'help': helps, 'devKeys': dev_keys()}
     text = json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True) + '\n'
     # the iOS port never names these (the iPhone's own gallery is «Photos»)

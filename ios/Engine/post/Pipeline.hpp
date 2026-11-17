@@ -135,6 +135,15 @@ public:
     FilmLutP referenceFilmUserLut;
     bool referenceFilmApplied = false, referenceFilmNativeP3 = false;
     std::set<const Node*> referenceFilmEffects, referenceFilmTone;
+    /// PostPipeline.glowMapsUnused: the assembled «Why тон» V2 route (a WhyV2Tone, no WhyCombine): nothing reads the highlight glow maps
+    bool glowMapsUnused() const {
+        bool alternateTone = false;
+        for (const auto& node : Nodes) {
+            if (node->Name == "WhyCombine") return false;
+            alternateTone |= node->Name == "WhyV2Tone";
+        }
+        return alternateTone;
+    }
     /// PostPipeline.skipNode: with the engine's picture, the film's own effects and (at strength 1) the tone it replaced
     bool skipNode(const Node* node) const {
         return referenceFilmApplied && (referenceFilmEffects.count(node) || (referenceFilmSettings->strength >= 1.f && referenceFilmTone.count(node)));

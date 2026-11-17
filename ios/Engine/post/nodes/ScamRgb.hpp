@@ -418,17 +418,24 @@ public:
         prog.closed = true;
         if (purpleBound) { purpleBound->close(); purpleBound = nullptr; }
         if (oppGpu) { oppGpu->close(); oppGpu = nullptr; }
-        const int shorter = wholeShorter(WhyTone::lowFactor(p.mParameters), size);
-        if (hybrid && flagsTex) {
-            p.sunBloom = sunBloomMap(p, *flagsTex, size, shorter);
-            p.sunBloomSize = p.sunBloom ? std::optional<Point>(size) : std::nullopt;
-            p.sunBloomBlock = shareBlock(shorter);
+        // the experiment scam_dev post_skip_unused_sun (off by default): the glow maps are not made where no WhyCombine reads them
+        // (never with the diagnostics' stages: here the per-node hook, ScamDiagnostics.gpu's place)
+        const bool unusedMaps = ((hybrid && flagsTex) || opposed) && p.glowMapsUnused();
+        const bool skipMaps = unusedMaps && !PostGlMode::legacy() && !p.afterNode && prefs.scamDevSwitch("post_skip_unused_sun", false);
+        if (!skipMaps) {
+            const int shorter = wholeShorter(WhyTone::lowFactor(p.mParameters), size);
+            if (hybrid && flagsTex) {
+                p.sunBloom = sunBloomMap(p, *flagsTex, size, shorter);
+                p.sunBloomSize = p.sunBloom ? std::optional<Point>(size) : std::nullopt;
+                p.sunBloomBlock = shareBlock(shorter);
+            }
+            if (opposed) {
+                p.opposedShare = opposedShareMap(p, *input, flagsTex.get(), cc, size, shorter);
+                p.opposedShareSize = p.opposedShare ? std::optional<Point>(size) : std::nullopt;
+                p.opposedShareBlock = shareBlock(shorter);
+            }
         }
-        if (opposed) {
-            p.opposedShare = opposedShareMap(p, *input, flagsTex.get(), cc, size, shorter);
-            p.opposedShareSize = p.opposedShare ? std::optional<Point>(size) : std::nullopt;
-            p.opposedShareBlock = shareBlock(shorter);
-        }
+        if (unusedMaps) logI("PERF", std::string("highlight glow maps skipped=") + (skipMaps ? "true" : "false"));
         const float band = perChannel && flagsTex ? std::max(0.f, std::min(1.f, prefs.hybridValue("highlight_band", 1.f))) : 0.f;
         const float glow = perChannel && flagsTex ? std::max(0.f, std::min(1.f, prefs.hybridValue("highlight_glow", 1.f))) : 0.f;
         // P671: the tiles near a flagged pixel (the windows' reach widened to whole tiles); none: no pass changes a pixel

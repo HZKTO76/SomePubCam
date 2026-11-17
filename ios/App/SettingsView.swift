@@ -495,6 +495,9 @@ struct SettingsRow: View {
                         ToneCurveEditor(key: key, defaultPoints: node.defaultValue?.text, enabled: enabled)
                     }
                 }
+            case "custom:MotionDenoiseCurvePreference":
+                // its layout is the graph alone (no title row), the sliders below it edit the curve
+                MotionDenoiseCurveView(store: store, enabled: enabled)
             case "custom:PhotoStylePreference":
                 PhotoStylePicker()
             case "custom:LutChangesPreference":

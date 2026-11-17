@@ -96,7 +96,7 @@ inline WhyAe::AeSettings settings(const PostPipeline& p) {
     WhyAe::AeSettings s;
     s.aeTarget = value("ae_target", 0.15f);
     s.maxBoost = value("ae_max_boost", 5.0f);
-    s.minLimit = std::min(value("ae_min_limit", 0.5f), s.maxBoost);
+    s.minLimit = std::min(value("ae_min_limit", 1.f), s.maxBoost); // P721: the owner's config arkburial_stable_v6
     s.hlOverflow = value("hl_overflow", 2.0f);
     s.hlBlend = std::max(0.f, std::min(1.f, value("hl_blend", 0.5f)));
     float nightVal = value("night_thresh", 0.05f);

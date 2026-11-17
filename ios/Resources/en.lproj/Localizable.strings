@@ -584,7 +584,6 @@
 "editor.hint.lut" = "The camera's LUTs: ours and the .cube files of the LUT folder. They go on the photo's finished colour, after your settings";
 "editor.hint.film" = "The film's colour as the camera's viewfinder shows it: from the photo's finished colour, not the scene light a shot with the film gets. Halation, softness and diffusion only when shooting";
 // Settings: the iPhone side of the Android rows (App/Settings)
-"set.na.root" = "Not on iPhone: iOS gives apps no root access.";
 "set.na.spoof" = "Android only: package spoofing opens vendor camera features to an Android app; an iPhone has no camera packages.";
 "set.na.fringe_net" = "Not on iPhone: the iOS pipeline has no fringe neural network; choose «Classic».";
 "set.na.vendor_keys" = "Not on iPhone: AVFoundation offers no vendor camera keys, sensor modes or ISP controls.";

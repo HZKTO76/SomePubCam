@@ -11,7 +11,7 @@ enum WhyV2Ae {
     static let referenceNoiseFallback: (Float, Float) = (0.00015, 1e-5)
 
     struct Params {
-        var aeTarget: Float = 0.14999999, maxBoost: Float = 5.0, minLimit: Float = 0.5, facePriority: Float = 0.7
+        var aeTarget: Float = 0.14999999, maxBoost: Float = 5.0, minLimit: Float = 1.0, facePriority: Float = 0.7
         var nightDim: Float = 0.049999997, hlOverflow: Float = 2.0, hlBlend: Float = 0.5
         var brightThresh: Float = 0.90000004, darkThresh: Float = 12.5, darkPixelThresh: Float = 22, hlBoost: Float = 1.1
         var contrastBoost: Float = 0.3

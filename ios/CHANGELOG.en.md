@@ -2,6 +2,11 @@
 
 English copy of ios/CHANGELOG.md; the build post carries both, section for section (same version, same place).
 
+## 0.3.7 — Android updates
+- The merge and processing as Android's of 17.11: less ghosting in motion, «Why тон» V2 by default, detail in a bright window.
+- «Шумоподавление и склейка»: the motion SNR curve and adaptive «Слияние светов».
+- RAW (DNG) in full colour at the chosen «Разрешение» 1× / 1.5× / 2×.
+
 ## 0.3.6 — fixes
 - iPhone 15 Pro: no more green / black bands at the photo's edge and no pink highlights.
 - ProRAW is taken at 48 MP with «Детально · 48 Мп».
