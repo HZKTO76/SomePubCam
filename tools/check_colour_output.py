@@ -187,6 +187,21 @@ P441_FUNCS = re.compile(r'#if RIM_SMOOTH == 1\n// P441 \(owner.*?\n#endif\n\n', 
 P441_CALL = re.compile(r'#if RIM_SMOOTH == 1\n {12}// P441: on every darkening pixel.*?\n#else\n(.*?)#endif\n', re.S)
 
 
+P733_CACHE = re.compile(r"// P733: the pixel's sceneLinear\(xy, size\) once.*?\n}\n\n", re.S)
+
+
+def has_p733(src: str) -> bool:
+    """P733: the pixel's sceneLinear read once (sceneLinearHere) - the same value as each call."""
+    src = src.replace('\r\n', '\n')
+    return P733_CACHE.search(src) is not None and 'sceneLinearHere(xy, size)' in src
+
+
+def without_p733(src: str) -> str:
+    """The shader before P733's sceneLinear cache: the cache function out, its calls back to sceneLinear (the same values)."""
+    src = P733_CACHE.sub('', src.replace('\r\n', '\n'), count=1)
+    return src.replace('sceneLinearHere(xy, size)', 'sceneLinear(xy, size)')
+
+
 def has_p441(src: str) -> bool:
     src = src.replace('\r\n', '\n')
     return (P441_DEFINE.search(src) is not None and P441_FUNCS.search(src) is not None and P441_CALL.search(src) is not None

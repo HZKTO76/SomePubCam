@@ -2,6 +2,10 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 (10) — Processing speed
+
+- The last post-processing stage is lighter: the colour is no longer read from memory a second time and some of the work is not repeated. The result is unchanged.
+
 ## 2026-11-17 (9) — End of the merge
 
 - The merge's last stage is lighter: the heavy fill of blown highlights runs only where it is needed. The merge finishes sooner and the viewfinder stalls less at its end. The result is unchanged.

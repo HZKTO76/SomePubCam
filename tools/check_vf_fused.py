@@ -175,12 +175,15 @@ def source_part() -> None:
     combine = read(SH / 'why/combine.glsl')
     # P370 (B2): the signed hue (signedHueU, off when unset) is taken out as check_colour_output.py does, after checking it is there
     sys.path.insert(0, str(ROOT / 'tools'))
-    from check_colour_output import has_signed_hue, without_signed_hue, has_p393, without_p393
+    from check_colour_output import has_signed_hue, without_signed_hue, has_p393, without_p393, has_p733, without_p733
     check(has_signed_hue(combine), 'combine.glsl lost the P370 signed hue')
     combine = without_signed_hue(combine)
     # P393: the light-tone vibrance's shape (vibHlShapeU) as well - P341's block in its place (tools/check_vibrance_hl.py renders it)
     check(has_p393(combine), 'combine.glsl lost the P393 shape of the light-tone vibrance')
     combine = without_p393(combine)
+    # P733: the pixel's sceneLinear read once (the same values; tools/check_combine_colour_low.py renders it against the old shader)
+    check(has_p733(combine), 'combine.glsl lost the P733 sceneLinear cache')
+    combine = without_p733(combine)
     check('#define RAW_SOURCE 0' in combine, 'combine.glsl has no "#define RAW_SOURCE 0"')
     hashes = {p: token_hash(combine, p) for p in ('0', '1')}
     for p, h in hashes.items():

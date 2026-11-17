@@ -33,6 +33,8 @@ LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_lpyr_mrt.py
 LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_band_tiles.py
 # P671: the photo's combine with its one-channel windows read as textureGather blocks equals the single reads, bit for bit
 LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_combine_gather.py
+# P733: the colour B-spline from the low loop's taps (COLOUR_IS_LOW) equals its own fetches, bit for bit
+LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_combine_colour_low.py
 # P671: the denoise's optics with its per-strip Oklab cache equals the inline conversions, bit for bit
 LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_ms_oklab_cache.py
 LIBGL_ALWAYS_SOFTWARE=1 /tmp/tetra-gpu-check/bin/python tools/check_noise_quantile.py

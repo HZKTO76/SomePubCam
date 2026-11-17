@@ -242,6 +242,9 @@ uniform sampler2D WhyLumaS;         // sharpU 1: S(Ya) of WhyLumaSharpen (.r), o
 // same texels (CLAMP_TO_EDGE textures of the clamped grid's size), the same sums in the same order: 61 reads become 21. The
 // photo only (WhyCombine; scam_dev why_gather_taps 0: the single reads as before; the viewfinder never sets it).
 #define GATHER_TAPS 0
+// P733 (owner, 2026-11-17: «Постобработку тоже ускорь»): 1 = WhyColour is WhyLow on its grid (no bracket denoise, colourFU == fU): the
+// colour's 4 x 4 B-spline takes the low loop's own taps and weights, in the same order - the same sums, 16 fetches fewer a pixel
+#define COLOUR_IS_LOW 0
 #if GATHER_TAPS == 1
 // the 2 x 2 block whose top-left texel is p: .w (p), .z (p + (1, 0)), .x (p + (0, 1)), .y (p + (1, 1)) - out-of-range texels are
 // the edge's (CLAMP_TO_EDGE), as texelFetch at the clamped position
@@ -1297,6 +1300,18 @@ vec3 v2Graded(vec3 scene, vec4 agxA, vec4 agxB, int look) {
 }
 #endif
 
+// P733: the pixel's sceneLinear(xy, size) once (main reads it in up to three branches: V2's colour, the detail split, the
+// highlight terms) - the same value as each call made it
+bool sceneLinearDone = false;
+vec3 sceneLinearValue;
+vec3 sceneLinearHere(ivec2 xy, ivec2 size) {
+    if (!sceneLinearDone) {
+        sceneLinearValue = sceneLinear(xy, size);
+        sceneLinearDone = true;
+    }
+    return sceneLinearValue;
+}
+
 void main() {
 #if RAW_SOURCE == 1
     // P365: the tone grid is the viewport (drawn on the screen at its origin, or into the tone target at 0, 0); the frame
@@ -1446,6 +1461,14 @@ void main() {
                     lightW += lightShare(lowTap, refDomain) * w;
                 }
                 if (bounded) brightMax = max(brightMax, dot(max(lowTap, vec3(0.0)), LUMA) * ae);   // (as below)
+#if COLOUR_IS_LOW == 1
+#if P3_OUT == 1
+                orig += (signedColourU != 0 ? finiteTap(lowTap) : clampP3(finiteTap(lowTap))) * (wx[dx + 1] * wy[dy + 1]);
+#else
+                orig += (signedColourU != 0 ? finiteTap(lowTap) : sanitize(lowTap)) * (wx[dx + 1] * wy[dy + 1]);
+#endif
+                origS += finiteTap(lowTap) * (wx[dx + 1] * wy[dy + 1]);
+#endif
             }
         }
 #else
@@ -1461,9 +1484,18 @@ void main() {
                     lightW += lightShare(lowTap, refDomain) * w;
                 }
                 if (bounded) brightMax = max(brightMax, dot(max(lowTap, vec3(0.0)), LUMA) * ae);
+#if COLOUR_IS_LOW == 1
+#if P3_OUT == 1
+                orig += (signedColourU != 0 ? finiteTap(lowTap) : clampP3(finiteTap(lowTap))) * (wx[dx + 1] * wy[dy + 1]);
+#else
+                orig += (signedColourU != 0 ? finiteTap(lowTap) : sanitize(lowTap)) * (wx[dx + 1] * wy[dy + 1]);
+#endif
+                origS += finiteTap(lowTap) * (wx[dx + 1] * wy[dy + 1]);
+#endif
             }
         }
 #endif
+#if COLOUR_IS_LOW == 0
         gridPos(xy.x, fc, bx, fx);
         gridPos(xy.y, fc, by, fy);
         wx = bsplineWeights(fx);
@@ -1481,6 +1513,7 @@ void main() {
                 origS += finiteTap(tap) * (wx[dx + 1] * wy[dy + 1]);
             }
         }
+#endif
 #if P3_OUT == 1
         if (signedColourU != 0) orig = clampP3(orig);
 #else
@@ -1494,7 +1527,7 @@ void main() {
     // stays where the two lie 8 .. 16 x apart (a lone dark pixel by a light). The 4 x 4 B-spline of whyLow rendered a textured
     // area's mean colour at its mean light: grass x1.03 - 1.05 of V2's chroma at the same lightness.
     if (f != 1 && fullInputU == 1) {
-        vec3 own = max(sceneLinear(xy, size), vec3(0.0));
+        vec3 own = max(sceneLinearHere(xy, size), vec3(0.0));
         float yOwn = dot(own, LUMA), yBase = max(dot(orig, LUMA), 0.0);
         if (yOwn > 1.0e-7 && yBase > 1.0e-7) {
             float r = yBase / yOwn;
@@ -1687,7 +1720,7 @@ void main() {
 #if EDGE_HOLD == 1
         if (sharpU == 1 && bounded) yS = edgeHold(yS, xy, size, refDomain);   // P394
 #endif
-        float yFull = sharpU == 1 ? yS * sharpTone / ae : dot(sceneLinear(xy, size), LUMA);
+        float yFull = sharpU == 1 ? yS * sharpTone / ae : dot(sceneLinearHere(xy, size), LUMA);
         if (f == 1) {
             // kernel full-resolution mode: asymmetric clamp against dark trenches [:1538-1548]
             float lBase = cbrtp(max(dot(orig, LUMA) * ae, 0.000001));
@@ -1698,7 +1731,7 @@ void main() {
 #if DETAIL_SPLIT == 1
             if (detailSplitU >= 1 && sharpU == 1 && fullInputU == 1) {
                 // the unsharpened luma in WhyLumaS's domain (why/sharp_in: min(m Y, 1)) carries the merge's own detail
-                float yU = clamp(dot(sceneLinear(xy, size), LUMA) * refDomain, 0.0, 1.0);
+                float yU = clamp(dot(sceneLinearHere(xy, size), LUMA) * refDomain, 0.0, 1.0);
                 float lU = cbrtp(max(yU, 0.000001));
                 sharpDelta = clamp(cbrtp(max(yS0, 0.000001)) - lU, -min(0.035, lU * 0.25), 0.050);
                 yS = yU;
@@ -1785,12 +1818,12 @@ void main() {
                 // the unbounded mean: where the footprint holds light above the bound (or a light), a dark edge or a 2 px bar took
                 // the bright side's energy (+7 .. +67 L* against the film model). There the pixel's own luminance: exact below
                 // the bound, the full-size merge's (or the ratio's) at and above it
-                float yP = sharpU == 1 ? max(texelFetch(WhyLumaS, xy, 0).r, 0.0) : min(dot(sceneLinear(xy, size), LUMA) * ae, 1.0);
+                float yP = sharpU == 1 ? max(texelFetch(WhyLumaS, xy, 0).r, 0.0) : min(dot(sceneLinearHere(xy, size), LUMA) * ae, 1.0);
                 float yPix = yP / refDomain;
                 float g = max(max(smoothstep(0.005, 0.03, 1.0 - yRef / max(yLow * refDomain, 0.000001)), smoothstep(0.5, 0.7, brightMax)),
                               step(0.000001, lightW));
                 if (g > 0.0) {
-                    float yTop = fullInputU == 1 ? max(dot(sceneLinear(xy, size), LUMA), yPix) : max(yt, yPix);
+                    float yTop = fullInputU == 1 ? max(dot(sceneLinearHere(xy, size), LUMA), yPix) : max(yt, yPix);
                     yt = mix(yt, mix(yPix, yTop, smoothstep(0.7, 1.0, yP)), g);
                 }
             }
@@ -2440,7 +2473,7 @@ void main() {
     // (asymmetric like the kernel's full-resolution delta: a darker side of 0.12 drew 1 px trenches beside the clipped
     // highlight lines of a crane, the owner wants the highlights soft), never pushing a highlight onto white.
     if (wide && hrDetailU > 0.0) {
-        float yF = dot(sceneLinear(xy, size), LUMA) * ae;
+        float yF = dot(sceneLinearHere(xy, size), LUMA) * ae;
         float yL = yLow * ae;
         float gate = smoothstep(0.8, 1.6, min(yF, yL));
         if (gate > 0.0) {
@@ -2468,7 +2501,7 @@ void main() {
     // the measured light, by its own measured level (measScene: the lens keeps its colour and gains its ridges)
     if (hlMeasDetailU > 0.0) {
         float wM = hlMeasU.z * smoothstep(hlMeasU.x, hlMeasU.y, measScene);
-        float yF = dot(sceneLinear(xy, size), LUMA) * ae;
+        float yF = dot(sceneLinearHere(xy, size), LUMA) * ae;
         float yL = yLow * ae;
         float gateM = wM * smoothstep(0.8, 1.6, min(yF, yL));
         if (gateM > 0.0) {

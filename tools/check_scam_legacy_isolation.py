@@ -13,6 +13,7 @@ STUBS = {
 'android/hardware/camera2/params/TonemapCurve.java': 'package android.hardware.camera2.params; public class TonemapCurve { public TonemapCurve(float[] a,float[] b,float[] c){} }',
 BASE+'util/Log.java': 'package com.scamera.app.util; public class Log { public static void i(String a,String b){} public static void v(String a,String b){} public static void d(String a,String b){} public static void w(String a,String b){} }',
 BASE+'api/CameraMode.java': 'package com.scamera.app.api; public enum CameraMode {PHOTO}',
+BASE+'api/SafeRanges.java': 'package com.scamera.app.api; import android.hardware.camera2.CameraCharacteristics; public final class SafeRanges { public static <T> T get(CameraCharacteristics c,CameraCharacteristics.Key<T> k){return c==null?null:c.get(k);} }',  # P732
 BASE+'capture/CaptureController.java': '''package com.scamera.app.capture; import android.hardware.camera2.*;
 public class CaptureController { public static CameraCharacteristics mCameraCharacteristics=new CameraCharacteristics(); public static CaptureResult mPreviewCaptureResult=new CaptureResult(); public long mPreviewExposureTime=8333326; public int mPreviewIso=547,oisMode=0;
 public Param getParamController(){return new Param();} public static class Param {public double shutterValueNs(){return 0;} public double isoSetting(){return 0;}} }''',

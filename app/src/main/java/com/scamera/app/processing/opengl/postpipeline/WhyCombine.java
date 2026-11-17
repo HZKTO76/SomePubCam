@@ -463,6 +463,8 @@ public final class WhyCombine extends Node {
             // P671 (speed): the one-channel windows as textureGather blocks (the same texels and sums; why/combine.glsl GATHER_TAPS)
             final boolean gather = gatherTaps();
             if (gather) shaderProg.setDefine("GATHER_TAPS", 1);
+            // P733: the colour source is whyLow on its grid - its B-spline from the low loop's own taps (why/combine.glsl COLOUR_IS_LOW)
+            if (colour == st.low && colourFactor == st.factor && st.factor != 1) shaderProg.setDefine("COLOUR_IS_LOW", 1);
             // P497: scam_dev why_combine_stop 1..4 cuts the pass after a stage (timing on old GPUs only: the photo is wrong)
             final int stop = Math.round(PreferenceKeys.scamDevNumber("why_combine_stop", 0f));
             if (stop > 0) shaderProg.setDefine("WHY_STOP", stop);
