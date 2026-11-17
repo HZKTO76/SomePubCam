@@ -59,6 +59,19 @@ final class CaptureRulesTests: XCTestCase {
         NormalSelect.Frame(index: i, timestampNs: ms * 1_000_000, exposureNs: ns, iso: iso)
     }
 
+    func testClipPlateauOfTheLowestSite() {
+        // the iPhone 15 Pro: red / blue flat at 14271, green spread up to 14331
+        var sites = [[Int]](repeating: [Int](repeating: 0, count: 65536), count: 4)
+        for c in 0..<4 { sites[c][3000] = 9000 }
+        for c in [0, 3] { sites[c][14271] = 1000 }
+        for c in [1, 2] { for v in 14271...14331 { sites[c][v] = 16 } }
+        var values = [Int](repeating: 0, count: 65536)
+        for s in sites { for v in 0..<65536 { values[v] += s[v] } }
+        let counted = values.reduce(0, +)
+        XCTAssertEqual(RawWhite.clipPlateau(values, counted), 0)
+        XCTAssertEqual(RawWhite.lowestPlateau((values, counted, sites)), 14271)
+    }
+
     func testNormalSelectKeepsTheNewestExposure() {
         // a brighter frame never, a frame 0.3 EV darker only to fill up to min(N, 8)
         let frames = [frame(0, ms: 0, iso: 150), frame(1, ms: 33, iso: 81), frame(2, ms: 66), frame(3, ms: 99)]

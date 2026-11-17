@@ -1076,3 +1076,10 @@ stays a replay switch (off in the app).
   (/proc/meminfo MemAvailable), which the iPhone does not have: 0 = unknown, so a Sabre 2x merge never went to row bands (P685) and was
   merged whole (the strip guard's «MemAvailable 0 MB»). Minimal Apple guard in scam-hybrid.h: on iOS hybridMemAvailable is
   os_proc_available_memory (the memory the app may still take before iOS ends it); Android unchanged.
+- Owner's iPhone 15 Pro, 2026-11-16 (burst 132P5PpOVoSA9ssILmFJRx26wTEYivzKm, the window): the blown window pink. The buffer's red and
+  blue sites clip flat at 14271 (130k / 102k samples of 3M), its green sites spread 14271..14331 (15003 in a long frame, ~500 samples
+  at the top); P558's clip plateau of all the samples starts at a green top with too few beside it: no plateau, the white kept at 16380,
+  the window merged at 0.855 on every channel (clip flags 0, the ES frames unused «ES ✗ nclip», the plan's clip share 0) and the white
+  balance (R x2.5, B x1.8) turned it pink. RawWhite.lowestPlateau: the plateau of all the samples and of each CFA site's, the lowest
+  found (this burst: 14271 from red and blue, every frame N / L / ES); a sensor clipping alike on every site gives the same plateau
+  either way (Android's rule unchanged there). The burst is in the full-burst replay (iphone15pro-window-20261116).

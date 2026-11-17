@@ -6,39 +6,55 @@ import Foundation
 /// when under the white by more than its tolerance and above twice the black, is the shot's white (scam_dev "raw_white_plateau 0":
 /// as before).
 enum RawWhite {
-    /// BlockScan.of (block 1): per CFA site, 32 x 32 blocks of the site's plane, every fourth row and column of each
-    static func histogram(_ raw: Data, width: Int, height: Int) -> (values: [Int], counted: Int) {
-        guard raw.count >= width * height * 2 else { return ([Int](repeating: 0, count: 65536), 0) }
+    typealias Histogram = (values: [Int], counted: Int, sites: [[Int]])
+
+    /// BlockScan.of (block 1): per CFA site, 32 x 32 blocks of the site's plane, every fourth row and column of each; `sites` the
+    /// same samples per CFA site (values = their sum)
+    static func histogram(_ raw: Data, width: Int, height: Int) -> Histogram {
+        guard raw.count >= width * height * 2 else { return ([Int](repeating: 0, count: 65536), 0, []) }
         return raw.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
             histogram(p.baseAddress!, rowBytes: width * 2, width: width, height: height)
         }
     }
 
-    static func histogram(_ base: UnsafeRawPointer, rowBytes: Int, width: Int, height: Int) -> (values: [Int], counted: Int) {
+    static func histogram(_ base: UnsafeRawPointer, rowBytes: Int, width: Int, height: Int) -> Histogram {
         let bs = 32, bw = width / 2 / bs, bh = height / 2 / bs
         var values = [Int](repeating: 0, count: 65536), counted = 0
-        guard bw > 0, bh > 0 else { return (values, 0) }
+        guard bw > 0, bh > 0 else { return (values, 0, []) }
+        var sites: [[Int]] = []
         for c in 0..<4 {
             let ox = c % 2, oy = c / 2
+            var site = [Int](repeating: 0, count: 65536)
             for by in 0..<bh {
                 for y in stride(from: 0, to: bs, by: 4) {
                     let row = (base + ((by * bs + y) * 2 + oy) * rowBytes).assumingMemoryBound(to: UInt16.self)
                     for bx in 0..<bw {
                         let at = bx * bs * 2 + ox
-                        for x in stride(from: 0, to: bs, by: 4) { values[Int(UInt16(littleEndian: row[at + x * 2]))] += 1 }
+                        for x in stride(from: 0, to: bs, by: 4) { site[Int(UInt16(littleEndian: row[at + x * 2]))] += 1 }
                         counted += bs / 4
                     }
                 }
             }
+            for v in 0..<65536 where site[v] != 0 { values[v] += site[v] }
+            sites.append(site)
         }
-        return (values, counted)
+        return (values, counted, sites)
     }
 
     /// The white of a frame: `white` lowered to the frame's clip plateau (clipWhiteToPlateau), with the plateau for the log
-    static func of(_ white: Float, black: [Float], histogram h: (values: [Int], counted: Int)) -> (white: Float, plateau: Int) {
+    static func of(_ white: Float, black: [Float], histogram h: Histogram) -> (white: Float, plateau: Int) {
         guard enabled else { return (white, 0) }
-        let plateau = clipPlateau(h.values, h.counted)
+        let plateau = lowestPlateau(h)
         return (clipped(white: white, black: black, plateau: plateau) ?? white, plateau)
+    }
+
+    /// clipPlateau of all the samples and of each CFA site's, the lowest found (0: none). The iPhone 15 Pro's red and blue sites
+    /// clip flat at 14271 while its green sites spread up to 14331 (15003 in a long frame): the top of all the samples is a green
+    /// one with too few beside it, no plateau, the window's 0.86 left unclipped and pink. A sensor clipping alike on every site
+    /// gives the same plateau either way (Android's).
+    static func lowestPlateau(_ h: Histogram) -> Int {
+        let found = ([clipPlateau(h.values, h.counted)] + h.sites.map { clipPlateau($0, h.counted / 4) }).filter { $0 > 0 }
+        return found.min() ?? 0
     }
 
     /// Parameters.clipPlateau: at least 0.2 % of the samples (16 at least) within 0.1 % (2 DN at least) of the top value (the 4th
