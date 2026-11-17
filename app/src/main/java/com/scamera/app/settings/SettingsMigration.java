@@ -446,7 +446,9 @@ public final class SettingsMigration {
         if (first.replaceAll("\\s+", " ").equalsIgnoreCase(OLD_WATERMARK_LINE1)) first = "";
         final String text = first.isEmpty() ? second : second.isEmpty() ? first : first + " " + second;
         SharedPreferences.Editor e = prefs.edit().remove(WATERMARK_LINE1).remove(WATERMARK_LINE2).putInt(WATERMARK_REV, 1);
-        if (!values.containsKey(TEXT_KEY) && !text.equals(com.scamera.app.processing.watermark.WatermarkSpec.DEFAULT_TEXT))
+        // The former default line alone is the default (SomeCam since the rename), not a typed text.
+        if (!values.containsKey(TEXT_KEY) && !text.equals(com.scamera.app.processing.watermark.WatermarkSpec.DEFAULT_TEXT)
+                && !text.equals(OLD_WATERMARK_LINE2))
             e.putString(TEXT_KEY, text);
         e.commit();
         return true;

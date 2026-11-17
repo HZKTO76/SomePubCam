@@ -251,7 +251,7 @@ public final class EditExporter {
 
     /** «IMG_123.jpg» -> «IMG_123_edit.jpg» (the MediaStore numbers a clash). */
     static String copyName(String original) {
-        String base = original == null || original.isEmpty() ? "SCAMERA" : original;
+        String base = original == null || original.isEmpty() ? "SomeCam" : original;
         int dot = base.lastIndexOf('.');
         if (dot > 0) base = base.substring(0, dot);
         return base + "_edit.jpg";
@@ -443,12 +443,12 @@ public final class EditExporter {
         }
     }
 
-    /** P619: the copy's Software tag - this build, as our DNGs write it (DngMetadata.software); "SCAMERA" if the build is unknown. */
+    /** P619: the copy's Software tag - this build, as our DNGs write it (DngMetadata.software); "SomeCam" if the build is unknown. */
     static String software() {
         try {
             return com.scamera.app.processing.DngMetadata.software();
         } catch (RuntimeException | LinkageError e) {
-            return "SCAMERA";
+            return "SomeCam";
         }
     }
 

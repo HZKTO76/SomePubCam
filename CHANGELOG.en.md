@@ -1,6 +1,10 @@
-# SCAMERA changes
+# SomeCam changes
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
+
+## 2026-11-17 (11) — SomeCam
+
+- The app is now called SomeCam: in the app list, in the settings, in the watermark and in the photo's data (Software, description). The gallery and the editor still recognise photos taken before the rename as their own. The Download/SCAMERA, Documents/SCAMERA and DCIM/SCAMERA folders stay as they were.
 
 ## 2026-11-17 (10) — Processing speed
 

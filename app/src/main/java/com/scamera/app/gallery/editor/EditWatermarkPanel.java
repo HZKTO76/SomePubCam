@@ -81,9 +81,9 @@ final class EditWatermarkPanel {
     /** Why «Убрать» is not offered for a photo without a record. */
     static String noRecordText() {
         return Lang.t("«Убрать» недоступно: в файле нет пикселей, которые были под знаком. Так бывает у снимков, сделанных до этой версии "
-                        + "SCAMERA, без знака, в другом приложении или пересохранённых другим редактором. Добавить новый знак можно.",
+                        + "SomeCam, без знака, в другом приложении или пересохранённых другим редактором. Добавить новый знак можно.",
                 "«Remove» is not available: the file has no pixels of what was under a watermark. That is so for photos taken before this "
-                        + "version of SCAMERA, without a watermark, in another app or saved again by another editor. A new watermark can be added.");
+                        + "version of SomeCam, without a watermark, in another app or saved again by another editor. A new watermark can be added.");
     }
 
     String statusText() {
@@ -92,9 +92,9 @@ final class EditWatermarkPanel {
         WatermarkSpec s = WatermarkSpec.fromJson(r.spec);
         String what = s == null ? "" : " («" + entry(R.array.watermark_layout_entries, s.layout.ordinal()) + "», "
                 + entry(R.array.watermark_position_entries, s.position.ordinal()).toLowerCase(java.util.Locale.ROOT) + ")";
-        return Lang.t("Снято со знаком SCAMERA" + what + ". Пиксели под ним хранятся в файле: «Убрать» вернёт снимок без знака "
+        return Lang.t("Снято со знаком SomeCam" + what + ". Пиксели под ним хранятся в файле: «Убрать» вернёт снимок без знака "
                         + "без потерь, «Изменить» — уберёт и нарисует новый.",
-                "Shot with the SCAMERA watermark" + what + ". The pixels under it are kept in the file: «Remove» gives the photo back "
+                "Shot with the SomeCam watermark" + what + ". The pixels under it are kept in the file: «Remove» gives the photo back "
                         + "without it, losslessly; «Change» takes it off and draws a new one.");
     }
 

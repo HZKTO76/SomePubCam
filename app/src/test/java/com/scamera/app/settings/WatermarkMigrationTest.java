@@ -40,7 +40,7 @@ public class WatermarkMigrationTest {
         assertFalse(SettingsMigration.migrateWatermark(prefs));
         assertTrue(prefs.contains(SettingsMigration.WATERMARK_REV));
         assertFalse(prefs.contains("pref_watermark_text"));
-        assertEquals("SCAMERA", shown());
+        assertEquals("SomeCam", shown());
     }
 
     @Test public void theFormerDefaultsDropShotOn() {
@@ -49,11 +49,11 @@ public class WatermarkMigrationTest {
         assertFalse(prefs.contains("pref_watermark_line1"));
         assertFalse(prefs.contains("pref_watermark_line2"));
         assertFalse("the default is not stored", prefs.contains("pref_watermark_text"));
-        assertEquals("SCAMERA", shown());
+        assertEquals("SomeCam", shown());
         // only the first line stored (the second at its default), in another case and spacing: the same
         prefs.edit().clear().putString("pref_watermark_line1", " shot  On ").commit();
         assertTrue(SettingsMigration.migrateWatermark(prefs));
-        assertEquals("SCAMERA", shown());
+        assertEquals("SomeCam", shown());
     }
 
     @Test public void typedLinesStay() {

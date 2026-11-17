@@ -297,7 +297,7 @@ public final class SettingsWizard {
             p.setOrientation(LinearLayout.VERTICAL);
             p.setTag("wizard_step_" + i);
             if (i == 0) {
-                p.addView(title(firstRun ? Lang.t(c, "Добро пожаловать в SCAMERA", "Welcome to SCAMERA")
+                p.addView(title(firstRun ? Lang.t(c, "Добро пожаловать в SomeCam", "Welcome to SomeCam")
                         : Lang.t(c, "Мастер настройки", "Setup assistant")));
                 p.addView(lead(Lang.t(c, "Как показывать настройки?", "How should the settings look?")));
                 final Card simple = new Card(c, "wizard_simple", R.drawable.cs_ic_sliders, Lang.t(c, "Простой", "Simple"),

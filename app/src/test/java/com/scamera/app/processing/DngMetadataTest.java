@@ -206,12 +206,12 @@ public class DngMetadataTest {
     }
 
     @Test public void softwareNamesThisApk() {
-        assertEquals("SCAMERA 0.98 (30966) cab4480a", DngMetadata.software("0.98", 30966, "cab4480a96a2f1e0", false));
-        assertEquals("SCAMERA 0.98 (30966) cab4480a+dirty", DngMetadata.software("0.98", 30966, "cab4480a", true));
-        assertEquals("SCAMERA 0.98 (30966) unknown", DngMetadata.software("0.98", 30966, null, false));
+        assertEquals("SomeCam 0.98 (30966) cab4480a", DngMetadata.software("0.98", 30966, "cab4480a96a2f1e0", false));
+        assertEquals("SomeCam 0.98 (30966) cab4480a+dirty", DngMetadata.software("0.98", 30966, "cab4480a", true));
+        assertEquals("SomeCam 0.98 (30966) unknown", DngMetadata.software("0.98", 30966, null, false));
         // this build: the app's BuildConfig (circleimageview's had no version name and versionCode -1: "SCAMERA  (-1)")
         final String software = DngMetadata.software();
-        assertTrue(software, software.startsWith("SCAMERA " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ") "));
+        assertTrue(software, software.startsWith("SomeCam " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ") "));
         assertTrue(BuildConfig.VERSION_CODE > 0);
         assertFalse(software, software.contains("(-1)"));
         assertFalse(software, software.contains("  "));

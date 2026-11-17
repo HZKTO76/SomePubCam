@@ -30,13 +30,13 @@ import java.util.regex.Pattern;
 public final class DngMetadata {
     private DngMetadata() {}
 
-    /** The Software tag: {@code SCAMERA <versionName> (<versionCode>) <sha8>[+dirty]}, e.g. "SCAMERA 0.98 (30966) cab4480a". */
+    /** The Software tag: {@code SomeCam <versionName> (<versionCode>) <sha8>[+dirty]}, e.g. "SomeCam 0.98 (30966) cab4480a". */
     public static String software() {
         return software(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE, BuildConfig.GIT_SHA, BuildConfig.GIT_DIRTY);
     }
 
     static String software(String versionName, long versionCode, String sha, boolean dirty) {
-        return "SCAMERA " + versionName + " (" + versionCode + ") " + BuildIdentity.shortSha(sha) + (dirty ? "+dirty" : "");
+        return "SomeCam " + versionName + " (" + versionCode + ") " + BuildIdentity.shortSha(sha) + (dirty ? "+dirty" : "");
     }
 
     private static final String FACTORS = "HYBRID MERGE FACTORS:";

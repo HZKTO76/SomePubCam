@@ -152,7 +152,7 @@ public final class ScamStockAe {
                 String detail=" (slot "+slot+": ISO "+sensitivity+"/"+iso[slot]+", shutter "+ns+"/"+shutter[slot]
                         +String.format(java.util.Locale.ROOT,", %.2f EV)",ev);
                 if(ev>tolerance)
-                    throw new IllegalStateException((com.scamera.app.settings.PreferenceKeys.isHybridShot()?"Hybrid":"SCAM HDR")+Lang.t(": выдержка/ISO RAW не совпали с планом SCAMERA",": RAW shutter/ISO do not match the SCAMERA plan")+detail);
+                    throw new IllegalStateException((com.scamera.app.settings.PreferenceKeys.isHybridShot()?"Hybrid":"SCAM HDR")+Lang.t(": выдержка/ISO RAW не совпали с планом SomeCam",": RAW shutter/ISO do not match the SomeCam plan")+detail);
                 android.util.Log.w("SCAM_CAPTURE","sensor rounding accepted"+detail);
                 return;
             }

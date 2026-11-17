@@ -270,7 +270,7 @@ public final class ScamNeuralClient {
     private static ByteBuffer job(Context context,ScamTransport scamBurst,Consumer<String> observer) throws Exception {
         // P206: the merge worker runs only in the original (SCAMERA-signed) APK
         if(!com.scamera.app.util.OriginalBuild.check(context))
-            throw new IOException(Lang.t("Изменённая копия SCAMERA: обработка недоступна","Modified copy of SCAMERA: processing unavailable"));
+            throw new IOException(Lang.t("Изменённая копия SomeCam: обработка недоступна","Modified copy of SomeCam: processing unavailable"));
         final int w=scamBurst.width(),h=scamBurst.height();
         // P371 (speed, worker_prespawn): the worker spawned at the shutter for this burst's arena (its start, CRE and GPU
         // warm-up ran during the capture), else null: spawned below as before

@@ -537,14 +537,14 @@
     <string name="prefs_theme_accent_summary">The colour of chosen items, switches and the camera\'s buttons.</string>
     <string name="prefs_jpeg_quality_title">JPEG quality</string>
     <string name="prefs_jpeg_quality_summary">How hard the JPEG is compressed. Higher: a larger, more detailed file. Lower: a lighter file that loses fine detail.</string>
-    <string name="prefs_watermark_logo_title">SCAMERA icon</string>
+    <string name="prefs_watermark_logo_title">SomeCam icon</string>
     <string name="prefs_watermark_size_title">Size</string>
     <string name="prefs_watermark_size_summary">How large the watermark\'s text is, measured on the photo\'s short side: a portrait and a landscape photo get the same size. 7 is the default.</string>
     <string name="prefs_watermark_opacity_title">Opacity</string>
     <string name="prefs_watermark_opacity_summary">How solid the watermark is, its plate and frame included. 100 is opaque, lower is more transparent.</string>
     <string name="prefs_config_portable_note_summary">A config can be moved to another phone: the lens profiles are matched by focal length.</string>
     <string name="prefs_fullres_hw_remosaic_title">FULLRES: hardware remosaic</string>
-    <string name="prefs_fullres_hw_remosaic_summary">A 50 MP shot arrives already assembled into an ordinary frame by the sensor itself, as in the stock camera. Off: the camera takes the raw Quad or Tetra mosaic and assembles the frame itself. 200 MP is always assembled by SCAMERA: the sensor cannot do it. On the vivo X100 Ultra and X300 Ultra this applies to the main camera only.</string>
+    <string name="prefs_fullres_hw_remosaic_summary">A 50 MP shot arrives already assembled into an ordinary frame by the sensor itself, as in the stock camera. Off: the camera takes the raw Quad or Tetra mosaic and assembles the frame itself. 200 MP is always assembled by SomeCam: the sensor cannot do it. On the vivo X100 Ultra and X300 Ultra this applies to the main camera only.</string>
     <string name="prefs_xiaomi_smooth_zoom_title">Smooth optical zoom (Xiaomi 17 Ultra)</string>
     <string name="prefs_xiaomi_smooth_zoom_summary">For the Xiaomi 17 Ultra telephoto: from 3.2x to 4.3x the optics work, then a crop, and from 6.45x the in-sensor zoom. Off: the zoom works without these modes.</string>
     <string name="prefs_scam_diagnostics_screen_title">Logs</string>
@@ -552,7 +552,7 @@
     <string name="prefs_camera_package_spoof_screen_title">Camera package spoofing</string>
     <string name="prefs_camera_package_spoof_screen_summary">The camera sees another app name and opens hidden modules.</string>
     <string name="prefs_camera_package_spoof_enabled_title">Package spoofing</string>
-    <string name="prefs_camera_package_spoof_enabled_summary">SCAMERA introduces itself to the camera as another app. It applies from the next time the camera opens.</string>
+    <string name="prefs_camera_package_spoof_enabled_summary">SomeCam introduces itself to the camera as another app. It applies from the next time the camera opens.</string>
     <string name="prefs_oplus_spoof_package_title">Package for OnePlus/OPPO</string>
     <string name="prefs_oplus_spoof_package_dialog_title">Package for OplusCameraManager</string>
     <string name="prefs_generic_spoof_package_title">Package for generic Android</string>
@@ -657,7 +657,7 @@
     <string name="prefs_desc_pref_scam_hybrid_why_agx_max_ev">The upper end of the AgX curve\'s range, in stops. Higher: more room for highlights and less clipping, but a flatter picture. Lower: lights turn white sooner. Works in the Custom look.</string>
     <string name="prefs_desc_pref_scam_hybrid_why_agx_sat">How saturated the photo\'s colours are. Higher: richer. Lower: paler. At zero the photo is black and white.</string>
     <string name="prefs_desc_pref_scam_hybrid_why_agx_ev">Shifts the brightness before the AgX curve, in stops. Higher: a lighter photo. Lower: a darker one. Works in the Custom look.</string>
-    <string name="prefs_desc_pref_watermark_logo">The SCAMERA camera icon next to the text, with its light in the camera\'s yellow. On its own it is a watermark too.</string>
+    <string name="prefs_desc_pref_watermark_logo">The SomeCam camera icon next to the text, with its light in the camera\'s yellow. On its own it is a watermark too.</string>
     <string name="prefs_desc_pref_scam_hybrid_boost_value">How hard moving things are cut out where parts of the frame move differently. Higher: no doubling of passing people and cars at all, but a noisier shot. Lower: a gentler merge with less noise on things that sway slightly.</string>
     <string name="prefs_shooting_settings_screen_summary">Frames, lamp flicker, sounds, “Sport” mode</string>
     <!-- P140: the launcher shortcut (long press on the app icon) -->
@@ -859,9 +859,9 @@
     <string name="prefs_crop_upscale_title">Upscale to photo size</string>
     <string name="prefs_crop_upscale_summary">A shot with a crop or digital zoom is enlarged to the full photo size. Off: it stays smaller, without enlarging.</string>
     <string name="prefs_mosaic_wb_title">Own white balance</string>
-    <string name="prefs_mosaic_wb_summary">For full-resolution shots (50 and 200 MP) and in-sensor zoom, SCAMERA computes the white balance. Off: the camera\'s own white balance is used.</string>
+    <string name="prefs_mosaic_wb_summary">For full-resolution shots (50 and 200 MP) and in-sensor zoom, SomeCam computes the white balance. Off: the camera\'s own white balance is used.</string>
     <string name="prefs_film_data_credit_title">Film simulation data</string>
-    <string name="prefs_film_data_credit_summary">Film and paper profiles: spektrafilm by Andrea Volpato, github.com/andreavolpato/spektrafilm, CC BY-SA 4.0 (converted and modified by SCAMERA: binary arrays and derived LUTs, see assets/film/CHANGELOG.txt). The colour model, the DIR couplers and the diffusion filters are ports of spektrafilm (GPL-3.0); the 65 mm and IMAX 70 formats and the grain blur\'s format scale come from spektrafilm OFX by Aedan Diez, github.com/chaert-s/spektrafilm-ofx (GPL-3.0, see assets/film/NOTICE-spektrafilm-ofx.txt). Text recognition in the gallery: Tesseract OCR and its tessdata_fast models (Apache-2.0), github.com/tesseract-ocr, through Tesseract4Android by Adaptech (Apache-2.0).</string>
+    <string name="prefs_film_data_credit_summary">Film and paper profiles: spektrafilm by Andrea Volpato, github.com/andreavolpato/spektrafilm, CC BY-SA 4.0 (converted and modified by SomeCam: binary arrays and derived LUTs, see assets/film/CHANGELOG.txt). The colour model, the DIR couplers and the diffusion filters are ports of spektrafilm (GPL-3.0); the 65 mm and IMAX 70 formats and the grain blur\'s format scale come from spektrafilm OFX by Aedan Diez, github.com/chaert-s/spektrafilm-ofx (GPL-3.0, see assets/film/NOTICE-spektrafilm-ofx.txt). Text recognition in the gallery: Tesseract OCR and its tessdata_fast models (Apache-2.0), github.com/tesseract-ocr, through Tesseract4Android by Adaptech (Apache-2.0).</string>
     <string name="prefs_ettr_title">Less shadow noise (ETTR)</string>
     <string name="prefs_ettr_summary">Frames are taken brighter while the photo keeps its usual brightness, so the shadows have less noise. Indoors and at night it usually does nothing.</string>
     <string name="shade_t_ettr">ETTR</string>
@@ -944,7 +944,7 @@
     <string name="camera_id_title">Camera ID · %s</string>
     <string name="camera_id_subtitle">Which phone camera the “%s” button opens</string>
     <string name="camera_id_auto">Auto · ID %s</string>
-    <string name="camera_id_auto_sub">What SCAMERA found</string>
+    <string name="camera_id_auto_sub">What SomeCam found</string>
     <string name="camera_id_source">Same as “%1$s” · ID %2$s</string>
     <string name="camera_id_source_sub">A copy shoots with the same lens</string>
     <string name="camera_id_option">ID %1$s · %2$s</string>
@@ -965,7 +965,7 @@
     <string name="camera_id_empty">Type the number of a camera</string>
     <string name="camera_id_save">Save</string>
     <string name="camera_id_save_anyway">Save anyway</string>
-    <string name="camera_id_chosen_note">The button always opens this ID. “Auto” brings back SCAMERA\'s choice</string>
+    <string name="camera_id_chosen_note">The button always opens this ID. “Auto” brings back SomeCam\'s choice</string>
     <string name="prefs_settings_layout_title">Settings layout</string>
     <string name="prefs_settings_layout_summary">The order of groups and rows on the settings pages, as you like it. It is kept in the config.</string>
     <string name="prefs_scam_hybrid_why_ae_screen_title">Exposure (AE)</string>
@@ -1147,7 +1147,7 @@
     <string name="prefs_scam_hybrid_resolve_speckle_enable_title">Colour speckle cleanup</string>
     <string name="prefs_scam_hybrid_resolve_speckle_enable_summary">Removes lone colour dots before the pyramid denoiser. Brightness does not change.</string>
     <string name="prefs_unspektra_ae_credit_title">Unspektra AE</string>
-    <string name="prefs_unspektra_ae_credit_summary">Source: Unspektrawesome by JohnTheFarm3r. Adaptation for SCAMERA. Tap to open the original project.</string>
+    <string name="prefs_unspektra_ae_credit_summary">Source: Unspektrawesome by JohnTheFarm3r. Adaptation for SomeCam. Tap to open the original project.</string>
     <string name="scamera_log_clear">Clear current log</string>
     <string name="scamera_log_clear_summary">Current log: %1$s</string>
     <string name="scamera_log_share">Share current log</string>

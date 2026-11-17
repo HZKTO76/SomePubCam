@@ -16,7 +16,7 @@
     <string name="lens_menu_ids">Lens ID assignment</string>
     <string name="lens_menu_names">Rename and reorder lenses</string>
     <string name="lens_menu_visibility">Lens visibility</string>
-    <string name="lens_settings_saved">Lens settings saved. Restart SCAMERA to apply.</string>
+    <string name="lens_settings_saved">Lens settings saved. Restart SomeCam to apply.</string>
     <string name="manual_mode_auto">Auto</string>
     <string name="manual_mode_fixed">Fixed</string>
     <bool name="abc_action_bar_embed_tabs">true</bool>
@@ -119,7 +119,7 @@
     <string name="antibanding_hz_summary">The shutter speed follows the flicker of lamps so that photos have no bands. Auto finds the frequency itself.</string>
     <string name="noise_model_profile_desc">A description of how the sensor makes noise. The merge and the denoiser use it to tell noise from detail. Auto takes the camera\'s own data for every frame. Any other profile replaces it in the merge, the denoiser, the alignment and the DNG.</string>
     <string name="wide169_desc">A wide 16:9 frame instead of the sensor\'s full frame: the shot is cropped at the top and bottom.</string>
-    <string name="hide_gallery_icon_desc">Removes the SGallery icon from the app list. The SCAMERA icon stays, and the gallery still opens from the camera.</string>
+    <string name="hide_gallery_icon_desc">Removes the SGallery icon from the app list. The SomeCam icon stays, and the gallery still opens from the camera.</string>
     <string name="show_grid_desc">Lines over the viewfinder that help you compose. They do not end up in the photo.</string>
     <string name="show_roundedge_desc">Rounds the viewfinder\'s corners. It does not affect the photo.</string>
     <string name="show_watermark_desc">Adds a caption to saved photos. Its text and look are set in the rows below.</string>

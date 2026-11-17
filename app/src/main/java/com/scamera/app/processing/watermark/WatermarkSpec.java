@@ -54,7 +54,7 @@ public final class WatermarkSpec {
     public enum DateFormat { DATE_TIME, DATE, TIME, ISO, TEXT }
 
     /** The default custom text: the app's name (the former default's second line, without «SHOT ON»). */
-    public static final String DEFAULT_TEXT = "SCAMERA";
+    public static final String DEFAULT_TEXT = "SomeCam";
     /** The longest custom text drawn (characters); the rest is cut, then the line is shortened to fit its width. */
     public static final int MAX_TEXT = 64;
     public static final int DEFAULT_SIZE = 7, DEFAULT_OPACITY = 100, DEFAULT_MARGIN = 3;

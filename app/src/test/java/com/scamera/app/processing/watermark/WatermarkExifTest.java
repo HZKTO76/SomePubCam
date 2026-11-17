@@ -62,7 +62,7 @@ public class WatermarkExifTest {
         for (WatermarkExif.Field fl : WatermarkExif.Field.values()) assertTrue(fl.name(), WatermarkExif.has(i, fl));
         WatermarkSpec all = new WatermarkSpec().only(true, true, true, true, true, true, true, false);
         WatermarkText t = WatermarkText.of(all, i);
-        assertEquals("SCAMERA" + WatermarkText.JOIN + "vivo X200 Ultra", t.title);
+        assertEquals("SomeCam" + WatermarkText.JOIN + "vivo X200 Ultra", t.title);
         assertEquals("24mm" + WatermarkText.EXIF_JOIN + "f/1.8" + WatermarkText.EXIF_JOIN + "1/120s" + WatermarkText.EXIF_JOIN + "ISO 100", t.exif);
         // the wall clock as written, whatever the phone's zone is now
         TimeZone was = TimeZone.getDefault();

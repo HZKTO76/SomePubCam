@@ -1,4 +1,4 @@
-name: Build SCAMERA test APK
+name: Build SomeCam test APK
 
 # Actions minutes and artifact storage are budgeted: builds run for main only (no PR or stale-branch duplicates, docs-only
 # pushes skipped), a newer push cancels the running build, and the artifacts are kept for days, not the 90-day default.
@@ -281,7 +281,7 @@ jobs:
             --hexquad-dir "$RUNNER_TEMP/neural-assets/hexquad" \
             --scam-dir "$RUNNER_TEMP/neural-assets/nice" \
             --apksigner "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" \
-            --output "out/SCAMERA-0.98-${{ needs.build.outputs.version_code }}-SCAM.apk"
+            --output "out/SomeCam-0.98-${{ needs.build.outputs.version_code }}-SCAM.apk"
           (cd out && sha256sum *.apk > SHA256SUMS.txt)
           cat out/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
 
@@ -322,5 +322,5 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/telegram"
           "$RUNNER_TEMP/telegram/bin/pip" install -q -r tools/telegram-requirements.txt
           "$RUNNER_TEMP/telegram/bin/python" tools/telegram_publish.py --notify fail \
-            --apk "out/SCAMERA-0.98-${{ needs.build.outputs.version_code }}-SCAM.apk" \
+            --apk "out/SomeCam-0.98-${{ needs.build.outputs.version_code }}-SCAM.apk" \
             --from-rev "${{ github.event.before }}" --to-rev "${{ github.sha }}"

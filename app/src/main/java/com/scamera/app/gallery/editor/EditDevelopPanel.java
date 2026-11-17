@@ -57,20 +57,20 @@ final class EditDevelopPanel {
         EditSource s = host.source();
         // P696: a DNG without the record is developed from its own tags (EditDevelop.fromTags); what is left cannot be
         if (s != null && s.isRaw())
-            return Lang.t("В этом RAW нет записи обработки SCAMERA, и по его собственным тегам он не проявляется: проявка камерой "
-                            + "берёт Bayer-DNG — SCAMERA или с цветовыми тегами (матрица цвета, баланс белого). Этот RAW другого "
+            return Lang.t("В этом RAW нет записи обработки SomeCam, и по его собственным тегам он не проявляется: проявка камерой "
+                            + "берёт Bayer-DNG — SomeCam или с цветовыми тегами (матрица цвета, баланс белого). Этот RAW другого "
                             + "формата, с Quad-мозаикой, зеркальной ориентацией, без цветовых тегов или не прочитан. RAW правится "
                             + "вкладками «Свет», «Цвет» и «Детали».",
-                    "This RAW has no SCAMERA processing record and cannot be developed from its own tags: the camera's develop "
-                            + "takes a Bayer DNG - a SCAMERA one, or one with its colour tags (colour matrix, white balance). This RAW is "
+                    "This RAW has no SomeCam processing record and cannot be developed from its own tags: the camera's develop "
+                            + "takes a Bayer DNG - a SomeCam one, or one with its colour tags (colour matrix, white balance). This RAW is "
                             + "another format, a Quad mosaic, mirrored, without colour tags or could not be read. The RAW is edited "
                             + "in «Light», «Colour» and «Detail».");
         return Lang.t("Готовый снимок: тон, шумоподавление и резкость камеры уже в нём, заново их не применить. Для готовых снимков: "
                         + "плёнка и LUT камеры — вкладка «LUT», цвет — «Цвет», резкость и шум — «Детали», зерно — «Эффекты». "
-                        + "Все настройки камеры работают на DNG SCAMERA.",
+                        + "Все настройки камеры работают на DNG SomeCam.",
                 "A finished picture: the camera's tone, noise reduction and sharpening are already in it and cannot be applied again. "
                         + "For finished pictures: the camera's film and LUT are in «LUT», colour in «Colour», sharpening and noise in "
-                        + "«Detail», grain in «Effects». Every camera setting works on a SCAMERA DNG.");
+                        + "«Detail», grain in «Effects». Every camera setting works on a SomeCam DNG.");
     }
 
     /** The shot's settings (the record's), empty without a develop. */

@@ -86,7 +86,7 @@ def is_owner(user):
 
 def help_text(lang):
     return t(lang, '\n'.join([
-        '<b>Бот сборок SCAMERA</b>',
+        '<b>Бот сборок SomeCam</b>',
         'Новые сборки из main приходят в группу сами (только APK).',
         '',
         '/status — текущие настройки',
@@ -97,7 +97,7 @@ def help_text(lang):
         '/commits on|off — «Что нового» (чейнжлог) в подписи',
         '/sha on|off — SHA-256 в подписи',
         '/header текст — свой текст в начале поста, /header - убрать']), '\n'.join([
-        '<b>SCAMERA builds bot</b>',
+        '<b>SomeCam builds bot</b>',
         'New builds of main are posted to the group automatically (the APK only).',
         '',
         '/status — current settings',
@@ -286,7 +286,7 @@ def handle_here(msg, run):
                      + describe_targets(s.values))
         return
     try:
-        say(chat['id'], t(lang, 'Сборки SCAMERA будут приходить сюда.', 'SCAMERA builds will be posted here.'), topic)
+        say(chat['id'], t(lang, 'Сборки SomeCam будут приходить сюда.', 'SomeCam builds will be posted here.'), topic)
     except TelegramError as e:
         notify_owner(user['id'], t(lang, f'Не могу писать в «{escape(where)}»: {escape(e.description)}. '
                                          'Дай боту право отправлять сообщения и повтори /here.',
@@ -465,7 +465,7 @@ def main():
             if chat.get('type') == 'private':
                 if not is_owner(user):
                     say(chat['id'], t(user.get('language_code', '') if user else '',
-                                      'Это закрытый бот сборок SCAMERA.', 'This is the private SCAMERA builds bot.')
+                                      'Это закрытый бот сборок SomeCam.', 'This is the private SomeCam builds bot.')
                         + ('' if os.environ.get('TELEGRAM_OWNER', '').strip() else
                            f'\nTELEGRAM_OWNER is not set; your id: <code>{user["id"] if user else "?"}</code>'))
                     continue

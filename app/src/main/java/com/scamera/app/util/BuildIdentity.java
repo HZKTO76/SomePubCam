@@ -32,7 +32,7 @@ public final class BuildIdentity {
     }
 
     static String line(String versionName, long versionCode, String packageName, String sha, boolean dirty, boolean ci) {
-        return "SCAMERA " + versionName + " (" + versionCode + ") " + packageName + " " + shortSha(sha)
+        return "SomeCam " + versionName + " (" + versionCode + ") " + packageName + " " + shortSha(sha)
                 + (dirty ? "+dirty" : "") + " " + (ci ? "CI" : "local");
     }
 

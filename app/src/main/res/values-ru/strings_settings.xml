@@ -530,14 +530,14 @@
     <string name="prefs_theme_accent_summary">Цвет, которым выделяются выбранные пункты, переключатели и кнопки камеры.</string>
     <string name="prefs_jpeg_quality_title">Качество JPEG</string>
     <string name="prefs_jpeg_quality_summary">Насколько сильно сжимается JPEG. Больше — файл крупнее и детальнее. Меньше — файл легче, но мелкие детали теряются.</string>
-    <string name="prefs_watermark_logo_title">Значок SCAMERA</string>
+    <string name="prefs_watermark_logo_title">Значок SomeCam</string>
     <string name="prefs_watermark_size_title">Размер</string>
     <string name="prefs_watermark_size_summary">Насколько крупный текст знака, по короткой стороне фото: у вертикального и горизонтального снимка он одного размера. По умолчанию 7.</string>
     <string name="prefs_watermark_opacity_title">Непрозрачность</string>
     <string name="prefs_watermark_opacity_summary">Насколько плотный знак вместе с подложкой и рамкой. 100 — сплошной, меньше — прозрачнее.</string>
     <string name="prefs_config_portable_note_summary">Конфиг можно перенести на другой телефон: профили объективов подберутся по фокусному расстоянию.</string>
     <string name="prefs_fullres_hw_remosaic_title">FULLRES: аппаратный ремозаик</string>
-    <string name="prefs_fullres_hw_remosaic_summary">Снимок 50 Мп берётся уже собранным в обычный кадр самим сенсором, как в штатной камере. Если выключить, камера получает сырую мозаику Quad или Tetra и собирает кадр сама. 200 Мп всегда собирает SCAMERA: сенсор этого не умеет. На vivo X100 Ultra и X300 Ultra действует только на основную камеру.</string>
+    <string name="prefs_fullres_hw_remosaic_summary">Снимок 50 Мп берётся уже собранным в обычный кадр самим сенсором, как в штатной камере. Если выключить, камера получает сырую мозаику Quad или Tetra и собирает кадр сама. 200 Мп всегда собирает SomeCam: сенсор этого не умеет. На vivo X100 Ultra и X300 Ultra действует только на основную камеру.</string>
     <string name="prefs_xiaomi_smooth_zoom_title">Плавный оптический зум (Xiaomi 17 Ultra)</string>
     <string name="prefs_xiaomi_smooth_zoom_summary">Для телевика Xiaomi 17 Ultra: от 3,2x до 4,3x работает оптика, дальше — кроп, а с 6,45x — зум на сенсоре. Если выключить, зум идёт без этих режимов.</string>
     <string name="prefs_scam_diagnostics_screen_title">Логи</string>
@@ -545,7 +545,7 @@
     <string name="prefs_camera_package_spoof_screen_title">Подмена пакета камеры</string>
     <string name="prefs_camera_package_spoof_screen_summary">Камера видит другое имя приложения и открывает скрытые модули.</string>
     <string name="prefs_camera_package_spoof_enabled_title">Спуф пакета</string>
-    <string name="prefs_camera_package_spoof_enabled_summary">SCAMERA представляется камере другим приложением. Действует со следующего открытия камеры.</string>
+    <string name="prefs_camera_package_spoof_enabled_summary">SomeCam представляется камере другим приложением. Действует со следующего открытия камеры.</string>
     <string name="prefs_oplus_spoof_package_title">Пакет для OnePlus/OPPO</string>
     <string name="prefs_oplus_spoof_package_dialog_title">Пакет для OplusCameraManager</string>
     <string name="prefs_generic_spoof_package_title">Пакет для общего Android</string>
@@ -650,7 +650,7 @@
     <string name="prefs_desc_pref_scam_hybrid_why_agx_max_ev">Верхняя граница диапазона кривой AgX, в ступенях. Больше — запас для светов шире, пересветов меньше, но картинка площе. Меньше — света раньше становятся белыми. Действует в стиле «Свой».</string>
     <string name="prefs_desc_pref_scam_hybrid_why_agx_sat">Насколько насыщены цвета снимка. Больше — сочнее, меньше — бледнее, на нуле снимок чёрно-белый.</string>
     <string name="prefs_desc_pref_scam_hybrid_why_agx_ev">Сдвигает яркость перед кривой AgX, в ступенях. Больше — снимок светлее, меньше — темнее. Действует в стиле «Свой».</string>
-    <string name="prefs_desc_pref_watermark_logo">Значок камеры SCAMERA рядом с текстом, его огонёк — жёлтый цвет камеры. Один, без текста, — тоже знак.</string>
+    <string name="prefs_desc_pref_watermark_logo">Значок камеры SomeCam рядом с текстом, его огонёк — жёлтый цвет камеры. Один, без текста, — тоже знак.</string>
     <string name="prefs_desc_pref_scam_hybrid_boost_value">Насколько жёстко отсекаются движущиеся предметы там, где части кадра движутся по-разному. Больше — двоения проходящих людей и машин нет совсем, но снимок шумнее. Меньше — склейка мягче, меньше шума на слегка колышущихся предметах.</string>
     <string name="prefs_shooting_settings_screen_summary">Кадры, мерцание ламп, звуки, режим «Спорт»</string>
     <!-- P140: the launcher shortcut (long press on the app icon) -->
@@ -852,9 +852,9 @@
     <string name="prefs_crop_upscale_title">До размера фото</string>
     <string name="prefs_crop_upscale_summary">Снимок с кропом или цифровым зумом увеличивается до полного размера фото. Если выключить, он остаётся меньше, без увеличения.</string>
     <string name="prefs_mosaic_wb_title">Свой баланс белого</string>
-    <string name="prefs_mosaic_wb_summary">Для снимков в полном разрешении (50 и 200 Мп) и с зумом на сенсоре баланс белого считает SCAMERA. Если выключить, берётся баланс белого самой камеры.</string>
+    <string name="prefs_mosaic_wb_summary">Для снимков в полном разрешении (50 и 200 Мп) и с зумом на сенсоре баланс белого считает SomeCam. Если выключить, берётся баланс белого самой камеры.</string>
     <string name="prefs_film_data_credit_title">Данные плёночной симуляции</string>
-    <string name="prefs_film_data_credit_summary">Профили плёнок и бумаг: spektrafilm, автор Andrea Volpato, github.com/andreavolpato/spektrafilm, CC BY-SA 4.0 (преобразованы и изменены SCAMERA: двоичные массивы и производные LUT, см. assets/film/CHANGELOG.txt). Цветовая модель, DIR-компоненты и диффузионные фильтры — перенос spektrafilm (GPL-3.0); форматы 65 мм и IMAX 70 и рост размытия зерна с форматом — из spektrafilm OFX, автор Aedan Diez, github.com/chaert-s/spektrafilm-ofx (GPL-3.0, см. assets/film/NOTICE-spektrafilm-ofx.txt). Распознавание текста в галерее: Tesseract OCR и его модели tessdata_fast (Apache-2.0), github.com/tesseract-ocr, через Tesseract4Android от Adaptech (Apache-2.0).</string>
+    <string name="prefs_film_data_credit_summary">Профили плёнок и бумаг: spektrafilm, автор Andrea Volpato, github.com/andreavolpato/spektrafilm, CC BY-SA 4.0 (преобразованы и изменены SomeCam: двоичные массивы и производные LUT, см. assets/film/CHANGELOG.txt). Цветовая модель, DIR-компоненты и диффузионные фильтры — перенос spektrafilm (GPL-3.0); форматы 65 мм и IMAX 70 и рост размытия зерна с форматом — из spektrafilm OFX, автор Aedan Diez, github.com/chaert-s/spektrafilm-ofx (GPL-3.0, см. assets/film/NOTICE-spektrafilm-ofx.txt). Распознавание текста в галерее: Tesseract OCR и его модели tessdata_fast (Apache-2.0), github.com/tesseract-ocr, через Tesseract4Android от Adaptech (Apache-2.0).</string>
     <string name="prefs_ettr_title">Меньше шума в тенях (ETTR)</string>
     <string name="prefs_ettr_summary">Кадры снимаются светлее, а фото остаётся привычной яркости, поэтому в тенях меньше шума. В помещении и ночью обычно не действует.</string>
     <string name="shade_t_ettr">ETTR</string>
@@ -936,7 +936,7 @@
     <string name="camera_id_title">Camera ID · %s</string>
     <string name="camera_id_subtitle">Какую камеру телефона открывает кнопка «%s»</string>
     <string name="camera_id_auto">Авто · ID %s</string>
-    <string name="camera_id_auto_sub">Как нашла SCAMERA</string>
+    <string name="camera_id_auto_sub">Как нашла SomeCam</string>
     <string name="camera_id_source">Как у «%1$s» · ID %2$s</string>
     <string name="camera_id_source_sub">Копия снимает тем же объективом</string>
     <string name="camera_id_option">ID %1$s · %2$s</string>
@@ -957,7 +957,7 @@
     <string name="camera_id_empty">Введите номер камеры</string>
     <string name="camera_id_save">Сохранить</string>
     <string name="camera_id_save_anyway">Сохранить всё равно</string>
-    <string name="camera_id_chosen_note">Кнопка всегда открывает этот ID. «Авто» вернёт выбор SCAMERA</string>
+    <string name="camera_id_chosen_note">Кнопка всегда открывает этот ID. «Авто» вернёт выбор SomeCam</string>
     <string name="prefs_settings_layout_title">Расположение настроек</string>
     <string name="prefs_settings_layout_summary">Порядок групп и пунктов на страницах настроек — как вам удобно. Сохраняется в конфиге.</string>
     <string name="prefs_scam_hybrid_why_ae_screen_title">Экспозиция (AE)</string>
@@ -1139,7 +1139,7 @@
     <string name="prefs_scam_hybrid_resolve_speckle_enable_title">Очистка цветных точек</string>
     <string name="prefs_scam_hybrid_resolve_speckle_enable_summary">Убирает одиночные цветные точки перед пирамидальным шумодавом. Яркость при этом не меняется.</string>
     <string name="prefs_unspektra_ae_credit_title">Unspektra AE</string>
-    <string name="prefs_unspektra_ae_credit_summary">Источник: Unspektrawesome, разработчик JohnTheFarm3r. Адаптация для SCAMERA. Нажмите, чтобы открыть исходный проект.</string>
+    <string name="prefs_unspektra_ae_credit_summary">Источник: Unspektrawesome, разработчик JohnTheFarm3r. Адаптация для SomeCam. Нажмите, чтобы открыть исходный проект.</string>
     <string name="scamera_log_clear">Очистить текущий лог</string>
     <string name="scamera_log_clear_summary">Текущий лог: %1$s</string>
     <string name="scamera_log_share">Поделиться текущим логом</string>

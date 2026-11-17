@@ -2138,7 +2138,7 @@ public class Parameters {
      * nothing sets (FrameNumberSelector) and a "0.98(30966)" version the Software tag now carries in both files.
      */
     public String description() {
-        StringBuilder b = new StringBuilder("SCAMERA");
+        StringBuilder b = new StringBuilder("SomeCam");
         if (multiFrameCount > 0) b.append("\n Frames=").append(multiFrameCount);
         b.append("\n Camera=").append(cameraID);
         if (colourSource != null && !colourSource.isEmpty()) b.append("\n Colour=").append(colourSource);

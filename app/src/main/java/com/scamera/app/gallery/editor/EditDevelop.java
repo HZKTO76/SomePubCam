@@ -108,9 +108,11 @@ final class EditDevelop {
         }
     }
 
-    /** P696: a DNG's Software of SCAMERA (DngMetadata.software: "SCAMERA <version> (<code>) <commit>"). */
+    /** P696: a DNG's Software of ours (DngMetadata.software: "SomeCam <version> (<code>) <commit>"; before the rename "SCAMERA ..."). */
     static boolean ours(DngRaw.Info info) {
-        return info.software != null && info.software.trim().toUpperCase(java.util.Locale.ROOT).startsWith("SCAMERA");
+        if (info.software == null) return false;
+        final String s = info.software.trim().toUpperCase(java.util.Locale.ROOT);
+        return s.startsWith("SOMECAM") || s.startsWith("SCAMERA");
     }
 
     /**

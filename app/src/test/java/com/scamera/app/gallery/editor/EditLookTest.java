@@ -235,7 +235,7 @@ public class EditLookTest {
         assertTrue(line, line.endsWith("; on the finished colour"));
         assertEquals("a\n b", EditExporter.describe("a", "b"));
         assertEquals("b", EditExporter.describe(null, "b"));
-        assertTrue(EditExporter.software().startsWith("SCAMERA"));
+        assertTrue(EditExporter.software().startsWith("SomeCam"));
     }
 
     /** A FinishedLook.Table for a test (its constructor is the package's). */

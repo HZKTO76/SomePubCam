@@ -57,9 +57,9 @@ public final class AllFilesAccess {
         prefs.edit().putString(KEY, stamp).apply();
         DialogStyle.builder(activity)
                 .setTitle(Lang.t("Доступ к файлам", "File access"))
-                .setMessage(Lang.t("SCAMERA хранит настройки разработчика, логи и серии в Download/SCAMERA. Чтобы менять файлы, "
+                .setMessage(Lang.t("SomeCam хранит настройки разработчика, логи и серии в Download/SCAMERA. Чтобы менять файлы, "
                                 + "положенные туда с ПК или прежней версией, разрешите «Управление всеми файлами».",
-                        "SCAMERA keeps its developer settings, logs and bursts in Download/SCAMERA. To change files put there from a PC "
+                        "SomeCam keeps its developer settings, logs and bursts in Download/SCAMERA. To change files put there from a PC "
                                 + "or by an earlier version, allow “All files access”."))
                 .setPositiveButton(Lang.t("Разрешить", "Allow"), (d, w) -> openSettings(activity))
                 .setNegativeButton(Lang.t("Не сейчас", "Not now"), null)

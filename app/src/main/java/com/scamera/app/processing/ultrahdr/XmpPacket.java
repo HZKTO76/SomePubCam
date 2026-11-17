@@ -17,7 +17,7 @@ final class XmpPacket {
 
     private XmpPacket() {
         text.append("<?xpacket begin=\"﻿\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n")
-                .append("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"SCAMERA\">\n")
+                .append("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"SomeCam\">\n")
                 .append(" <rdf:RDF xmlns:rdf=\"").append(RDF_NS).append("\">\n")
                 .append("  <rdf:Description rdf:about=\"\"");
     }

@@ -211,7 +211,7 @@ public class ShotExifTest {
         final String d = p.description();
         for (String old : new String[]{"parameters:", "Noise Merging", "Align=", "Version=", "FocalL=", "hasGainMap", "Photon"})
             assertFalse(old, d.contains(old));
-        assertTrue(d, d.startsWith("SCAMERA\n Frames=8\n Camera=5"));
+        assertTrue(d, d.startsWith("SomeCam\n Frames=8\n Camera=5"));
         p.dngMerged = true;
         assertTrue(ShotExif.dngDescription(p).endsWith("\n RAW=merged burst\n Route=SHDR"));
         p.dngMerged = false;
@@ -252,7 +252,7 @@ public class ShotExifTest {
                 assertTrue(ImageSaver.Util.saveBitmapAsJPG(jpg, picture(64, 48), 95, data, true));
             }
             final ExifInterface e = new ExifInterface(jpg.toFile());
-            assertTrue(e.getAttribute(ExifInterface.TAG_SOFTWARE), e.getAttribute(ExifInterface.TAG_SOFTWARE).startsWith("SCAMERA "));
+            assertTrue(e.getAttribute(ExifInterface.TAG_SOFTWARE), e.getAttribute(ExifInterface.TAG_SOFTWARE).startsWith("SomeCam "));
             assertEquals(DngMetadata.software(), e.getAttribute(ExifInterface.TAG_SOFTWARE));
             assertNull(e.getAttribute(ExifInterface.TAG_COPYRIGHT));
             assertEquals(dng.dateTime(), e.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));

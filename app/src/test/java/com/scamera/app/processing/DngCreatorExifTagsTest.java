@@ -135,10 +135,10 @@ public class DngCreatorExifTagsTest {
         verify(dng).setModel("vivo X200 Ultra");
         final ArgumentCaptor<String> desc = ArgumentCaptor.forClass(String.class);
         verify(dng).setDescription(desc.capture());
-        assertEquals("SCAMERA\n Frames=8\n Camera=5\n RAW=merged burst\n Route=SHDR", desc.getValue());
+        assertEquals("SomeCam\n Frames=8\n Camera=5\n RAW=merged burst\n Route=SHDR", desc.getValue());
         final ArgumentCaptor<String> software = ArgumentCaptor.forClass(String.class);
         verify(dng).setSoftware(software.capture());
-        assertTrue(software.getValue(), software.getValue().startsWith("SCAMERA "));
+        assertTrue(software.getValue(), software.getValue().startsWith("SomeCam "));
         // the exposure and lens are in the Exif IFD only; no DefaultCrop for a photo of the whole frame
         verify(dng, never()).setIso(anyShort());
         verify(dng, never()).setExposureTime(anyDouble());

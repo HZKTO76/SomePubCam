@@ -332,7 +332,7 @@
     </string-array>
     <string-array name="scam_hybrid_mosaic_wb_mode_entries">
         <item>По видоискателю</item>
-        <item>Своя оценка SCAMERA</item>
+        <item>Своя оценка SomeCam</item>
     </string-array>
     <string-array name="watermark_layout_entries">
         <item>Подпись</item>

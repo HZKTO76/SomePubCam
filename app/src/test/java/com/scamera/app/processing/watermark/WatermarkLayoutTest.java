@@ -69,7 +69,7 @@ public class WatermarkLayoutTest {
 
     static String expected(String field) {
         switch (field) {
-            case "text": return "SCAMERA";
+            case "text": return "SomeCam";
             case "device": return "vivo X200 Ultra";
             case "lens": return "24mm";
             case "aperture": return "f/1.8";
@@ -84,17 +84,17 @@ public class WatermarkLayoutTest {
 
     @Test public void theDefaultIsTheAppNameWithoutShotOn() {
         WatermarkSpec spec = new WatermarkSpec();
-        assertEquals("SCAMERA", spec.text);
+        assertEquals("SomeCam", spec.text);
         assertEquals(WatermarkSpec.Layout.TEXT, spec.layout);
         WatermarkText t = WatermarkText.of(spec, info());
-        assertEquals("SCAMERA", t.title);
+        assertEquals("SomeCam", t.title);
         assertEquals("", t.exif);
         assertEquals("", t.time);
         assertTrue(t.logo);
         for (String g : t.groups()) assertFalse(g, g.toLowerCase(Locale.ROOT).contains("shot on"));
         // the stored defaults read the same (no settings: the defaults)
         WatermarkSpec stored = WatermarkSpec.from(null);
-        assertEquals("SCAMERA", stored.text);
+        assertEquals("SomeCam", stored.text);
         assertFalse(stored.showDevice || stored.showLens || stored.showAperture || stored.showShutter || stored.showIso || stored.showTime);
     }
 
@@ -122,7 +122,7 @@ public class WatermarkLayoutTest {
     @Test public void subsetsLeaveNoSeparatorsBehind() {
         WatermarkSpec all = new WatermarkSpec().only(true, true, true, true, true, true, true, true);
         WatermarkText t = WatermarkText.of(all, info());
-        assertEquals("SCAMERA  ·  vivo X200 Ultra", t.title);
+        assertEquals("SomeCam  ·  vivo X200 Ultra", t.title);
         assertEquals("24mm   f/1.8   1/120s   ISO 100", t.exif);
         assertEquals("11.11.2026  14:05", t.time);
         assertEquals(2, t.column().size());

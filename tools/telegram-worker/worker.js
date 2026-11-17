@@ -1,4 +1,4 @@
-// SCAMERA builds bot on Cloudflare Workers: the Telegram webhook (docs/telegram-channel.md).
+// SomeCam builds bot on Cloudflare Workers: the Telegram webhook (docs/telegram-channel.md).
 //
 // Answers the owner's private commands at once. The settings live in the bot's pinned message of the owner's chat,
 // in the format tools/telegram_publish.py reads when CI posts a build (keep both in step with
@@ -8,7 +8,7 @@
 //
 // Worker secrets (Settings -> Variables and Secrets): TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER (@username or numeric id),
 // WEBHOOK_SECRET (letters, digits, _ and -), GITHUB_TOKEN (fine-grained token: this repository only, Actions read and
-// write). Optional plain variable GITHUB_REPO (default Whymexd9/SCAMERA).
+// write). Optional plain variable GITHUB_REPO (default SOTTRME/Xxdl).
 // Once after deploying: open https://<worker>/setup?key=<WEBHOOK_SECRET> to register the webhook and the commands.
 
 // targets: [{chat: -100..., topic: id or null, where: 'Group › Topic'}], every build goes to each of them
@@ -156,7 +156,7 @@ async function parseCommand(env, msg) {
 
 function helpText(lang) {
   return t(lang, [
-    '<b>Бот сборок SCAMERA</b>',
+    '<b>Бот сборок SomeCam</b>',
     'Новые сборки из main приходят в группу сами (только APK).',
     '',
     '/status — текущие настройки',
@@ -168,7 +168,7 @@ function helpText(lang) {
     '/sha on|off — SHA-256 в подписи',
     '/header текст — свой текст в начале поста, /header - убрать',
   ].join('\n'), [
-    '<b>SCAMERA builds bot</b>',
+    '<b>SomeCam builds bot</b>',
     'New builds of main are posted to the group automatically (the APK only).',
     '',
     '/status — current settings',
@@ -215,7 +215,7 @@ async function startPost(env, chatId, number, lang) {
     await say(env, chatId, t(lang, 'Для /post нужен секрет GITHUB_TOKEN у воркера.', '/post needs the GITHUB_TOKEN secret of the Worker.'));
     return;
   }
-  const repo = env.GITHUB_REPO || 'Whymexd9/SCAMERA';
+  const repo = env.GITHUB_REPO || 'SOTTRME/Xxdl';
   let status;
   try {
     const response = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${WORKFLOW}/dispatches`, {
@@ -340,7 +340,7 @@ async function handleHere(env, msg) {
     return;
   }
   try {
-    await say(env, chat.id, t(lang, 'Сборки SCAMERA будут приходить сюда.', 'SCAMERA builds will be posted here.'), topic);
+    await say(env, chat.id, t(lang, 'Сборки SomeCam будут приходить сюда.', 'SomeCam builds will be posted here.'), topic);
   } catch (e) {
     if (!(e instanceof TelegramError)) throw e;
     await notifyOwner(env, user.id, t(lang,
@@ -370,8 +370,8 @@ async function handleUpdate(env, update) {
   const chat = msg.chat;
   if (chat.type === 'private') {
     if (!isOwner(env, user)) {
-      await say(env, chat.id, t((user && user.language_code) || '', 'Это закрытый бот сборок SCAMERA.',
-        'This is the private SCAMERA builds bot.') +
+      await say(env, chat.id, t((user && user.language_code) || '', 'Это закрытый бот сборок SomeCam.',
+        'This is the private SomeCam builds bot.') +
         (String(env.TELEGRAM_OWNER || '').trim() ? '' : `\nTELEGRAM_OWNER is not set; your id: <code>${user ? user.id : '?'}</code>`));
       return;
     }
@@ -416,6 +416,6 @@ export default {
         return new Response(`Setup failed: ${e instanceof TelegramError ? e.message : (e && e.name)}\n`, {status: 500});
       }
     }
-    return new Response('SCAMERA builds bot\n', {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
+    return new Response('SomeCam builds bot\n', {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
   },
 };

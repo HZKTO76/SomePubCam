@@ -175,7 +175,9 @@ public final class PhotoProperties {
     /** The «key=value» lines of a SCAMERA ImageDescription («SCAMERA\n Frames=8\n Camera=0 ...»); null for another one. */
     @Nullable
     static Map<String, String> shotFacts(@Nullable String description) {
-        if (description == null || !description.trim().startsWith("SCAMERA")) return null;
+        if (description == null) return null;
+        final String head = description.trim();
+        if (!head.startsWith("SomeCam") && !head.startsWith("SCAMERA")) return null; // before the rename: "SCAMERA\n ..."
         final Map<String, String> out = new LinkedHashMap<>();
         for (String line : description.split("\n")) {
             final int eq = line.indexOf('=');

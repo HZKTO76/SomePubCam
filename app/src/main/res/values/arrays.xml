@@ -708,7 +708,7 @@
     </string-array>
     <string-array name="scam_hybrid_mosaic_wb_mode_entries">
         <item>By the viewfinder</item>
-        <item>Own SCAMERA estimate</item>
+        <item>Own SomeCam estimate</item>
     </string-array>
     <string-array name="watermark_layout_entries">
         <item>Caption</item>

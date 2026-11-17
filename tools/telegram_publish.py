@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post a CI-built SCAMERA APK to a Telegram group or channel (docs/telegram-channel.md).
+"""Post a CI-built SomeCam APK to a Telegram group or channel (docs/telegram-channel.md).
 
 Only the APK is posted, and pinned; SHA256SUMS.txt and the other artifacts stay in Actions, and the caption has no
 links to GitHub (owner's wish). The APK is larger than the Bot API upload limit (50 MB), so the bot logs in over
@@ -293,7 +293,7 @@ def plain_changes(messages):
 
 AI_PROMPT = {
     'ru': '\n'.join([
-        'Ты пишешь чейнжлог тестовой сборки Android-камеры SCAMERA для её пользователей в Telegram. Тебе дают '
+        'Ты пишешь чейнжлог тестовой сборки Android-камеры SomeCam для её пользователей в Telegram. Тебе дают '
         'сообщения коммитов между прошлой и новой сборкой (английский технический язык разработчика). Напиши '
         'по-русски, что изменилось для пользователя камеры.',
         'Правила:',
@@ -306,7 +306,7 @@ AI_PROMPT = {
         '- если заметных пользователю изменений нет, ответь одной строкой: • Внутренние улучшения и исправления',
         'Формат ответа: только пункты, каждый с новой строки и с «• » в начале, без заголовка и пояснений.']),
     'en': '\n'.join([
-        'You write the changelog of a test build of the SCAMERA Android camera app for its users on Telegram. You get '
+        'You write the changelog of a test build of the SomeCam Android camera app for its users on Telegram. You get '
         'the commit messages between the previous and the new build (developer jargon). Write in plain English what '
         'changed for a user of the camera.',
         'Rules:',
@@ -389,8 +389,8 @@ def visible_length(text):
 
 
 def build_title(apk):
-    m = re.match(r'SCAMERA-(?P<ver>[^-]+)-(?P<code>\d+)', apk.name)
-    return f'SCAMERA {m["ver"]} · {m["code"]}' if m else apk.stem
+    m = re.match(r'(?:SomeCam|SCAMERA)-(?P<ver>[^-]+)-(?P<code>\d+)', apk.name)
+    return f'SomeCam {m["ver"]} · {m["code"]}' if m else apk.stem
 
 
 def build_caption(apk, digest, changes, settings=None, since=''):

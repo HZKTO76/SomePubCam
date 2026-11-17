@@ -88,8 +88,8 @@ public class CameraActivity extends BaseActivity {
         // P206: an edited copy re-signed with another key does not open the camera
         if (!com.scamera.app.util.OriginalBuild.check(this)) {
             android.widget.Toast.makeText(this, com.scamera.app.util.Lang.t(
-                    "Это изменённая копия SCAMERA. Установите оригинальную сборку.",
-                    "This is a modified copy of SCAMERA. Install the original build."), android.widget.Toast.LENGTH_LONG).show();
+                    "Это изменённая копия SomeCam. Установите оригинальную сборку.",
+                    "This is a modified copy of SomeCam. Install the original build."), android.widget.Toast.LENGTH_LONG).show();
             finish();
             return;
         }
