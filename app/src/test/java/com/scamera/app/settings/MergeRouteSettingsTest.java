@@ -47,20 +47,20 @@ public class MergeRouteSettingsTest {
     /** The SCAM merge's rows: the HybridTuning member each one's tuning line sets (PreferenceKeys TUNING_KEYS / TUNING_EXTRA). */
     private static final String[][] QUALITY_MEMBERS = {
             {"cdm", "cdm"}, {"filter_variance", "filterVariance"}, {"dilate", "dilateScale"}, {"dilate_floor", "dilateFloor"},
-            {"motion_boost", "boostEnable"}, {"boost_value", "boost"}, {"boost_threshold", "varianceThreshold"},
+            {"boost_value", "boost"}, {"boost_threshold", "varianceThreshold"},
             {"motion_threshold", "motionThreshold"}, {"chroma_diff", "chromaDiff"}, {"chroma_diff_clamp", "chromaDiffClamp"},
             {"dezipper", "dezipper"}, {"hot_sigma", "hotSigma"}, {"hot_base_sigma", "hotBaseSigma"}, {"hot_max_key", "hotMaxKey"},
             {"cell_clip", "cellClip"}, {"sabre61", "sabre61"}, {"s61_max_key", "s61MaxKey"}, {"s61_min_motion", "s61MinMotion"},
             {"kernel", "kernelScale"}, {"snr_scale", "snrScale"}, {"tensor_noise", "rawNoise"}, {"widen_below", "widenBelow"},
             {"weight_cap", "weightCap"}, {"fwe", "fwe"}, {"mochi", "mochi"}, {"local_align", "localAlign"}, {"la_engine", "laGpu"},
             // «Спорт»'s values of the rejection set the same members (MotionMode.DEFAULTS)
-            {"mm_motion_boost", "boostEnable"}, {"mm_boost_value", "boost"}, {"mm_motion_threshold", "motionThreshold"}};
+            {"mm_boost_value", "boost"}, {"mm_motion_threshold", "motionThreshold"}};
     /** Rows every mode reads: the denoise after the merge, the burst's frames and «Спорт»'s capture, Quad / Tetra. */
     private static final String[] EVERY_MODE = {H + "denoise", H + "why_dn_factor", H + "why_dn_luma_revert", H + "why_dn_motion_revert",
             H + "why_dn_grain", H + "resolve_speckle_enable", H + "resolve_speckle_threshold", H + "resolve_speckle_strength",
             H + "why_ms_denoise", H + "why_ms_model_scale", H + "why_ms_shadow", H + "why_ms_luma", H + "why_ms_luma_l0", H + "why_ms_chroma",
             H + "why_ms_chroma_l2", H + "zsl_frames", H + "fullres50_frames", H + "fullres50_zsl", H + "fullres200_frames", "pref_zsl_buffer_count_key",
-            H + "mm_shutter", H + "mm_flicker", H + "mm_zsl_frames", H + "mm_shasta", H + "mm_bento",
+            H + "motion_boost", H + "mm_shutter", H + "mm_flicker", H + "mm_zsl_frames", H + "mm_shasta", H + "mm_bento",
             H + "mosaic_remosaic", H + "mosaic_path", H + "mosaic_frames", H + "mosaic_window", H + "mosaic_tetra", H + "mosaic_chroma_fill",
             "scam_hybrid_nr_merge_category", "scam_hybrid_resolve_optics_category", "scam_hybrid_ms_general_category",
             "scam_hybrid_ms_luma_category", "scam_hybrid_ms_chroma_category", "scam_hybrid_merge_frames_category",
@@ -107,7 +107,14 @@ public class MergeRouteSettingsTest {
             assertNull(mode, new SettingsAvailability(sport).reason(H + "mm_shutter"));
             assertNull(mode, new SettingsAvailability(sport).reason(H + "mm_zsl_frames"));
             assertEquals(mode, mode.equals("quality"), new SettingsAvailability(sport).reason(H + "mm_boost_value") == null);
+            assertEquals(mode, mode.equals("quality"), new SettingsAvailability(sport).reason(H + "mm_motion_boost") == null);
+            assertNotNull(mode, new SettingsAvailability(sport).reason(H + "motion_boost"));
         }
+        final Map<String, Object> noLocalAlignment = new HashMap<>();
+        noLocalAlignment.put(H + "local_align", "0");
+        assertNull(new SettingsAvailability(noLocalAlignment).reason(H + "motion_boost"));
+        noLocalAlignment.put(H + "processing", "quality");
+        assertNotNull(new SettingsAvailability(noLocalAlignment).reason(H + "motion_boost"));
     }
 
     @Test public void wholeGroupsGreyAsOne() {
@@ -150,6 +157,10 @@ public class MergeRouteSettingsTest {
             assertTrue(row[1], member.matcher(scam).find());
             assertFalse(row[1] + " read by the fast route", member.matcher(fast).find());
         }
+        // Photo anti-ghosting is shared. Fast Sport uses its fixed rejection even with the switch off.
+        assertTrue(Pattern.compile("\\.\\s*boostEnable\\b").matcher(scam).find());
+        assertTrue(Pattern.compile("bool photoMotion\\s*=[^;]*tune\\.daylightPhotoMotion[^;]*tune\\.fastMergeSport\\s*==\\s*0[^;]*tune\\.boostEnable")
+                .matcher(fast).find());
         // the fast route branches off at the top of the SCAM merge, before it reads any of them
         final int reconstruct = scam.indexOf("inline std::vector<float> hybridReconstruct(const HybridInput& input");
         final int fastBranch = scam.indexOf("if(tune.fastMerge>0&&!preset&&!native&&!dcgCheckFirst)", reconstruct);
@@ -191,6 +202,7 @@ public class MergeRouteSettingsTest {
         final Set<String> named = new HashSet<>(SettingsAvailability.QUALITY_ONLY);
         for (String own : new String[]{"kernel_texture", "kernel_bokeh", "kernel_transition", "kernel_snr"}) named.add(H + own);
         named.add(H + "cre_source");
+        named.add(H + "motion_boost");
         for (String key : named) {
             assertTrue(key, page.contains("android:key=\"" + key + "\""));
             assertEquals(key, 1, count(xml, "android:key=\"" + key + "\""));

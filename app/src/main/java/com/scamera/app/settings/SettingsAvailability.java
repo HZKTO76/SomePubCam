@@ -256,16 +256,16 @@ public final class SettingsAvailability {
     /**
      * P629 (owner, 2026-11-11: «Группу шумоподавление и склейка перемести под выбор склейки Быстро/Качество/Статика как мы сделали с
      * настройками тонмапинга»): the rows of «Шумоподавление и склейка» that only the SCAM merge reads - «Качество» (worker
-     * hybridReconstruct after its route branch: HybridTuning cdm, filterVariance, dilate*, boost*, varianceThreshold,
+     * hybridReconstruct after its route branch: HybridTuning cdm, filterVariance, dilate*, boost, varianceThreshold,
      * motionThreshold, chromaDiff*, dezipper, hot*, cellClip, kernelScale, snrScale, rawNoise, widenBelow, weightCap, fwe,
      * sabre61, s61*, localAlign, laGpu, mochi; the CRE source: the alignment only that merge takes). The fast route
      * (scam-fast-merge.h) reads none of them. The Quad / Tetra rows are not here: the fast route reads the mosaic merge's tuning
-     * itself (P627: every mode merges its own Quad / Tetra), so they act in both modes; so do the kernel's texture / bokeh /
-     * transition footprints (the fast route's hybridKernelFootprint). P644: «Статика» and its rows are gone - two modes.
+     * itself (P627: every mode merges its own Quad / Tetra), so they act in both modes, as do the kernel's footprints
+     * and the Photo anti-ghosting switch. Fast Sport uses its fixed rejection.
      */
     static final java.util.Set<String> QUALITY_ONLY = new java.util.HashSet<>(java.util.Arrays.asList(
             HYB + "cre_source", HYB + "local_align", HYB + "la_engine",
-            HYB + "cdm", HYB + "filter_variance", HYB + "dilate", HYB + "dilate_floor", HYB + "motion_boost", HYB + "boost_value",
+            HYB + "cdm", HYB + "filter_variance", HYB + "dilate", HYB + "dilate_floor", HYB + "boost_value",
             HYB + "boost_threshold", HYB + "motion_threshold", HYB + "chroma_diff", HYB + "chroma_diff_clamp", HYB + "dezipper",
             HYB + "hot_sigma", HYB + "hot_base_sigma", HYB + "hot_max_key", HYB + "cell_clip",
             HYB + "sabre61", HYB + "s61_max_key", HYB + "s61_min_motion", HYB + "kernel", HYB + "snr_scale", HYB + "tensor_noise",
@@ -320,7 +320,7 @@ public final class SettingsAvailability {
      */
     static final java.util.Set<String> RAW_MERGE_ONLY = new java.util.HashSet<>(java.util.Arrays.asList(
             HYB + "fullres50_frames", HYB + "fullres50_zsl", HYB + "fullres200_frames",
-            HYB + "kernel_texture", HYB + "kernel_bokeh", HYB + "kernel_transition", HYB + "kernel_snr",
+            HYB + "kernel_texture", HYB + "kernel_bokeh", HYB + "kernel_transition", HYB + "kernel_snr", HYB + "motion_boost",
             "scam_hybrid_motion_screen", "scam_hybrid_merge_align_category",
             "scam_hybrid_merge_reject_category", "scam_hybrid_merge_kernel_category", "scam_hybrid_merge_quad_category",
             "scam_hybrid_mosaic_screen", "scam_hybrid_mosaic_native_category", "scam_hybrid_merge_final_category"));
@@ -425,6 +425,9 @@ public final class SettingsAvailability {
             return Lang.t("Действует только в режиме «Спорт» (кнопка в верхней панели).", "Acts only in “Sport” mode (the button in the top bar).");
         // ...and while it is on, the merge reads the mode's value of a merge row it replaces (MotionMode.DEFAULTS, read by
         // PreferenceKeys.hybridValue / hybridSwitch); it has no row for the base widening: always 0 there (P111)
+        if (motion && key.equals("pref_scam_hybrid_motion_boost") && route() == FAST)
+            return Lang.t("В режиме «Спорт» со склейкой «Быстро» подавление двоения работает автоматически.",
+                    "Fast processing uses automatic ghost suppression in Sport mode.");
         if (motion && any(key, "pref_scam_hybrid_motion_boost", "pref_scam_hybrid_boost_value", "pref_scam_hybrid_motion_threshold"))
             return Lang.t("В режиме «Спорт» действует его значение (страница «Спорт»: Шумоподавление и склейка › Кадры серии).",
                     "In “Sport” mode its own value applies (the “Sport” page: Noise reduction and merge › Burst frames).");
@@ -539,7 +542,8 @@ public final class SettingsAvailability {
             return Lang.t("Только при «Кадры светов» = «Авто».", "Only with “Highlight frames” = “Auto”.");
         // the boost and its texture threshold need the F6 motion (worker boostMode); so does Auto's daylight rule (handheld61)
         if (any(key, "pref_scam_hybrid_motion_boost", "pref_scam_hybrid_mm_motion_boost", "pref_scam_hybrid_boost_threshold",
-                "pref_scam_hybrid_la_engine", "pref_scam_hybrid_s61_min_motion") && text("pref_scam_hybrid_local_align", "1").equals("0"))
+                "pref_scam_hybrid_la_engine", "pref_scam_hybrid_s61_min_motion")
+                && route() == QUALITY && text("pref_scam_hybrid_local_align", "1").equals("0"))
             return Lang.t("Нужно «Локальное выравнивание F6».", "Needs “Local alignment F6”.");
         // the clamp is a uniform of the colour-difference pass, which runs only with its strength above 0
         if (key.equals("pref_scam_hybrid_chroma_diff_clamp") && PreferenceNumber.read(values.get("pref_scam_hybrid_chroma_diff"), 1) <= 0)

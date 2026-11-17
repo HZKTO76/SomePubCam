@@ -83,7 +83,10 @@
     <string name="prefs_scam_fast_motion_denoise_title">Шумоподавление движения</string>
     <string name="prefs_scam_fast_motion_denoise_summary" formatted="false">Настройте силу от 0 до 100% для семи значений отношения сигнала к шуму (SNR). Кривая действует на готовые фото после быстрой RAW-склейки. DNG сохраняет результат склейки до этого шага.</string>
     <string name="prefs_scam_fast_motion_denoise_enabled_title">Применять кривую SNR</string>
+    <string name="prefs_scam_fast_motion_denoise_enabled_summary">Включает шумоподавление движения по сохранённой кривой SNR. При отключении все семь значений сохраняются.</string>
     <string name="prefs_scam_fast_motion_denoise_graph_title">Кривая SNR</string>
+    <string name="prefs_scam_fast_motion_denoise_graph_summary">График показывает, как сила шумоподавления зависит от локального отношения сигнала к шуму. Точки меняются ползунками ниже.</string>
+    <string name="prefs_scam_fast_motion_denoise_point_summary">Задаёт силу шумоподавления для этого отношения сигнала к шуму. Чем выше значение, тем сильнее подавляется шум в движущихся областях. Между точками сила меняется плавно.</string>
     <string name="prefs_scam_hybrid_highlight_merge_title">Слияние светов</string>
     <string name="prefs_scam_hybrid_highlight_merge_summary">Адаптивное подавляет двоение и шум в зоне перехода к короткой экспозиции.</string>
     <string name="prefs_scam_hybrid_dnmerge_screen_summary">Как кадры серии совмещаются и складываются в один и как после склейки убирается шум. Строки, которые в выбранном режиме обработки не действуют, — серые.</string>
@@ -105,7 +108,7 @@
     <string name="prefs_scam_hybrid_dilate_floor_summary">Слабая отбраковка ниже этого порога считается шумом и не расползается на соседние места. Больше — чище, меньше — меньше призраков.</string>
     <string name="prefs_scam_hybrid_boost_category_title">Неоднородное движение</string>
     <string name="prefs_scam_hybrid_motion_boost_title">Против двоения</string>
-    <string name="prefs_scam_hybrid_motion_boost_summary">Сильнее убирает призраки там, где части кадра движутся по-разному — руки, листва. Работает вместе с точной подгонкой кадров по участкам.</string>
+    <string name="prefs_scam_hybrid_motion_boost_summary">В режиме «Быстро» уменьшает двоение на хорошо освещённых фото. В режиме «Качество» усиливает отсев движения вместе с локальным выравниванием.</string>
     <string name="prefs_scam_hybrid_boost_value_title">Штраф за смаз и движение</string>
     <string name="prefs_scam_hybrid_boost_threshold_title">Порог рельефа для отсева</string>
     <string name="prefs_scam_hybrid_boost_threshold_summary">Насколько фактурным должен быть участок, чтобы включилась усиленная отбраковка движения. Больше — только на явных контрастных предметах. Меньше — даже на малоконтрастных участках.</string>

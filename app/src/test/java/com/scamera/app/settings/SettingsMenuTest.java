@@ -1430,12 +1430,13 @@ public class SettingsMenuTest {
             assertEquals(k,"scam_hybrid_shasta_category",screen.findPreference(k).getParent().getKey());
         assertNull(screen.findPreference("scam_hybrid_frames_screen"));assertNull(screen.findPreference("scam_hybrid_diag_category"));
         PreferenceGroup noise=screen.findPreference("scam_hybrid_nr_merge_category");
-        java.util.List<String> order=new java.util.ArrayList<>();
-        for(int i=0;i<noise.getPreferenceCount();i++)order.add(noise.getPreference(i).getKey());
-        // P443: the switches, the engine and the Resolve rows (the SCAM 9.6 tuning left the menu; its strength is the everyday slider)
-        // P648: «Подстройка под свет (SNR)» right under «Все шумодавы»
-        assertEquals(Arrays.asList("pref_scam_hybrid_denoise","pref_scam_hybrid_post_snr",
-                "pref_scam_hybrid_why_dn_luma_revert","pref_scam_hybrid_why_dn_motion_revert","pref_scam_hybrid_why_dn_grain"),order);
+        assertEquals(Arrays.asList("pref_scam_hybrid_denoise","scam_hybrid_fast_motion_denoise_screen","pref_scam_hybrid_motion_boost","pref_scam_hybrid_post_snr",
+                "pref_scam_hybrid_why_dn_luma_revert","pref_scam_hybrid_why_dn_motion_revert","pref_scam_hybrid_why_dn_grain"),keys(noise));
+        PreferenceScreen motion=noise.findPreference("scam_hybrid_fast_motion_denoise_screen");
+        assertEquals(Arrays.asList("pref_scam_hybrid_fast_motion_denoise_enabled","pref_scam_hybrid_fast_motion_denoise_graph",
+                "pref_scam_hybrid_fast_motion_denoise_2","pref_scam_hybrid_fast_motion_denoise_3","pref_scam_hybrid_fast_motion_denoise_4",
+                "pref_scam_hybrid_fast_motion_denoise_8","pref_scam_hybrid_fast_motion_denoise_16","pref_scam_hybrid_fast_motion_denoise_32",
+                "pref_scam_hybrid_fast_motion_denoise_64"),keys(motion));
         // P403 / P406: the short frames' denoise was with the highlight frames on «Настройки HDR», as the reference app; P629b: it is the
         // tone's (WhyFusion / WhyV2Stats bracket_denoise), with the tone's highlight passes in «Настройки тона»
         assertEquals("scam_hybrid_why_highlights_category",screen.findPreference("pref_scam_hybrid_why_bracket_denoise").getParent().getKey());

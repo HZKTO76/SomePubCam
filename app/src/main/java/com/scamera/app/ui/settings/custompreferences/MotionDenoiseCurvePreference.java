@@ -56,7 +56,13 @@ public final class MotionDenoiseCurvePreference extends Preference
     @Override
     public void onBindViewHolder(@NonNull PreferenceViewHolder holder) {
         super.onBindViewHolder(holder);
-        FrameLayout host = (FrameLayout) holder.findViewById(R.id.motion_denoise_curve_host);
+        View container = holder.findViewById(R.id.motion_denoise_curve_host);
+        if (!(container instanceof FrameLayout)) container = holder.itemView;
+        if (!(container instanceof FrameLayout)) {
+            graph = null;
+            return;
+        }
+        FrameLayout host = (FrameLayout) container;
         View child = host.getChildAt(0);
         if (child instanceof CurveGraph) {
             graph = (CurveGraph) child;

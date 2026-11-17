@@ -83,7 +83,10 @@
     <string name="prefs_scam_fast_motion_denoise_title">Motion noise reduction</string>
     <string name="prefs_scam_fast_motion_denoise_summary" formatted="false">Set the strength from 0 to 100% at seven local signal-to-noise ratios (SNR). Applies to rendered photos from Fast RAW processing. DNG saves the merge result before this step.</string>
     <string name="prefs_scam_fast_motion_denoise_enabled_title">Use the SNR curve</string>
+    <string name="prefs_scam_fast_motion_denoise_enabled_summary">Enable motion noise reduction with the saved SNR curve. Turning this setting off keeps all seven point values.</string>
     <string name="prefs_scam_fast_motion_denoise_graph_title">SNR curve</string>
+    <string name="prefs_scam_fast_motion_denoise_graph_summary">The curve shows how local signal-to-noise ratio affects denoising strength. Use the sliders below to adjust the points.</string>
+    <string name="prefs_scam_fast_motion_denoise_point_summary">Set the denoising strength at this signal-to-noise ratio. Higher values reduce more noise in moving areas. Strength between points changes smoothly.</string>
     <string name="prefs_scam_fast_motion_denoise_snr2" translatable="false">SNR 2</string>
     <string name="prefs_scam_fast_motion_denoise_snr3" translatable="false">SNR 3</string>
     <string name="prefs_scam_fast_motion_denoise_snr4" translatable="false">SNR 4</string>
@@ -112,7 +115,7 @@
     <string name="prefs_scam_hybrid_dilate_floor_summary">Weak rejection below this threshold counts as noise and does not spread to nearby places. Higher: cleaner. Lower: fewer ghosts.</string>
     <string name="prefs_scam_hybrid_boost_category_title">Uneven motion</string>
     <string name="prefs_scam_hybrid_motion_boost_title">Anti-ghosting</string>
-    <string name="prefs_scam_hybrid_motion_boost_summary">Removes ghosts harder where parts of the frame move differently, such as hands or leaves. Works together with area-by-area frame matching.</string>
+    <string name="prefs_scam_hybrid_motion_boost_summary">In Fast, reduces ghosting in well-lit photos. In Quality, works with local alignment to strengthen motion rejection.</string>
     <string name="prefs_scam_hybrid_boost_value_title">Blur and motion penalty</string>
     <string name="prefs_scam_hybrid_boost_threshold_title">Texture threshold for rejection</string>
     <string name="prefs_scam_hybrid_boost_threshold_summary">How textured an area must be for the stronger motion rejection to start. Higher: only on clearly contrasty objects. Lower: even on low-contrast areas.</string>
