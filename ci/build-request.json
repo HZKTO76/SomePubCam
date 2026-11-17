@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "request_id": "2026-11-18-opengl-telegram-4",
-  "source_commit": "18631efe8b561e9d4f91577bae98af3f1ec19ba2",
+  "request_id": "2026-11-18-opengl-telegram-5",
+  "source_commit": "eb86b276bc0a9306dabd02121346931b9dcd0d4b",
   "send_telegram": true
 }

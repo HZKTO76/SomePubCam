@@ -6,6 +6,24 @@ umask 077
 mode=${1:-}
 case "$mode" in resolve|checkout|host|build|stage|release|await-host|telegram|cleanup|self-test) ;; *) exit 2 ;; esac
 
+# Only these controller-owned phase identifiers may enter a public error.
+report_failure() {
+    local phase=controller result=${2:-1}
+    if [[ -f "$1" && ! -L "$1" ]]; then
+        IFS= read -r phase < "$1" || true
+    fi
+    case "$phase" in
+        controller|source|checkout|preflight|gradle|native-packaging|packaging|signature|host|host-gate|publication|telegram) ;;
+        *) phase=controller ;;
+    esac
+    if [[ ! "$result" =~ ^[1-9][0-9]{0,2}$ ]] || (( result > 255 )); then result=1; fi
+    printf '::error::PronCam stage failed (phase=%s; exit=%s); private diagnostics were not published.\n' "$phase" "$result"
+}
+
+mark_phase() {
+    printf '%s\n' "$1" > "$phase_file"
+}
+
 check_stage() {
     python3 - "$1" <<'PY'
 import hashlib, pathlib, re, sys
@@ -79,9 +97,29 @@ MOCK
     if GITHUB_ACTOR=SOTTRME PRONCAM_SOURCE_SHA="$sha" PRONCAM_CHECK_LANE=native-a bash "$self" host > "$fixture/public.log" 2>&1; then exit 1; fi
     if grep -q PRIVATE_SOURCE_CANARY "$fixture/public.log"; then exit 1; fi
     grep -q PRIVATE_SOURCE_CANARY "$fixture/proncam-private-host.log"
+    grep -Fxq '::error::PronCam stage failed (phase=host; exit=17); private diagnostics were not published.' "$fixture/public.log"
+    for phase in controller source checkout preflight gradle native-packaging packaging signature host host-gate publication telegram; do
+        printf '%s\n' "$phase" > "$fixture/phase"
+        report_failure "$fixture/phase" 19 > "$fixture/phase-public.log"
+        grep -Fxq "::error::PronCam stage failed (phase=$phase; exit=19); private diagnostics were not published." "$fixture/phase-public.log"
+    done
+    printf 'PRIVATE_SOURCE_CANARY%%0A::error::injected\n' > "$fixture/phase"
+    report_failure "$fixture/phase" PRIVATE_SOURCE_CANARY > "$fixture/phase-public.log"
+    grep -Fxq '::error::PronCam stage failed (phase=controller; exit=1); private diagnostics were not published.' "$fixture/phase-public.log"
+    if grep -q 'PRIVATE_SOURCE_CANARY\|injected' "$fixture/phase-public.log"; then exit 1; fi
+    cat > "$private/tools/ci/host-native-a.sh" <<'POISON'
+#!/usr/bin/env bash
+printf 'PRIVATE_SOURCE_CANARY%%0A::error::injected\n' > "$RUNNER_TEMP/proncam-phase-host"
+echo PRIVATE_SOURCE_CANARY
+echo PRIVATE_SOURCE_CANARY >&2
+exit 23
+POISON
+    if GITHUB_ACTOR=SOTTRME PRONCAM_SOURCE_SHA="$sha" PRONCAM_CHECK_LANE=native-a bash "$self" host > "$fixture/poison-public.log" 2>&1; then exit 1; fi
+    grep -Fxq '::error::PronCam stage failed (phase=controller; exit=23); private diagnostics were not published.' "$fixture/poison-public.log"
+    if grep -q 'PRIVATE_SOURCE_CANARY\|injected' "$fixture/poison-public.log"; then exit 1; fi
     GITHUB_ACTOR=SOTTRME bash "$self" cleanup
-    [[ ! -e "$private" && ! -e "$fixture/proncam-private-host.log" ]]
-    echo 'PASS: publication/ref/context checks; failing private stdout/stderr stay out of public logs; cleanup'
+    [[ ! -e "$private" && ! -e "$fixture/proncam-private-host.log" && ! -e "$fixture/proncam-phase-host" ]]
+    echo 'PASS: publication/ref/context checks; allowlisted failure phases; private stdout/stderr stay out of public logs; cleanup'
     exit
 fi
 
@@ -93,17 +131,19 @@ source_dir="$RUNNER_TEMP/proncam-source"
 key="$RUNNER_TEMP/proncam-release.jks"
 askpass="$RUNNER_TEMP/proncam-askpass"
 output="$GITHUB_WORKSPACE/public-out"
+phase_file="$RUNNER_TEMP/proncam-phase-$mode"
 if [[ "$mode" == cleanup ]]; then
     rm -rf -- "$source_dir"
     rm -rf -- "$RUNNER_TEMP/proncam-telegram"
-    rm -f -- "$key" "$askpass" "$RUNNER_TEMP"/proncam-private-*.log "$RUNNER_TEMP/proncam-metadata.json"
+    rm -f -- "$key" "$askpass" "$RUNNER_TEMP"/proncam-private-*.log "$RUNNER_TEMP"/proncam-phase-* "$RUNNER_TEMP/proncam-metadata.json"
     exit
 fi
 
 # No private tool stdout, compiler diagnostics, test reports or mapping enter a public log.
 exec 9>&1
 exec >>"$RUNNER_TEMP/proncam-private-$mode.log" 2>&1
-trap 'result=$?; rm -f -- "$askpass"; if (( result )); then printf "::error::PronCam stage failed; private diagnostics were not published.\n" >&9; fi' EXIT
+mark_phase controller
+trap 'result=$?; rm -f -- "$askpass" || true; if (( result )); then report_failure "$phase_file" "$result" >&9; fi' EXIT
 private_repo() {
     : "${PRONCAM_SOURCE_TOKEN:?Missing read-only source token}"
     GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api repos/SOTTRME/Privss > "$RUNNER_TEMP/proncam-metadata.json" 9>&-
@@ -116,6 +156,7 @@ PY
 }
 
 if [[ "$mode" == resolve ]]; then
+    mark_phase source
     if [[ -z ${PRONCAM_SOURCE_TOKEN:-} ]]; then
         printf '::error::Required repository secret PRONCAM_SOURCE_TOKEN is not configured.\n' >&9
         exit 1
@@ -150,6 +191,7 @@ PY
 fi
 
 if [[ "$mode" == checkout ]]; then
+    mark_phase checkout
     private_repo
     [[ ${PRONCAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && ! -e "$source_dir" ]] || exit 2
     cat > "$askpass" <<'ASKPASS'
@@ -167,6 +209,7 @@ ASKPASS
 fi
 
 if [[ "$mode" == stage || "$mode" == release ]]; then
+    mark_phase publication
     check_stage "$output"
     if [[ "$mode" == release ]]; then
         [[ ${SCAMERA_VERSION_CODE:-} =~ ^[1-9][0-9]{0,9}$ ]] || exit 2
@@ -178,6 +221,7 @@ if [[ "$mode" == stage || "$mode" == release ]]; then
 fi
 
 if [[ "$mode" == await-host ]]; then
+    mark_phase host-gate
     check_stage "$output"
     python3 "$GITHUB_WORKSPACE/ci/await-host.py" 9>&-
     printf 'All host checks approved APK publication.\n' >&9
@@ -185,6 +229,7 @@ if [[ "$mode" == await-host ]]; then
 fi
 
 if [[ "$mode" == telegram ]]; then
+    mark_phase telegram
     check_stage "$output"
     [[ ${PRONCAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && $(git -C "$source_dir" rev-parse HEAD) == "$PRONCAM_SOURCE_SHA" ]] || exit 2
     for name in TELEGRAM_BOT_TOKEN TELEGRAM_API_ID TELEGRAM_API_HASH; do
@@ -211,25 +256,29 @@ export GITHUB_SHA="$PRONCAM_SOURCE_SHA"
 # Private tools do not need public workflow file-command channels.
 unset GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_ENV GITHUB_PATH
 if [[ "$mode" == host ]]; then
+    mark_phase host
     case ${PRONCAM_CHECK_LANE:-} in shaders|native-a|native-b|native-c|strip-trailers|codecs) ;; *) exit 2 ;; esac
     bash "tools/ci/host-$PRONCAM_CHECK_LANE.sh" 9>&-
     printf 'Host checks passed.\n' >&9
     exit
 fi
 
+mark_phase preflight
 : "${SCAMERA_VERSION_CODE:?}" "${SCAMERA_SIGNING_KEYSTORE:?}" "${SCAMERA_KEYSTORE_PASSWORD:?}" "${ANDROID_HOME:?}"
 [[ "$SCAMERA_VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ && ! -e "$output" ]] || exit 2
 export SCAMERA_VERSION_CODE
 chmod +x gradlew
 # Execute exactly the private workflow's existing build checks, without copying its log/artifact upload steps.
-python3 - 9>&- <<'PY'
+PRONCAM_BUILD_PHASE="$phase_file" python3 - 9>&- <<'PY'
 from pathlib import Path
-import subprocess
+import os, subprocess
 lines = Path('.github/workflows/build-test-apk.yml').read_text().splitlines()
 names = ['Check fast worker launcher and GCam diagnostic decoder', 'Check ZSL gyro exposure windows',
          'Check settings precision and algorithm availability', 'Check UI language (English defaults, Russian in values-ru, Java text through Lang)',
          'Build debug APK and run unit tests', 'Verify native packaging and settings']
-for name in names:
+for index, name in enumerate(names):
+    phase = 'preflight' if index < 4 else 'gradle' if index == 4 else 'native-packaging'
+    Path(os.environ['PRONCAM_BUILD_PHASE']).write_text(phase + '\n')
     start = lines.index('      - name: ' + name) + 1
     end = next((i for i in range(start, len(lines)) if lines[i].startswith('      - ') or lines[i].startswith('  host:')), len(lines))
     block = lines[start:end]
@@ -244,6 +293,7 @@ for name in names:
     if '${{' in command: raise SystemExit('Unexpected workflow expression')
     subprocess.run(['bash', '-euo', 'pipefail', '-c', command], check=True)
 PY
+mark_phase packaging
 aapt="$ANDROID_HOME/build-tools/36.0.0/aapt2"
 templates=(app/build/outputs/apk/debug/*.apk)
 [[ ${#templates[@]} == 1 && -f ${templates[0]} ]] || exit 1
@@ -257,6 +307,7 @@ mkdir "$output"
 python3 tools/package_scam_neural.py --template "${templates[0]}" \
     --apksigner "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" \
     --output "$output/PronCam-$name-$SCAMERA_VERSION_CODE-SCAM.apk" 9>&-
+mark_phase signature
 final_badging=$("$aapt" dump badging "$output"/*.apk 9>&-)
 [[ "$final_badging" != *application-debuggable* ]] || exit 1
 final_code=$(printf '%s\n' "$final_badging" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p")
