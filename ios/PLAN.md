@@ -1057,3 +1057,11 @@ stays a replay switch (off in the app).
   (scamgl_last_gpu_error). Left: a merge already running when the app leaves still fails (its planes are released by then) - a retry
   from the shot's NCH is the next step. Near-duplicate N frames (one sensor frame for two requests, stamps < 1 ms apart): dropped
   within 5 ms.
+- Owner 2026-11-17: (1) «Включить логирование» did nothing (marked not used on the iPhone): it now switches the session log's file
+  (default on for the iPhone, set once; the system log keeps every line). (2) «бурсты при отключении продолжают записываться»: the merge's
+  input Documents/Bursts/last.nch + sidecars stayed after every shot; now removed after the shot unless «Сохранять снимки для
+  лаборатории»; a scam_dev.txt keep_burst / hybrid_diagnostics line overrides the switches as on Android - the rows now say so, and
+  each shot logs «saving: stages ... RAW series ...». (3) The iPhone 15 Pro's green / black bands: its RAW buffer is 4224 wide for a
+  4032-wide RAW (192 zero columns at the right); the zero padding is cut off. (4) ProRAW at «Детально · 48 Мп»: isAppleProRAWEnabled was
+  never on after the preset change (enabled=false), and the shot went through the 12 MP SHDR merge; now ProRAW follows the RAW kind on
+  every configuration and full resolution + ProRAW takes one ProRAW frame at the full size (the agreed route; Bayer RAW is 12 MP).

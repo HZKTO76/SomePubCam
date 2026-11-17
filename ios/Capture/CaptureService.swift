@@ -63,8 +63,9 @@ actor CaptureService {
         var suppressesShutterSound = false
     }
 
-    func start(preferredModule: String?, fullResolution: Bool) throws -> State {
+    func start(preferredModule: String?, fullResolution: Bool, proRAW: Bool = false) throws -> State {
         self.fullResolution = fullResolution
+        photoCapture.wantProRAW = proRAW
         if !isSetUp {
             modules = ModuleSettings.apply(DeviceLookup.modules())
             SessionLog.i("Modules", modules.map { "\($0.id)=\($0.label) \($0.kind.rawValue) zoom=\(String(format: "%.2f", $0.zoom)) \($0.deviceName)" }
@@ -94,8 +95,7 @@ actor CaptureService {
                 session.commitConfiguration()
                 throw error
             }
-            // ProRAW is enabled before the session starts: toggling it later reconfigures the whole pipeline.
-            if photoCapture.output.isAppleProRAWSupported { photoCapture.output.isAppleProRAWEnabled = true }
+            // ProRAW (the RAW kind ProRAW) is set in updateConfiguration, before the session starts and on every reconfiguration
             session.commitConfiguration()
             keepRaw()
             observeNotifications()
@@ -156,6 +156,23 @@ actor CaptureService {
         if let id = activeModule?.id, let now = modules.first(where: { $0.id == id }) { activeModule = now }
         return state
     }
+
+    /// The RAW kind ProRAW on / off: the photo output's ProRAW (a reconfiguration of the session)
+    func setProRAW(_ on: Bool) -> State {
+        guard photoCapture.wantProRAW != on else { return state }
+        photoCapture.wantProRAW = on
+        if let device = activeInput?.device {
+            session.beginConfiguration()
+            photoCapture.updateConfiguration(for: device, fullResolution: fullResolution)
+            session.commitConfiguration()
+            SessionLog.i("Capture", "ProRAW \(on ? "on" : "off"): enabled=\(photoCapture.output.isAppleProRAWEnabled), RAW formats "
+                         + photoCapture.output.availableRawPhotoPixelFormatTypes.map(\.fourCC).joined(separator: ","))
+        }
+        return state
+    }
+
+    /// One ProRAW frame can be taken now (ProRAW on and offered at this lens)
+    var hasProRAW: Bool { photoCapture.output.availableRawPhotoPixelFormatTypes.contains { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) } }
 
     func setFullResolution(_ enabled: Bool) -> State {
         fullResolution = enabled

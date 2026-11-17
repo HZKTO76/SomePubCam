@@ -50,8 +50,36 @@ final class SessionLog: @unchecked Sendable {
     static func w(_ tag: String, _ message: String) { shared.write("W", tag, message) }
     static func e(_ tag: String, _ message: String) { shared.write("E", tag, message) }
 
+    /// «Включить логирование» (scamera_full_debug, Android's ScameraDebugLog / ScameraFileLog): off, no line is written to the file
+    /// (the system's unified log still gets it). The settings set it at launch and on every change (SessionLog.applySetting).
+    private let enabledLock = NSLock()
+    private var enabledValue = true
+    var enabled: Bool {
+        get { enabledLock.lock(); defer { enabledLock.unlock() }; return enabledValue }
+        set {
+            enabledLock.lock()
+            let was = enabledValue
+            enabledValue = newValue
+            enabledLock.unlock()
+            if was && !newValue { queue.async { [self] in try? handle?.synchronize(); try? handle?.close(); handle = nil; day = "" } }
+        }
+    }
+
+    /// The stored switch (default on for the iPhone: the logs are how the owner reports a shot; Android's default is off)
+    static func applySetting() {
+        let on = StoredPrefs.bool("scamera_full_debug", true)
+        if shared.enabled != on {
+            if on { shared.enabled = true; i("App", "logging on («Включить логирование»)") }
+            else { i("App", "logging off («Включить логирование»)"); shared.enabled = false }
+        }
+    }
+
     func write(_ level: String, _ tag: String, _ message: String) {
         let now = Date()
+        guard enabled else {
+            logger.log("\(level, privacy: .public)/\(tag, privacy: .public): \(message, privacy: .public)")
+            return
+        }
         logger.log("\(level, privacy: .public)/\(tag, privacy: .public): \(message, privacy: .public)")
         queue.async { [self] in
             let today = dayFormat.string(from: now)

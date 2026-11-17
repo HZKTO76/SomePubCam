@@ -66,7 +66,7 @@ final class CameraModel {
         }
         do {
             _ = try await captureService.start(preferredModule: defaults.string(forKey: "module_active"),
-                                               fullResolution: fullResolution)
+                                               fullResolution: fullResolution, proRAW: rawKind == .proRAW)
             // the stored flash mode and «Про» values on the opened lens
             apply(await captureService.setFlash(flashMode))
             await captureService.applyManual(ManualSettings.load())
@@ -107,6 +107,7 @@ final class CameraModel {
     /// the open lens now, not at the next lens switch (CaptureService.applyStoredPrefs: «Режим фокуса», «Распознавание лиц», «Ночной
     /// буст», «Спорт»'s shutter ceiling), after «Спорт» and «Oldstyle» were settled to one mode (MotionMode.settleWithOldstyle).
     func settingsChanged() async {
+        SessionLog.applySetting()
         settleModes()
         guard status == .running || status == .interrupted else { return }
         await captureService.applyStoredPrefs()
@@ -166,6 +167,7 @@ final class CameraModel {
         rawKind = kind
         defaults.set(kind.rawValue, forKey: Self.rawKindKey)
         SessionLog.i("App", "RAW kind \(kind.rawValue)")
+        Task { apply(await captureService.setProRAW(kind == .proRAW)) }
     }
 
     /// Once: the old single RAW choice (raw_choice: off / bayer / proRAW) into pref_save_raw_key and the RAW kind
@@ -381,7 +383,18 @@ final class CameraModel {
         // FlashMode.flashShot: On, or Auto when the scene asks for it
         let flash = await captureService.flashShot
         if flash { SessionLog.i("Shot", "flash shot (\(flashShown.name))") }
-        if shdr {
+        // «Детально · 48 Мп» with the RAW kind ProRAW: one 48 MP ProRAW frame and its photo (the agreed route: Bayer RAW is 12 MP
+        // only, the SHDR merge works on it; the full resolution is the camera's ProRAW or HEIC), not the 12 MP merge
+        let proRawOffered = await captureService.hasProRAW
+        let proRawShot = fullResolution && raw == .proRAW && proRawOffered
+        if fullResolution && raw == .proRAW && shdr {
+            if proRawShot {
+                SessionLog.i("Shot", "full resolution with ProRAW: one ProRAW frame at the full size, no SHDR merge (Bayer RAW is 12 MP)")
+            } else {
+                SessionLog.w("Shot", "full resolution with ProRAW: no ProRAW at this lens / setting, the SHDR merge at 12 MP")
+            }
+        }
+        if shdr && !proRawShot {
             await captureShdr(started: started, facts: facts, flash: flash)
             return
         }

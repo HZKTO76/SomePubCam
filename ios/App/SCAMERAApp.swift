@@ -15,6 +15,11 @@ struct SCAMERAApp: App {
                 .font(.app(17))
                 .onAppear { AppFont.applyToUIKit() } // Android Fonts: Roboto Flex everywhere, UIKit's bars too
                 .task {
+                    // «Включить логирование»: on for the iPhone unless switched off (the switch shows it: Android's default is off)
+                    if UserDefaults.standard.dictionary(forKey: PostSettings.prefsKey)?["scamera_full_debug"] == nil {
+                        SettingsStore.shared.set("scamera_full_debug", true)
+                    }
+                    SessionLog.applySetting()
                     DeviceTurn.shared.start()
                     await camera.start()
                     // P470: the GPU programs before the first shot (a dialog after an install or an update)

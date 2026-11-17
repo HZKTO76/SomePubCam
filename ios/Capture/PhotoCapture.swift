@@ -15,8 +15,14 @@ final class PhotoCapture {
         lock.unlock()
     }
 
+    /// ProRAW wanted (the RAW kind ProRAW): isAppleProRAWEnabled follows it on every configuration - a preset or format change
+    /// (CaptureService.keepRaw) left it off (the iPhone 15 Pro's log: «proRAW supported=true enabled=false», no ProRAW format)
+    var wantProRAW = false
+
     /// Called with the session already configured for `device`.
     func updateConfiguration(for device: AVCaptureDevice, fullResolution: Bool) {
+        let proRAW = wantProRAW && output.isAppleProRAWSupported
+        if output.isAppleProRAWEnabled != proRAW { output.isAppleProRAWEnabled = proRAW }
         let dims = device.activeFormat.supportedMaxPhotoDimensions
         if let largest = dims.max(by: { $0.megapixels < $1.megapixels }) {
             output.maxPhotoDimensions = fullResolution ? largest : (Self.standard(in: dims) ?? largest)

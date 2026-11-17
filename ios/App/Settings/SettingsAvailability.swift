@@ -497,6 +497,15 @@ struct SettingsAvailability {
             return Lang.t("Выбран DCP-профиль: цвет задаёт его матрица, выбор не действует.",
                           "A DCP profile is chosen: its matrix sets the colour, the choice has no effect.")
         }
+        // a scam_dev.txt line decides before the switch (PreferenceKeys.scamDevSwitch / hybridSwitch): the switch does nothing while it is there
+        if key == "pref_keep_raw_burst", let v = HybridPlan.dev["keep_burst"] {
+            return Lang.t("Задано строкой «keep_burst \(Int(v))» в scam_dev.txt: переключатель не действует, пока строка есть.",
+                          "Set by the line «keep_burst \(Int(v))» of scam_dev.txt: the switch does nothing while the line is there.")
+        }
+        if key == "pref_scam_hybrid_diagnostics", let v = HybridPlan.dev["hybrid_diagnostics"] {
+            return Lang.t("Задано строкой «hybrid_diagnostics \(Int(v))» в scam_dev.txt: переключатель не действует, пока строка есть.",
+                          "Set by the line «hybrid_diagnostics \(Int(v))» of scam_dev.txt: the switch does nothing while the line is there.")
+        }
         if key == "pref_keep_raw_burst" && on("pref_scam_lab_keep", false) {
             return Lang.t("Включено «Сохранять снимки для лаборатории»: RAW-серия уже сохраняется в папку снимка лаборатории.",
                           "“Keep shots for the lab” is on: the RAW burst is already kept in the lab shot's folder.")
@@ -523,7 +532,6 @@ struct SettingsAvailability {
              "pref_avif_speed":
             return L("set.na.webp_avif")
         case "pref_jpeg_fast_encoder": return L("set.na.jpeg_fast")
-        case "scamera_full_debug": return L("set.na.full_debug")
         case "pref_hide_gallery_icon_key": return L("set.na.gallery_icon")
         case "pref_zsl_buffer_count_key": return L("set.na.zsl_buffer")
         case "pref_raw_stream_format": return L("set.na.raw_stream")

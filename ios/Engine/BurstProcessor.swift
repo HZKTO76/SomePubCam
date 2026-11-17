@@ -293,8 +293,22 @@ enum BurstProcessor {
         // «Сохранять RAW-серию» (ScamNeuralClient's keep-burst): the series and its sidecars kept beside last.nch (before the merge,
         // as the worker keeps it: a merge that fails leaves it too)
         if RawBurstKeep.on { RawBurstKeep.keep(nch, time: started, log: { log.append($0) }) }
+        // the merge's own input is not kept (owner: «бурсты при отключении продолжают записываться»): Documents/Bursts/last.nch and
+        // its sidecars go once the shot is processed, unless «Сохранять снимки для лаборатории» keeps the last series for the lab
+        // (Android keeps no series either way unless asked); a series «Сохранять RAW-серию» kept is its own link and stays
+        let keepForLab = StoredPrefs.bool("pref_scam_lab_keep", false)
+        defer {
+            if !keepForLab {
+                for url in [nch] + RawBurstKeep.sidecars.map({ nch.appendingPathExtension($0) }) { try? FileManager.default.removeItem(at: url) }
+            }
+        }
         // «Сохранять этапы обработки» (ScamDiagnostics): the post nodes' outputs and the shot's log in a folder of the shot
         let diagnostics = rawOnly && dngFacts != nil ? nil : ShotDiagnostics.folder(started)
+        log.append("saving: stages («Сохранять этапы обработки») " + (ShotDiagnostics.on ? "on" : "off")
+                   + (HybridPlan.dev["hybrid_diagnostics"] != nil ? " (scam_dev.txt hybrid_diagnostics)" : "")
+                   + ", RAW series («Сохранять RAW-серию») " + (RawBurstKeep.on ? "on" : "off")
+                   + (HybridPlan.dev["keep_burst"] != nil ? " (scam_dev.txt keep_burst)" : "")
+                   + ", the merge's input " + (keepForLab ? "kept for the lab" : "removed after the shot"))
         defer { if let diagnostics { ShotDiagnostics.finish(diagnostics, log: log, facts: lastFactsURL) } }
         guard let shaders = Bundle.main.url(forResource: "shaders", withExtension: nil) else {
             throw EngineError.decode("the pipeline's shaders are missing from the app")
