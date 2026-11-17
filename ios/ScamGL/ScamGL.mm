@@ -198,6 +198,20 @@ void bookGpuTime(const std::string& label, double ms) {
     gGpuTimes.emplace_back(label, ms);
 }
 
+// A failed command buffer: GL_OUT_OF_MEMORY for the GL caller, its Metal reason kept for the shot's log (scamgl_last_gpu_error: e.g.
+// «Insufficient Permission (to submit GPU work from background)» when the app left the screen during a merge)
+std::mutex gGpuErrorLock;
+std::string gGpuError;
+void gpuError(Context& c, NSError* e) {
+    if (!e) return;
+    std::fprintf(stderr, "SCAMGL: GPU error: %s\n", e.localizedDescription.UTF8String);
+    {
+        std::lock_guard<std::mutex> g(gGpuErrorLock);
+        gGpuError = std::string(e.localizedDescription.UTF8String ? e.localizedDescription.UTF8String : "?") + " (Metal error " + std::to_string(long(e.code)) + ")";
+    }
+    if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+}
+
 void submit(Context& c, bool wait) {
     endCompute(c);
     if (c.cb) {
@@ -216,8 +230,7 @@ void submit(Context& c, bool wait) {
         for (id<MTLCommandBuffer> b : c.inFlight) {
             [b waitUntilCompleted];
             if (b.error) {
-                std::fprintf(stderr, "SCAMGL: GPU error: %s\n", b.error.localizedDescription.UTF8String);
-                if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+                gpuError(c, b.error);
             }
         }
         c.inFlight.clear();
@@ -226,7 +239,7 @@ void submit(Context& c, bool wait) {
         std::vector<id<MTLCommandBuffer>> pending;
         for (id<MTLCommandBuffer> b : c.inFlight) {
             if (b.status < MTLCommandBufferStatusCompleted) pending.push_back(b);
-            else if (b.error && c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+            else if (b.error) gpuError(c, b.error);
         }
         c.inFlight.swap(pending);
     }
@@ -250,8 +263,7 @@ void waitForUse(Context& c, id resource, std::unique_lock<std::recursive_mutex>&
         lock.lock();
     }
     if (cb.error) {
-        std::fprintf(stderr, "SCAMGL: GPU error: %s\n", cb.error.localizedDescription.UTF8String);
-        if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+        gpuError(c, cb.error);
     }
     // every finished command buffer's error reported here as the full wait reported them (an earlier failed buffer: the
     // readback's caller must see it); the finished ones are dropped
@@ -259,8 +271,7 @@ void waitForUse(Context& c, id resource, std::unique_lock<std::recursive_mutex>&
     for (id<MTLCommandBuffer> b : c.inFlight) {
         if (b.status < MTLCommandBufferStatusCompleted) { pending.push_back(b); continue; }
         if (b.error) {
-            std::fprintf(stderr, "SCAMGL: GPU error: %s\n", b.error.localizedDescription.UTF8String);
-            if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+            gpuError(c, b.error);
         }
     }
     c.inFlight.swap(pending);
@@ -340,8 +351,7 @@ void readRegion(Context& c, id<MTLTexture> t, MTLRegion region, int bpp, uint8_t
     [cb waitUntilCompleted];
     lock.lock();
     if (cb.error) {
-        std::fprintf(stderr, "SCAMGL: GPU error: %s\n", cb.error.localizedDescription.UTF8String);
-        if (c.error == GL_NO_ERROR) c.error = GL_OUT_OF_MEMORY;
+        gpuError(c, cb.error);
     }
     const uint8_t* src = static_cast<const uint8_t*>(staging.contents);
     for (NSUInteger y = 0; y < region.size.height; ++y) std::memcpy(dst + y * dstRow, src + y * row, row);
@@ -1920,6 +1930,15 @@ double scamgl_take_link_ms(void) { const double ms = tLinkMs; tLinkMs = 0; retur
 
 // The shot's GPU timing on (1) / off (0): while on, the command buffers of contexts without a label are booked too
 void scamgl_gpu_timing(int on) { gGpuTiming = on != 0; }
+
+// The last GPU error's reason (copied into `out`, then cleared); 0 when there was none
+int scamgl_last_gpu_error(char* out, int size) {
+    std::lock_guard<std::mutex> g(gGpuErrorLock);
+    if (gGpuError.empty() || !out || size <= 0) return 0;
+    std::snprintf(out, size_t(size), "%s", gGpuError.c_str());
+    gGpuError.clear();
+    return 1;
+}
 
 // "label ms, label ms, ..." of the stages booked since the last call (completed command buffers only), then cleared
 int scamgl_gpu_times(char* out, int size) {

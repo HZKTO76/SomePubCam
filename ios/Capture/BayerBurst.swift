@@ -224,13 +224,15 @@ extension PhotoCapture {
         let timeout = 4 + 3 * max(0, device.exposureDuration.seconds)
         var lost = 0, duplicates = 0
         var newest: (photo: AVCapturePhoto, stamp: Int64)?
-        var seen = Set<Int64>()
+        // one sensor frame handed to two requests comes with stamps under a millisecond apart (the iPad's 19:48 series: 9 pairs);
+        // sensor frames are at least ~33 ms apart, so stamps within 5 ms are the same frame
+        var seen: [Int64] = []
         func take(_ photos: [AVCapturePhoto], into burst: inout BayerBurst) throws {
             for photo in photos {
                 if photo.isRawPhoto {
                     let stamp = Self.stampNs(photo)
-                    if seen.contains(stamp) { duplicates += 1; continue }
-                    seen.insert(stamp)
+                    if seen.contains(where: { abs($0 - stamp) < 5_000_000 }) { duplicates += 1; continue }
+                    seen.append(stamp)
                     if stamp > (newest?.stamp ?? .min) { newest = (photo, stamp) }
                 }
                 try append(photo, to: &burst, clock: &clock, role: NchWriter.roleNormal, wide: wide)

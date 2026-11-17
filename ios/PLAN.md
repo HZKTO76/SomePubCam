@@ -1051,3 +1051,9 @@ stays a replay switch (off in the app).
   8 newest N - the series' end, where the camera had gone. Fixed: the N frames' times are mirrored about the first one (the newest N is the
   press's, as Android's ring), the first 4 N are taken before the ultrashort / bracketed frames (Android's order around the base), the
   rest after; the AE is held for the series (df41feb9). Without RAW zero shutter lag the N still span ~1-2.5 s after the press.
+- Owner 19:48 («HYBRID ROUTE: «Быстрый» could not run (FAST MERGE GPU base frame GL error=1285, twice)»): the shot was queued, the app
+  went to the background, its merge started there and Metal refused the GPU work (ScamGL reports a failed command buffer as
+  GL_OUT_OF_MEMORY = 1285). Fixed: a queued shot waits for the app on screen before its merge; the Metal reason goes into the error
+  (scamgl_last_gpu_error). Left: a merge already running when the app leaves still fails (its planes are released by then) - a retry
+  from the shot's NCH is the next step. Near-duplicate N frames (one sensor frame for two requests, stamps < 1 ms apart): dropped
+  within 5 ms.

@@ -516,6 +516,15 @@ final class CameraModel {
                 keepAlive.end()
             }
         }
+        // iOS refuses GPU work from the background (Metal: «Insufficient Permission (to submit GPU work from background)»; the
+        // owner's 19:48 shot: queued, the app left the screen, both merge attempts refused): a shot waits for the app on screen
+        if UIApplication.shared.applicationState == .background {
+            SessionLog.i("SHDR", "processing waits for the app on screen (no GPU work in the background)")
+            while UIApplication.shared.applicationState == .background {
+                for await _ in NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification) { break }
+            }
+            SessionLog.i("SHDR", "processing resumes: the app is on screen")
+        }
         setStage(id, .processing)
         meters.startProcessing()
         defer { meters.endProcessing() }

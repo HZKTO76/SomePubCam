@@ -41,6 +41,7 @@ extern "C" {
 void scamgl_label(const char* name);
 void scamgl_gpu_timing(int on);
 int scamgl_gpu_times(char* out, int size);
+int scamgl_last_gpu_error(char* out, int size);
 double scamgl_take_link_ms(void);
 }
 
@@ -320,8 +321,12 @@ static std::function<void(const std::string&, const scam_post::Texture&)> stageD
         }
         photo.log = lines;
     } catch (const std::exception &e) {
+        // the Metal reason behind a GL error of the merge / post (ScamGL: GL_OUT_OF_MEMORY for any failed command buffer)
+        std::string what = e.what();
+        char gpu[512];
+        if (scamgl_last_gpu_error(gpu, int(sizeof gpu))) what += std::string(" - GPU: ") + gpu;
         if (error) *error = [NSError errorWithDomain:@"SCAMShot" code:2
-                                            userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:e.what()] ?: @"processing failed",
+                                            userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:what.c_str()] ?: @"processing failed",
                                                        @"log": [lines copy]}];
     }
     scam_post::postLog() = [](const std::string& s) { std::fprintf(stderr, "%s\n", s.c_str()); };
