@@ -19,6 +19,7 @@ struct BayerBurst {
     var frames: [NchFrame] = []
     var dng = Data()          // the DNG of frame `dngFrame`: levels, noise profile, colour, orientation (the whole frame)
     var dngFrame = 0          // the newest N frame (the base's metadata, as Android's from the base), else the first
+    var padRight = 0, padBottom = 0 // the RAW buffer's zero padding cut off (the iPhone 15 Pro's 4224-wide buffer of a 4032-wide RAW)
     var processed: Data?      // the camera's own HEIC of the first request, for its EXIF
     var report: [String] = []
     var front = false         // the front camera: the photo is mirrored as Android's Parameters.mirror
@@ -504,10 +505,16 @@ extension PhotoCapture {
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer), row = CVPixelBufferGetBytesPerRow(buffer)
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
-        let fullW = w & ~1, fullH = h & ~1
+        // the buffer's zero padding off (the iPhone 15 Pro: a 4224 x 3024 buffer for the 4032 x 3024 RAW, columns 4032..4223 all 0:
+        // merged, they were green / black bands at the photo's edge), measured on the series' first frame
+        if burst.frames.isEmpty { (burst.padRight, burst.padBottom) = Self.zeroPadding(base, rowBytes: row, width: w & ~1, height: h & ~1) }
+        let fullW = (w & ~1) - burst.padRight, fullH = (h & ~1) - burst.padBottom
         let rows = wide && fullW > fullH ? Wide169.rows(fullW, fullH) : fullH
         let first = rows < fullH ? Wide169.firstRow(fullW, fullH) : 0
         if burst.frames.isEmpty {
+            if burst.padRight > 0 || burst.padBottom > 0 {
+                burst.report.append("RAW buffer \(w)x\(h): \(burst.padRight) zero column(s) at the right, \(burst.padBottom) zero row(s) at the bottom cut off")
+            }
             burst.width = fullW
             burst.height = rows
             burst.cfa = cfa
@@ -539,6 +546,26 @@ extension PhotoCapture {
         burst.frames.append(NchFrame(raw: raw, exposure: Float(clock.exposure0 > 0 ? product / clock.exposure0 : 1), iso: UInt32(iso),
                                      noiseSlope: 0, noiseOffset: 0, orderMs: Float(stamp - (clock.t0 ?? stamp)),
                                      role: role, exposureNs: exposureNs, timestampNs: stampNs))
+    }
+
+    /// The columns at the right and the rows at the bottom of a RAW buffer that are all 0 (a black level is never 0: padding, not
+    /// image), even counts (whole 2x2 colour sites), at most a quarter of the frame; every 8th row / column sampled
+    static func zeroPadding(_ base: UnsafeMutableRawPointer, rowBytes: Int, width: Int, height: Int) -> (cols: Int, rows: Int) {
+        guard width >= 64, height >= 64 else { return (0, 0) }
+        func pixel(_ x: Int, _ y: Int) -> UInt16 { base.advanced(by: y * rowBytes + x * 2).assumingMemoryBound(to: UInt16.self).pointee }
+        var cols = 0
+        while cols < width / 4 {
+            let x = width - 1 - cols
+            if stride(from: 0, to: height, by: 8).contains(where: { pixel(x, $0) != 0 }) { break }
+            cols += 1
+        }
+        var rows = 0
+        while rows < height / 4 {
+            let y = height - 1 - rows
+            if stride(from: 0, to: width - cols, by: 8).contains(where: { pixel($0, y) != 0 }) { break }
+            rows += 1
+        }
+        return ((cols + 1) & ~1, (rows + 1) & ~1)
     }
 
     /// The newest frame is 0 ms, earlier ones negative (as Android's orderMs; the merge's own orderMs come from HybridSelect)
