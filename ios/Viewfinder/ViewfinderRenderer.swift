@@ -286,6 +286,7 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
         lookQueue.async { [self] in
             guard let connection = output.connection(with: .video) else { return }
             if connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
+            FlickerWatch.shared.setRotation(connection.videoRotationAngle)
             if connection.isVideoMirroringSupported {
                 connection.automaticallyAdjustsVideoMirroring = false
                 connection.isVideoMirrored = mirrored
@@ -340,6 +341,13 @@ final class ViewfinderRenderer: NSObject, AVCaptureVideoDataOutputSampleBufferDe
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        if FlickerWatch.shared.wanted, let device = (connection.inputPorts.first?.input as? AVCaptureDeviceInput)?.device {
+            let cap = device.activeMaxExposureDuration
+            let exposure = device.exposureDuration.seconds
+            FlickerWatch.shared.frame(sampleBuffer, pixels: pixels,
+                                      fallbackExposureNs: exposure.isFinite ? Int64(exposure * 1e9) : 0,
+                                      capNs: cap.isValid && cap.seconds.isFinite ? Int64(cap.seconds * 1e9) : 0)
+        }
         if FrameAnalysis.shared.wanted { FrameAnalysis.shared.frame(pixels) }
         draw(pixels)
     }

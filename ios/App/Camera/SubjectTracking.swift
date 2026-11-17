@@ -27,7 +27,7 @@ final class FrameAnalysis: @unchecked Sendable {
 
     var wanted: Bool {
         lock.lock(); defer { lock.unlock() }
-        return histogramOn || request != nil || pendingStart != nil
+        return histogramOn || request != nil || pendingStart != nil || FlickerWatch.shared.wanted
     }
 
     var tracking: Bool {

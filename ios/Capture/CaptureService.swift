@@ -35,6 +35,8 @@ actor CaptureService {
 
     init() {
         previewSource = DefaultPreviewSource(session: session)
+        // «Спорт»: a latched / cleared mains flicker or the end of the band-free window: the ceiling again
+        FlickerWatch.shared.onVerdict = { [weak self] in Task { await self?.applyMode() } }
     }
 
     var isAuthorized: Bool {
@@ -187,6 +189,7 @@ actor CaptureService {
 
     /// Switches the input (one camera per session, as AVCam) and applies the module's format and zoom.
     private func apply(_ module: LensModule) throws {
+        FlickerWatch.shared.reset()   // the evidence is the lens session's
         guard let device = AVCaptureDevice(uniqueID: module.deviceID) else { throw CameraError.moduleUnavailable }
         if activeInput?.device != device {
             let previous = activeInput
@@ -365,10 +368,11 @@ actor CaptureService {
         let denominator = HybridPlan.value("mm_shutter", 250)
         guard denominator > 0, denominator.isFinite else { return 0 }
         var ns = HybridPlan.round(1e9 / Double(denominator))
-        // only a set «Мерцание ламп» rounds it: Android's «Авто» rounds when the camera saw the flicker (MotionShutter: the AE's
-        // shutters vote, the frames' row bands decide); the iPhone has no such detector, and the region's mains would round
-        // every Sport ceiling to 10 / 8.3 ms, also outdoors
-        let hz = HybridPlan.setAntibandingHz
+        // whole half periods of the mains (no row bands) where the lamps flicker: «Мерцание ламп» set by hand, or on «Авто» the
+        // flicker FlickerWatch latched (Android MotionShutter: the AE's shutters vote, the frames' row bands decide) - outdoors and
+        // under steady light the setting stays
+        var hz = HybridPlan.setAntibandingHz
+        if hz == 0, case .present(let seen) = FlickerWatch.shared.verdict { hz = seen }
         if HybridPlan.on("mm_flicker", true), hz > 0 {
             let half = HybridPlan.round(1e9 / Double(hz))
             if half > 0 { ns = max(half, ns / half * half) }
@@ -380,7 +384,10 @@ actor CaptureService {
     /// ISO raised instead; outside the mode the lens's own ceiling. Called with the device locked.
     private static func applyMotionCeiling(_ device: AVCaptureDevice) {
         guard device.exposureMode != .custom else { return }   // a manual shutter («Про») is its own
-        let ns = motionCeilingNs()
+        let watch = FlickerWatch.shared
+        watch.setChecking(HybridPlan.motionMode && HybridPlan.setAntibandingHz == 0 && HybridPlan.on("mm_flicker", true))
+        // undecided: the camera's own exposure first (no ceiling) for the band-free frames the check compares with
+        let ns = watch.holdsReference ? 0 : motionCeilingNs()
         let f = device.activeFormat
         var ceiling = CMTime.invalid
         if ns > 0 {

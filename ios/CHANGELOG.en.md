@@ -3,6 +3,7 @@
 English copy of ios/CHANGELOG.md; the build post carries both, section for section (same version, same place).
 
 ## 0.3.7 — Android updates
+- «Спорт» under lamps without bands: the camera detects the flicker itself; outdoors the shutter ceiling stays.
 - The merge and processing as Android's of 17.11: less ghosting in motion, «Why тон» V2 by default, detail in a bright window.
 - «Шумоподавление и склейка»: the motion SNR curve and adaptive «Слияние светов».
 - RAW (DNG) in full colour at the chosen «Разрешение» 1× / 1.5× / 2×.

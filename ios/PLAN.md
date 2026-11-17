@@ -1105,3 +1105,16 @@ adaptive highlight merge, Sabre / Linear DNG output) and the shaders. Ported on 
 - The owner's iPhone 15 Pro window burst on the host (whole shot, defaults): before the update the window white (P558 fix), after it
   the window's frame and the curtain show (the merge's highlight path, Why V2); 28.75 dB against the pre-update photo, as Android.
   The Android reference (Robolectric) was not run here: CI's ios-post-check is the bit-identity gate.
+
+## «Спорт» under lamps: the flicker latched from the camera (2026-11-17)
+Owner: «В спорт режиме у нас не должно быть полос при комнатном освещении, на Андроиде ... полос нет, при этом ограничение выдержки
+работает». The ceiling rounded to whole half periods only with «Мерцание ламп» set by hand (the region's guess on «Авто» rounded it
+outdoors too); on «Авто» the 1/250 s ceiling banded under 50 Hz lamps. FlickerWatch (Capture/FlickerWatch.swift), Android's
+MotionShutter P111 / P212d on the iPhone: while «Спорт» is on with «Авто» and the lens session has no verdict, the camera's own
+exposure runs without the ceiling for 0.6 s (band-free frames: a shutter of two half periods or more is the reference), then the
+ceiling's short frames are compared with it row band by row band (48 bands of the renderer's BGRA green along the sensor's rows,
+ln ratio fitted by a quadratic trend and a sinusoid of 1..8 cycles a frame): amplitude >= 4 % with the residual <= 0.5 of the
+trend's on two frames latches the flicker, six frames without clear it; the AE's settled shutter on whole half periods twice
+latches it with its frequency; no verdict 1.5 s after the window latches it (Android's rule). Latched: the ceiling rounds to the
+half period (1/250 -> 10 ms at 50 Hz); cleared: the setting stays. Device check needed (log lines «mains flicker ... latched» /
+«no mains flicker»).
