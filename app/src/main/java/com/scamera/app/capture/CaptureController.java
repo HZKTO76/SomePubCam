@@ -2627,7 +2627,7 @@ public class CaptureController {
             final CameraCharacteristics lens = mCameraCharacteristics;
             if (lens == null) return;
             // Android 11+: the zoom ratio key (held within the lens's range); older: a centred crop of the active array
-            final Range<Float> ratios = Build.VERSION.SDK_INT >= 30 ? lens.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) : null;
+            final Range<Float> ratios = Build.VERSION.SDK_INT >= 30 ? com.scamera.app.api.SafeRanges.get(lens, CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) : null;
             if (ratios != null) {
                 builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, ratios.clamp(z));
                 return;
@@ -3275,8 +3275,8 @@ public class CaptureController {
         final CaptureResult latest = mPreviewCaptureResult;
         final Long ns = latest == null ? null : latest.get(CaptureResult.SENSOR_EXPOSURE_TIME);
         if (b == null || view == null || companion == null || ns == null || ns <= 0) return null;
-        final Range<Integer> iso = c == null ? null : c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
-        final Range<Integer>[] ranges = c == null ? null : c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+        final Range<Integer> iso = c == null ? null : com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+        final Range<Integer>[] ranges = c == null ? null : com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
         int lo = Integer.MAX_VALUE, hi = 0;
         if (ranges != null) for (Range<Integer> r : ranges) { lo = Math.min(lo, r.getLower()); hi = Math.max(hi, r.getUpper()); }
         final Integer aeMode = b.get(CaptureRequest.CONTROL_AE_MODE), isoBefore = b.get(CaptureRequest.SENSOR_SENSITIVITY);
@@ -3743,8 +3743,8 @@ public class CaptureController {
             // P192: the own AE of the OPPO native mode meters the native RAW. P212b: it starts from this camera's own history
             // (NativeAeSeed: its last settled native exposure or a fresh plain RAW sample, else its plain HAL exposure), never
             // from the global mPreviewExposureTime that any camera's result overwrites
-            final NativeRawExposure ae = new NativeRawExposure(characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
-                    characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), OppoNativeFullRes.frameNs(mVivoSdkCameraId), 0L, 0);
+            final NativeRawExposure ae = new NativeRawExposure(com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+                    com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), OppoNativeFullRes.frameNs(mVivoSdkCameraId), 0L, 0);
             // P212a: the ISO the mode delivers, stored by earlier sessions (the key CC uses for mExposureLimits below: the physical
             // camera and the RAW reader's size, which is the profile's size in the native session), so the first split is capped
             final int cap = PreferenceKeys.scamDevSwitch("native_ae_cap", true)
@@ -4032,7 +4032,7 @@ public class CaptureController {
                         : Dcg14Mode.requestKeys(characteristics)) ? "/dcg" : ""),
                 mImageReaderRaw.getWidth(), mImageReaderRaw.getHeight(), useMaximumResolutionKey);
         mSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
-        FpsRangeAuto = new Range<>(slowestAeRate(characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)), 30);
+        FpsRangeAuto = new Range<>(slowestAeRate(com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)), 30);
         afModesOfCamera = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES);
         mFlashSupported = Boolean.TRUE.equals(characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE));
         Camera2ApiAutoFix.Init();
@@ -6597,7 +6597,7 @@ public class CaptureController {
         final int generation = mSessionGeneration.get();
         handler.postDelayed(() -> {
             if (generation != mSessionGeneration.get() || mPreviewRequestBuilder == null) return;
-            final FpsProbe probe = new FpsProbe(FpsProbe.candidates(c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)));
+            final FpsProbe probe = new FpsProbe(FpsProbe.candidates(com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)));
             if (!probe.next(android.os.SystemClock.elapsedRealtimeNanos())) return;
             mFpsProbe = probe;
             com.scamera.app.util.UiMessages.info(Lang.t("Проверка частот кадров…", "Checking the frame rates…"));
@@ -7704,7 +7704,7 @@ public class CaptureController {
         final CameraCharacteristics c = cc == null ? null : cc.mCameraCharacteristics;
         // the switch turned off where nothing meters (the boost is cleared by the next meter or session): nothing added
         if (ettr == null || c == null || ettr.ev() <= 0f || !PreferenceKeys.isEttr()) return userIndex;
-        final Range<Integer> range = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+        final Range<Integer> range = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
         final android.util.Rational step = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
         if (range == null || step == null) return userIndex;
         return Ettr.index(userIndex, ettr.ev(), step.floatValue(), range.getLower(), range.getUpper());
@@ -10270,7 +10270,7 @@ public class CaptureController {
                 // normal mode; the ultrashort follows the first N the 200 MP mode delivers instead (from 4 stills)
                 if (stillOnlyFullRes() && !VivoSdkFullRes.oppo() && PreferenceKeys.scamDevSwitch("vivo_still_us_from_n", false)) {
                     final android.util.Range<Integer> isoRange = characteristics == null ? null
-                            : characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+                            : com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
                     capture.ultrashortFromFirstN(HybridPlan.ultrashortFactor(), ULTRASHORT_MIN_NS, isoRange == null ? 1 : isoRange.getLower());
                 }
             }
@@ -10287,7 +10287,7 @@ public class CaptureController {
         }
         // P710: no still above the gain the full-size mode gives (the shutter takes the rest; X300 Ultra 2026-11-14 log)
         capture.isoCap(VivoSdkFullResCapture.stillIsoCap(stillOnlyFullRes() && VivoQcomIsz.device(), characteristics == null ? null
-                        : characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), honouredIsoCap()),
+                        : com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), honouredIsoCap()),
                 VivoSdkFullResCapture.stillShutterCeiling(paramController.manualPreviewShutterNs() > 0 || manualPslNs > 0,
                         characteristics == null ? 0 : ExposureRanges.shutter(characteristics).getUpper()));
         mVivoSdkCapture = capture;
@@ -10644,8 +10644,8 @@ public class CaptureController {
                     final Integer mIso=metered==null?null:metered.get(CaptureResult.SENSOR_SENSITIVITY);
                     final long yNs=stockPlan!=null&&stockPlan.shutter(0)>0?stockPlan.shutter(0):mNs!=null?mNs:0;
                     final int yIso=stockPlan!=null&&stockPlan.iso(0)>0?stockPlan.iso(0):mIso!=null?mIso:0;
-                    plan=YuvMergePlan.build(yNs,yIso,mCameraCharacteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
-                            mCameraCharacteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),yuvScene[0],yuvScene[1],
+                    plan=YuvMergePlan.build(yNs,yIso,com.scamera.app.api.SafeRanges.get(mCameraCharacteristics, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+                            com.scamera.app.api.SafeRanges.get(mCameraCharacteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),yuvScene[0],yuvScene[1],
                             YuvMergePlan.Tuning.read(),com.scamera.app.processing.yuv.YuvFrames.packedBytes(
                                     mImageReaderRaw.getWidth(),mImageReaderRaw.getHeight(),yuvRoute.format==YuvMergeRoute.P010?10:8),
                             yuvRoute.curve||yuvRoute.hlg,YuvMergePlan.budget()); // P693: the budget of this phone's memory class
@@ -11339,7 +11339,7 @@ public class CaptureController {
     private void widenSensitivityRange(int iso) {
         CameraCharacteristics c = mCameraCharacteristics;
         if (c == null || iso <= 0) return;
-        android.util.Range<Integer> r = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+        android.util.Range<Integer> r = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
         if (r == null || (iso >= r.getLower() && iso <= r.getUpper())) return;
         android.util.Range<Integer> wider = new android.util.Range<>(Math.min(r.getLower(), iso), Math.max(r.getUpper(), iso));
         try {

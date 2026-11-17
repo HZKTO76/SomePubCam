@@ -225,8 +225,8 @@ public final class HybridPlan {
      */
     static HybridPlan build(long nShutterNs, int nIso, float clipFraction, CameraCharacteristics characteristics, ExposureLimits limits,
                             boolean dcg, boolean gainFloorAtN) {
-        Range<Long> times = capped(characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE), limits == null ? Long.MAX_VALUE : limits.shutterCap());
-        Range<Integer> isos = capped(characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), limits == null ? Integer.MAX_VALUE : limits.isoCap());
+        Range<Long> times = capped(com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE), limits == null ? Long.MAX_VALUE : limits.shutterCap());
+        Range<Integer> isos = capped(com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), limits == null ? Integer.MAX_VALUE : limits.isoCap());
         if (times == null || isos == null || nShutterNs <= 0 || nIso <= 0)
             throw new IllegalStateException(Lang.t("SHDR: нет экспозиции превью или диапазонов сенсора", "SHDR: no preview exposure or sensor ranges"));
         final double n = (double) nShutterNs * nIso;
@@ -307,9 +307,9 @@ public final class HybridPlan {
     public static HybridPlan buildNormalBack(long nShutterNs, int nIso, float clipFraction, CameraCharacteristics characteristics, int normals,
                                              ExposureLimits limits, long motionCapNs) {
         if (nShutterNs <= 0 || nIso <= 0) return autoExposure(normals);
-        Range<Long> times = characteristics == null ? null : capped(characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+        Range<Long> times = characteristics == null ? null : capped(com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
                 limits == null ? Long.MAX_VALUE : limits.shutterCap());
-        Range<Integer> isos = characteristics == null ? null : capped(characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+        Range<Integer> isos = characteristics == null ? null : capped(com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
                 limits == null ? Integer.MAX_VALUE : limits.isoCap());
         final boolean motion = motionCapNs > 0;
         int iso = motion ? Math.max(1, Math.min(nIso, limits == null ? Integer.MAX_VALUE : limits.isoCap()))

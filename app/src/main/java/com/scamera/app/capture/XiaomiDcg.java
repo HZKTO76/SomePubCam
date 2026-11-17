@@ -125,7 +125,7 @@ public final class XiaomiDcg {
     /** The mode's AE target range on this camera (null: none to set). */
     @Nullable
     public static Range<Integer> fpsRange(@Nullable CameraCharacteristics c) {
-        final Range<Integer>[] listed = c == null ? null : c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+        final Range<Integer>[] listed = c == null ? null : com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
         int[][] ranges = null;
         if (listed != null) {
             ranges = new int[listed.length][];

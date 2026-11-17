@@ -112,8 +112,8 @@ public final class ExposureRanges {
             int[] known = knownProRange(android.os.Build.DEVICE, focalLength(c));
             if (known != null) { vMin = known[0]; vMax = known[1]; }
         }
-        Range<Integer> out = iso(c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), vMin, vMax, learned[0], learned[1]);
-        logOnce("iso " + cameraId, "camera " + cameraId + " ISO declared " + c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        Range<Integer> out = iso(com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE), vMin, vMax, learned[0], learned[1]);
+        logOnce("iso " + cameraId, "camera " + cameraId + " ISO declared " + com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
                 + " pro " + vMin + ".." + vMax + " AE seen " + learned[0] + ".." + learned[1] + " -> " + out);
         return out;
     }
@@ -142,7 +142,7 @@ public final class ExposureRanges {
     /** The module's shutter range for the ruler. */
     public static Range<Long> shutter(@Nullable CameraCharacteristics c) {
         if (c == null) return shutter(null, null);
-        final Range<Long> declared = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+        final Range<Long> declared = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
         final Long maxFrame = c.get(CameraCharacteristics.SENSOR_INFO_MAX_FRAME_DURATION);
         final Long vendor = vendorExposureMax(c);
         final Range<Long> out = shutter(declared, maxFrame, vendor);

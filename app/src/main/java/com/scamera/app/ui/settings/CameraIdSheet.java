@@ -304,7 +304,7 @@ final class CameraIdSheet {
                 String sub = "";
                 try {
                     final CameraCharacteristics ch = cm.getCameraCharacteristics(part);
-                    final Range<Integer> iso = ch.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+                    final Range<Integer> iso = com.scamera.app.api.SafeRanges.get(ch, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
                     if (iso != null) sub = "ISO " + iso.getLower() + "–" + iso.getUpper();
                     if (android.os.Build.VERSION.SDK_INT >= 28 && !ch.getPhysicalCameraIds().isEmpty())
                         sub += (sub.isEmpty() ? "" : " · ") + c.getString(R.string.camera_id_logical, new ArrayList<>(ch.getPhysicalCameraIds()).toString());

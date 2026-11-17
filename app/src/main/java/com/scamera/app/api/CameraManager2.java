@@ -220,8 +220,8 @@ public final class CameraManager2 {
                 && !com.scamera.app.settings.PreferenceKeys.scamDevSwitch("vivo_teleconverter", false)) return true;
         if (AuxiliarySensors.notAPhotoCamera(characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES))) return true;
         final float[] focal = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
-        final android.util.Range<Integer> iso = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
-        final android.util.Range<Long> exposure = characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+        final android.util.Range<Integer> iso = com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+        final android.util.Range<Long> exposure = com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
         return AuxiliarySensors.noLensGainOrExposure(focal != null && focal.length > 0 ? focal[0] : Float.NaN,
                 iso != null ? iso.getUpper() : -1, exposure != null ? exposure.getUpper() : -1L);
     }

@@ -47,7 +47,7 @@ final class RemosaicMetadataProbe {
         for (CameraCharacteristics.Key<?> key : c.getKeys()) {
             if (!candidate(key.getName())) continue;
             try { value("characteristics", key.getName(), c.get(key)); }
-            catch (Exception e) { failure(key.getName(), e); }
+            catch (Exception | AssertionError e) { failure(key.getName(), e); } // P732: a Range the HAL lists unordered
         }
         out.append("advertised request controls (not set):\n");
         if (c.getAvailableCaptureRequestKeys() != null) {
@@ -78,7 +78,7 @@ final class RemosaicMetadataProbe {
         }
     }
 
-    private void failure(String name, Exception e) {
+    private void failure(String name, Throwable e) {
         out.append(name).append(" unreadable: ").append(e.getClass().getSimpleName()).append('\n');
     }
 

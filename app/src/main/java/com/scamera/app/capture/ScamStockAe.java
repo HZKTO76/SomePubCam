@@ -101,8 +101,8 @@ public final class ScamStockAe {
         }
         public void apply(CaptureRequest.Builder builder,int index,CameraCharacteristics characteristics) {
             int slot=slot(index);
-            android.util.Range<Long> times=characteristics.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
-            android.util.Range<Integer> gains=characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+            android.util.Range<Long> times=com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+            android.util.Range<Integer> gains=com.scamera.app.api.SafeRanges.get(characteristics, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
             if(times==null||gains==null)throw new IllegalStateException(Lang.t("Стоковая экспозиция вне диапазона Camera2: диапазон недоступен","Stock exposure outside the Camera2 range: range unavailable"));
             long clampedShutter=clampNear(shutter[slot],times.getLower(),times.getUpper(),SHUTTER_ROUNDING_TOLERANCE_NS,Lang.t("выдержка","shutter"));
             int clampedIso=(int)clampNear(iso[slot],gains.getLower(),gains.getUpper(),ISO_ROUNDING_TOLERANCE,"ISO");

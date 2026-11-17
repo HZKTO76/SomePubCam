@@ -402,7 +402,7 @@ public final class OplusIsz {
     public static void exposureFloor(@Nullable android.hardware.camera2.CameraCharacteristics c) {
         long floor = 0;
         try {
-            final android.util.Range<Long> r = c == null ? null : c.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+            final android.util.Range<Long> r = c == null ? null : com.scamera.app.api.SafeRanges.get(c, android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
             if (r != null && r.getLower() != null) floor = r.getLower();
         } catch (RuntimeException ignored) {
         }

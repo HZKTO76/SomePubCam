@@ -418,7 +418,7 @@ public class ParamController implements Observer {
         final CameraCharacteristics c = CaptureController.mCameraCharacteristics;
         if (preview == null || c == null) return;
         try {
-            final android.util.Range<Integer> range = c.get(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE);
+            final android.util.Range<Integer> range = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE);
             if (range == null) return;
             final long boost = Math.round(100 * Math.max(1, ratio));
             preview.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST,

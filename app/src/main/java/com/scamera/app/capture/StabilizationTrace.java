@@ -217,7 +217,7 @@ final class StabilizationTrace {
             if (Build.VERSION.SDK_INT >= 28)
                 for (CaptureRequest.Key<?> k : chars.getAvailableSessionKeys())
                     if (isStabName(k.getName())) keys.add("session key " + k.getName());
-        } catch (RuntimeException ignored) { }
+        } catch (RuntimeException | AssertionError ignored) { } // P732
         submit(() -> {
             Log.i(TAG, "session " + h + " gyro=" + hasGyro);
             for (String k : keys) Log.i(TAG, "  " + k);

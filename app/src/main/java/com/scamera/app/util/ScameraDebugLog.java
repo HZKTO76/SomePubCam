@@ -250,7 +250,7 @@ public final class ScameraDebugLog {
                             .append(" mm, physical ").append(c.getPhysicalCameraIds())
                             .append(", pixel array ").append(c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE))
                             .append(", RAW ").append(rawSizes(c))
-                            .append(", iso ").append(c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE))
+                            .append(", iso ").append(com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE))
                             .append(", modes ").append(com.scamera.app.capture.SensorModeBand.describe(c)).append("\n");
                 } catch (Throwable t) {
                     sb.append("unlisted camera ").append(id).append(": ").append(t.getClass().getSimpleName()).append("\n");
@@ -359,8 +359,8 @@ public final class ScameraDebugLog {
                 sb.append("  black level: n/a\n");
             }
 
-            android.util.Range<Integer> iso = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
-            android.util.Range<Long> exp = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+            android.util.Range<Integer> iso = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+            android.util.Range<Long> exp = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
             sb.append("  iso range: ").append(iso == null ? "n/a" : iso).append('\n');
             // P585: the HAL's own mode table (the nubia's FULLRES row lives there; its static sizes changed between sessions)
             sb.append("  sensor mode table: ").append(com.scamera.app.capture.SensorModeBand.describe(c)).append('\n');

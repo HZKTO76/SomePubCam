@@ -680,7 +680,7 @@ public final class XiaomiTeleZoom {
                         ids.put(id, physicals);
                         if (floats(c, KEY_REAL_RANGE) != null) smooth.add(id);
                         if (Build.VERSION.SDK_INT >= 30) {
-                            android.util.Range<Float> range = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
+                            android.util.Range<Float> range = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
                             if (range != null) top.put(id, range.getUpper());
                         }
                     } catch (android.hardware.camera2.CameraAccessException | RuntimeException e) {
@@ -844,7 +844,7 @@ public final class XiaomiTeleZoom {
         }
         Log.i(TAG, "tele " + id + " vendor request keys (zoom/mode/remosaic): " + vendor.toString().trim());
         Object range = null;
-        try { if (Build.VERSION.SDK_INT >= 30) range = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE); } catch (RuntimeException ignored) { /* none */ }
+        try { if (Build.VERSION.SDK_INT >= 30) range = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE); } catch (RuntimeException ignored) { /* none */ }
         Log.i(TAG, "tele " + id + ": focal lengths " + Arrays.toString(focalList) + " (75 mm = " + fMin + " mm), equivalent "
                 + equivalent(c) + " mm, zoomRatio range " + range + ", result keys: " + keys.toString().trim()
                 + (lensFixed ? " [crop mode: the lens did not follow earlier]" : ""));

@@ -2,6 +2,10 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 (8) — Honor
+
+- Fixed a crash at launch on Honor: the camera reported its sensitivity or exposure range with the bounds swapped; it is now read correctly.
+
 ## 2026-11-17 (7) — Processing without stalls
 
 - Processing threads no longer fall into Android's background group. On some phones (the LG V50, for one) it made processing wait tens of times longer than needed between pieces of work while the GPU sat idle.

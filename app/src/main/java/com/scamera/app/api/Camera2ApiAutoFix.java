@@ -32,14 +32,14 @@ public final class Camera2ApiAutoFix {
         final CameraCharacteristics lens = CaptureController.mCameraCharacteristics;
         // one reflective key listing for both vendor scans (it was read twice per camera open)
         List<Object> vendorKeys = null;
-        final Range<Long> exposure = lens.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+        final Range<Long> exposure = com.scamera.app.api.SafeRanges.get(lens, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
         if (exposure != null) {
             vendorKeys = CameraReflectionApi.getCameraCharacteristicsKeys(lens, null, true);
             fixExposureTime(lens, exposure, vendorKeys);
         }
-        final Range<Integer> compensation = exposureCompensationRange(lens.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE));
+        final Range<Integer> compensation = exposureCompensationRange(com.scamera.app.api.SafeRanges.get(lens, CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE));
         CameraReflectionApi.set(lens, CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, compensation);
-        final Range<Integer> iso = lens.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+        final Range<Integer> iso = com.scamera.app.api.SafeRanges.get(lens, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
         if (iso != null) {
             if (vendorKeys == null) vendorKeys = CameraReflectionApi.getCameraCharacteristicsKeys(lens, null, true);
             fixIso(lens, iso, vendorKeys);

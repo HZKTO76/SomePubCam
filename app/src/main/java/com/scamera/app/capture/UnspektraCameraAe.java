@@ -126,8 +126,8 @@ public final class UnspektraCameraAe {
             long manualTime = camera.getParamController().manualPreviewShutterNs();
             if (manualIso > 0 && manualTime > 0) { invalidate(); return false; }
             CameraCharacteristics c = CaptureController.mCameraCharacteristics;
-            Range<Integer> ir = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
-            Range<Long> tr = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
+            Range<Integer> ir = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+            Range<Long> tr = com.scamera.app.api.SafeRanges.get(c, CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE);
             if (ir == null || tr == null) return false;
             int minIso = ir.getLower(), maxIso = Math.min(ir.getUpper(), camera.honouredIsoCap());
             maxIso = Math.max(minIso, maxIso);

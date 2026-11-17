@@ -40,7 +40,7 @@ public class IsoExpoSelector {
     }
 
     private static <T extends Comparable<? super T>> Range<T> range(CameraCharacteristics.Key<Range<T>> key) {
-        return CaptureController.mCameraCharacteristics.get(key);
+        return com.scamera.app.api.SafeRanges.get(CaptureController.mCameraCharacteristics, key);
     }
 
     /** One frame's exposure: time (ns) and ISO, the camera's limits, and its role and layer in the merge. */
