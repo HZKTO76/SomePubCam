@@ -2,6 +2,12 @@
 
 English copy of ios/CHANGELOG.md; the build post carries both, section for section (same version, same place).
 
+## 0.3.6 — fixes
+- iPhone 15 Pro: no more green / black bands at the photo's edge.
+- ProRAW is taken at 48 MP with «Детально · 48 Мп».
+- «Включить логирование» and keeping RAW series work; «СкаМастер» as on Android, the style shows in the viewfinder.
+- The merge no longer fails when the app goes to the background with a shot queued.
+
 ## 0.3.5 — the shot at the press
 - The shot is built on the frames at the press, not at the series' end: moving the camera during the capture keeps what was aimed at.
 - Lens vignetting is corrected from the camera's data.
