@@ -12,6 +12,16 @@ uniform sampler2D LBuffer;
 uniform int uDown;
 // P370 (B3): 1 = the base is Display P3 (PhotoOutput): its luminance takes the P3 weights; 0 / unset: sRGB (Rec.709)
 uniform int uP3;
+// P728 (owner, 2026-11-17: «чтобы при включении Ultra HDR динамический диапазон действительно улучшался, а не просто становилось
+// светлее как в большинстве стоков»): the boost only where the SDR tone curve compressed the light - from uKnee.x to uKnee.y of the
+// SDR's linear luminance it fades in (smoothstep), below it the HDR rendition is the SDR picture itself. With the anchor taken at
+// the knee (SceneGainMap: the scene's ratio there is 1), a mid-grey wall, faces and every diffuse surface keep their SDR level on
+// an HDR display, the highlights get the scene's own headroom over them (clouds, the sky, lights and their texture): a wider
+// range, not a brighter picture. uKnee.x <= 0: off (the boost from the median anchor everywhere, as before).
+uniform vec2 uKnee;
+// P728: 1 = measure pass - the block's log2(scene / SDR) where its SDR luminance is at the knee (uKnee.x / 1.25 .. x 1.25), as
+// (v + 4) / 8 in [1 / 255, 1]; 0 elsewhere (SceneGainMap's median of it moves the anchor to the knee)
+uniform int uMeasure;
 out vec4 Output;
 
 #define SHADOW_FADE 0.02
@@ -44,7 +54,14 @@ void main() {
     float sdrL = base / float(n);
     float sceneL = scene / float(n);
     float boost = log2(sceneL / sdrL);
+    if (uMeasure == 1) {
+        float y = sdrL - uEps;
+        float v = y >= uKnee.x / 1.25 && y <= uKnee.x * 1.25 ? clamp((boost + 4.0) / 8.0, 1.0 / 255.0, 1.0) : 0.0;
+        Output = vec4(v, v, v, 1.0);
+        return;
+    }
     boost *= smoothstep(0.0, SHADOW_FADE, sdrL - uEps);
+    if (uKnee.x > 0.0) boost *= smoothstep(uKnee.x, max(uKnee.y, uKnee.x + 0.001), sdrL - uEps);
     int code = int(clamp(boost / uScale, 0.0, 1.0) * 255.0 + 0.5);
     float level = float(code) / 255.0;
     Output = vec4(level, level, level, 1.0);

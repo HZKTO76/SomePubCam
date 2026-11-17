@@ -463,6 +463,54 @@ def scene_luma():
         failures.append('Ultra HDR: the sky on an HDR display x%s of the scene, not the SDR\'s x0.86' % np.round(sky_new, 3))
     if not np.array_equal(hdr['old'][n // 2:], hdr['new'][n // 2:]):
         failures.append('Ultra HDR: the ground\'s boost moved')
+    # P728: the boost only where the SDR tone curve compressed the light. A scene ramp of 12 EV through a filmic curve (a lifted
+    # toe, a shoulder from 0.4 up): with the knee (uKnee 0.3 .. 0.7, the anchor moved to the knee by the measure pass, as
+    # SceneGainMap.kneeAnchor) every SDR value below 0.3 keeps its level on an HDR display, the shoulder gets the scene's headroom
+    # over the knee, monotonic in the scene; the old median anchor lifted the upper mid tones too (a brighter picture)
+    n = 96
+    e = 0.18 * 2.0 ** np.linspace(-6, 6, n)                              # scene luminance, mid grey 0.18
+    f = e * (1 + e / 16) / (1 + e)                                         # the SDR's display-linear luminance: Reinhard's shoulder
+    t = np.clip(f * 0.18 / (0.18 * (1 + 0.18 / 16) / 1.18), 0, 1)          # mid grey kept at 0.18
+    enc = np.where(t <= 0.0031308, 12.92 * t, 1.055 * t ** (1 / 2.4) - 0.055)
+    enc8 = np.round(enc * 255) / 255
+    t8 = np.where(enc8 <= 0.04045, enc8 / 12.92, ((enc8 + 0.055) / 1.055) ** 2.4)
+    base_img = np.zeros((1, n, 4))
+    base_img[0, :, :3] = enc8[:, None]
+    base_img[0, :, 3] = 1
+    pl = np.zeros((1, n, 4))
+    pl[0, :, :3] = e[:, None]
+    pl[0, :, 3] = 1
+    anchor = np.median(t8) / np.median(e)
+    common = {'uDown': 1, 'uScale': scale, 'uEps': eps, 'uP3': 0}
+    texs = {'InputBuffer': tex(base_img), 'LBuffer': tex(pl)}
+    m = draw(gprog, (n, 1), texs, dict(common, uAnchor=float(anchor), uKnee=(0.3, 0.7), uMeasure=1))[0, :, 0]
+    codes = np.round(m * 255)
+    band = codes[codes >= 1] / 255
+    if band.size == 0:
+        failures.append('Ultra HDR knee: the measure pass found no block at the knee')
+        band = np.array([0.5])
+    lift = float(np.clip(np.median(band) * 8 - 4, -2, 3))
+    knee_anchor = anchor * 2 ** -lift
+
+    def hdr_of(v):
+        return (t8 + eps) * 2.0 ** (v * scale) - eps
+    old = draw(gprog, (n, 1), texs, dict(common, uAnchor=float(anchor), uKnee=(0.0, 0.0), uMeasure=0))[0, :, 0]
+    new = draw(gprog, (n, 1), texs, dict(common, uAnchor=float(knee_anchor), uKnee=(0.3, 0.7), uMeasure=0))[0, :, 0]
+    h_old, h_new = hdr_of(old), hdr_of(new)
+    mids = (t8 > 0.2) & (t8 < 0.3)                                        # the upper mid tones under the knee
+    top = t8 >= 0.9
+    print('P728 knee: the scene over the SDR at the knee %+.2f EV; upper mid tones (SDR 0.2 .. 0.3) on an HDR display x%.3f .. %.3f before, '
+          'x%.3f .. %.3f now; the shoulder (SDR >= 0.9) +%.2f .. +%.2f EV now (before +%.2f .. +%.2f)'
+          % (lift, (h_old / t8)[mids].min(), (h_old / t8)[mids].max(), (h_new / t8)[mids].min(), (h_new / t8)[mids].max(),
+             (new * scale)[top].min(), (new * scale)[top].max(), (old * scale)[top].min(), (old * scale)[top].max()))
+    if np.any(new[t8 < 0.3] != 0):
+        failures.append('Ultra HDR knee: SDR values under the knee are boosted (%s)' % new[t8 < 0.3][new[t8 < 0.3] != 0][:4])
+    if not (new * scale)[top].min() > 0.5:
+        failures.append('Ultra HDR knee: the shoulder gains under 0.5 EV (%.2f)' % (new * scale)[top].min())
+    if np.any(np.diff(h_new) < -1e-6):
+        failures.append('Ultra HDR knee: the HDR rendition is not monotonic in the scene')
+    if not (h_old / t8)[mids].max() > 1.05:
+        failures.append('Ultra HDR knee: the case no longer shows the old mid-tone lift (the check would not see a regression)')
     ctx.release()
     for f in failures:
         print('FAIL: ' + f)

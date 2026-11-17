@@ -2,6 +2,10 @@
 
 English copy of CHANGELOG.md, from 2026-11-09 on; the build post carries both, section for section (same date, same place).
 
+## 2026-11-17 (5) — HDR photo
+
+- Changed how «HDR photo» works: on an HDR display only the highlights the regular photo compressed get brighter, the sky, clouds, lights and reflections with their detail. Mid tones and shadows stay as in the regular photo: a wider range, not just a brighter picture.
+
 ## 2026-11-17 (4) — Processing speed
 
 - Post-processing sends its work to the GPU in larger pieces, each touching only its own band of the frame. Photos are ready sooner, most of all on older phones, and the result is the same to the pixel.

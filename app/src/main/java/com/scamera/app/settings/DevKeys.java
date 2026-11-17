@@ -536,6 +536,11 @@ public final class DevKeys {
                 "One processing GPU context for the whole run: the shader programs are not loaded again for every shot (off: a new context every shot)")));
         k.add(s(post, "resize_separable", true, Lang.t("«Уменьшить до»: ресайз в два прохода (по строкам, затем по столбцам; Lanczos-3 2:1 — в 5 раз меньше выборок, тот же результат). Выкл — один 2D-проход, как раньше",
                 "«Downscale to»: the resize in two passes (rows, then columns; Lanczos-3 at 2:1 takes 5 times fewer samples, the same result). Off: one 2D pass as before")));
+        // P728: the Ultra HDR boost only above the SDR's knee, the anchor at the knee (the mid tones keep their SDR level)
+        k.add(n(post, "hdr_knee_lo", "0.3", Lang.t("Ultra HDR: яркость SDR (линейная), с которой начинается прибавка для HDR-экрана; ниже кадр на HDR-экране как SDR. 0 — прибавка от медианы, как раньше",
+                "Ultra HDR: the SDR (linear) luminance where the HDR display's boost starts; below it the HDR display shows the SDR. 0: the boost from the median, as before")));
+        k.add(n(post, "hdr_knee_hi", "0.7", Lang.t("Ultra HDR: яркость SDR (линейная), с которой прибавка полная (от «hdr_knee_lo» до неё — плавно)",
+                "Ultra HDR: the SDR (linear) luminance where the boost is whole (smoothly from «hdr_knee_lo»)")));
         k.add(s(post, "gainmap_run_context", true, Lang.t("Карта усиления Ultra HDR / HDR HEIC считается в GPU-контексте обработки снимка (те же пиксели; без нового контекста и загрузки шейдеров на каждый снимок). Выкл — свой контекст, как раньше",
                 "The Ultra HDR / HDR HEIC gain map runs on the shot's processing GPU context (the same pixels; no new context and shader loading every shot). Off: a context of its own as before")));
         k.add(s(post, "effmap_real", true, Lang.t("Карта числа кадров для шумоподавления — реальная (выкл — старая)", "Frame-count map for the denoise: the real one (off: the old one)")));

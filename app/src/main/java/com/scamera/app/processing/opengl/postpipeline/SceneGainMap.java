@@ -189,11 +189,13 @@ final class SceneGainMap {
                 skyRatio.close();
                 skyRatio = null;
             }
-            final float anchor = anchor(shot.prog, plane, sdrTex);
             final int gw = Math.max(1, shot.pictureSize.x / down), gh = Math.max(1, shot.pictureSize.y / down);
+            final float[] knee = knee();
+            float anchor = anchor(shot.prog, plane, sdrTex);
+            if (knee[0] > 0f) anchor = kneeAnchor(shot, sdrTex, plane, anchor, down, knee, gw, gh);
             final GLTexture encoded = new GLTexture(new Point(gw, gh), RGBA8);
             encoded.renderInto();
-            drawGainMap(shot, sdrTex, plane, anchor, down, scale, encoded);
+            drawGainMap(shot, sdrTex, plane, anchor, down, scale, knee, 0, encoded);
             sdrTex.close();
             plane.close();
             final float[] range = {Float.NaN};
@@ -314,8 +316,80 @@ final class SceneGainMap {
         return k;
     }
 
-    private static void drawGainMap(Shot shot, GLTexture sdrTex, GLTexture plane, float anchor, int down, float scale,
-                                    GLTexture target) {
+    /** P728: the SDR linear luminance where the boost starts and where it is whole (scam_dev hdr_knee_lo / hi; lo 0: off). */
+    static final float KNEE_LO = 0.30f, KNEE_HI = 0.70f;
+    /** P728: the share of the map's blocks that must lie at the knee for its ratio to move the anchor. */
+    static final float KNEE_MIN_SHARE = 0.002f;
+
+    static float[] knee() {
+        float lo = KNEE_LO, hi = KNEE_HI;
+        try {
+            lo = com.scamera.app.settings.PreferenceKeys.scamDevNumber("hdr_knee_lo", KNEE_LO);
+            hi = com.scamera.app.settings.PreferenceKeys.scamDevNumber("hdr_knee_hi", KNEE_HI);
+        } catch (RuntimeException | LinkageError ignored) {
+        }
+        return kneeOf(lo, hi);
+    }
+
+    /** P728: {lo, hi} in (0, 1), hi above lo; lo <= 0 or not finite: {0, 0} (off). */
+    static float[] kneeOf(float lo, float hi) {
+        if (!(lo > 0f) || !Float.isFinite(lo) || !Float.isFinite(hi)) return new float[]{0f, 0f};
+        lo = Math.min(lo, 0.95f);
+        hi = Math.min(Math.max(hi, lo + 0.02f), 1f);
+        return new float[]{lo, hi};
+    }
+
+    /**
+     * P728: the anchor moved so that the scene's ratio to the SDR is 1 at the knee: the median of log2(anchor L / SDR) over the
+     * blocks whose SDR luminance is at the knee (ultrahdr/gainmap uMeasure 1, the gain map's own blocks), b, gives anchor x 2^-b;
+     * the highlights' boost is then the scene's headroom over the knee the SDR tone curve took away, nothing the curve's mid-tone
+     * contrast gave. Too few blocks at the knee (a night shot, a white page): the anchor as it was.
+     */
+    private static float kneeAnchor(Shot shot, GLTexture sdrTex, GLTexture plane, float anchor, int down, float[] knee, int gw, int gh) {
+        final GLTexture ratio = new GLTexture(new Point(gw, gh), RGBA8);
+        try {
+            ratio.renderInto();
+            drawGainMap(shot, sdrTex, plane, anchor, down, GainMapComputer.SCALE, knee, 1, ratio);
+            final int[][] hist;
+            final int stride;
+            try (GLHistogram histogram = new GLHistogram(shot.prog, HIST_BINS)) {
+                hist = histogram.Compute(ratio);
+                stride = Math.max(1, histogram.resize); // it counts every stride-th block in each direction
+            }
+            final float m = medianAbove(hist, 1, KNEE_MIN_SHARE * (gw / stride) * (gh / stride));
+            if (Float.isNaN(m)) {
+                Log.d(TAG, "UltraHDR knee " + knee[0] + ".." + knee[1] + ": too few blocks at the knee, the median anchor " + anchor);
+                return anchor;
+            }
+            final float b = Math.max(-2f, Math.min(3f, m * 8f - 4f));
+            final float moved = (float) (anchor * Math.pow(2.0, -b));
+            Log.d(TAG, "UltraHDR knee " + knee[0] + ".." + knee[1] + ": the scene over the SDR at the knee " + b + " EV, anchor " + anchor
+                    + " -> " + moved);
+            return moved;
+        } finally {
+            ratio.close();
+        }
+    }
+
+    /**
+     * P728: the median of a GLHistogram result over R, G and B together, of the bins from {@code from} up, as a position in [0, 1];
+     * NaN with fewer than {@code minCount} samples there (R, G and B count once: the measure writes the same value to all three).
+     */
+    static float medianAbove(int[][] hist, int from, float minCount) {
+        long all = 0L;
+        for (int b = from; b < HIST_BINS; b++) all += (long) hist[0][b] + hist[1][b] + hist[2][b];
+        if (all <= 0L || all / 3.0 < minCount) return Float.NaN;
+        final long half = all / 2L;
+        long below = 0L;
+        for (int b = from; b < HIST_BINS; b++) {
+            below += (long) hist[0][b] + hist[1][b] + hist[2][b];
+            if (below > half) return (float) b / (float) (HIST_BINS - 1);
+        }
+        return 1f;
+    }
+
+    private static void drawGainMap(Shot shot, GLTexture sdrTex, GLTexture plane, float anchor, int down, float scale, float[] knee,
+                                    int measure, GLTexture target) {
         final GLProg prog = shot.prog;
         prog.useAssetProgram("ultrahdr/gainmap");
         prog.setTexture("InputBuffer", sdrTex);
@@ -325,6 +399,8 @@ final class SceneGainMap {
         prog.setVar("uScale", scale);
         prog.setVar("uEps", GainMapComputer.DECODE_OFFSET);
         prog.setVar("uP3", shot.p3 ? 1 : 0); // P370 (B3): a Display P3 base's own luminance
+        prog.setVar("uKnee", knee[0], knee[1]); // P728
+        prog.setVar("uMeasure", measure);
         renderInto(prog, target, target.size.x, target.size.y);
         logGlError("gain-map comparison draw");
     }
