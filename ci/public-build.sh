@@ -12,8 +12,18 @@ report_failure() {
     if [[ -f "$1" && ! -L "$1" ]]; then
         IFS= read -r phase < "$1" || true
     fi
+    # A failed gradle phase names its kind from fixed markers of the private log: an identifier of this list, never the log's text
+    if [[ "$phase" == gradle && -f "${3:-}" && ! -L "${3:-}" ]]; then
+        if grep -q 'There were failing tests' "$3"; then phase=gradle-tests
+        elif grep -q 'Compilation failed\|Compilation error\|compileDebugJavaWithJavac' "$3" && grep -q 'FAILED' "$3"; then phase=gradle-compile
+        elif grep -q 'Could not resolve\|Could not GET\|Could not download' "$3"; then phase=gradle-deps
+        elif grep -q 'A problem occurred configuring\|A problem occurred evaluating\|Could not compile build file' "$3"; then phase=gradle-config
+        elif grep -q 'Native worker\|buildScamNeuralWorker\|externalNativeBuild\|CMake' "$3" && grep -q 'FAILED' "$3"; then phase=gradle-native
+        elif ! grep -q 'Welcome to Gradle\|> Task\|BUILD' "$3"; then phase=gradle-start
+        fi
+    fi
     case "$phase" in
-        controller|source|checkout|preflight|gradle|native-packaging|native-elf|native-xml|native-r8|packaging|signature|host|host-gate|publication|seal|telegram) ;;
+        controller|source|checkout|preflight|gradle|gradle-tests|gradle-compile|gradle-deps|gradle-config|gradle-native|gradle-start|native-packaging|native-elf|native-xml|native-r8|packaging|signature|host|host-gate|publication|seal|telegram) ;;
         *) phase=controller ;;
     esac
     if [[ ! "$result" =~ ^[1-9][0-9]{0,2}$ ]] || (( result > 255 )); then result=1; fi
@@ -109,7 +119,7 @@ MOCK
     [[ ! -e "$fixture/outputs" && ! -e "$fixture/injected" ]]
     mkdir "$fixture/ci"
     printf '{"schema":1,"source_commit":"1111111111111111111111111111111111111111","send_telegram":true}\n' > "$fixture/ci/build-request.json"
-    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=19 bash "$self" resolve > "$fixture/resolve.log" 2>&1
+    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=20 bash "$self" resolve > "$fixture/resolve.log" 2>&1
     grep -q '^sha=1111111111111111111111111111111111111111$' "$fixture/outputs"
     grep -q '^version=40001$' "$fixture/outputs"
     if GITHUB_ACTOR=untrusted GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
@@ -183,7 +193,7 @@ fi
 exec 9>&1
 exec >>"$RUNNER_TEMP/proncam-private-$mode.log" 2>&1
 mark_phase controller
-trap 'result=$?; rm -f -- "$askpass" || true; if (( result )); then report_failure "$phase_file" "$result" >&9; fi' EXIT
+trap 'result=$?; rm -f -- "$askpass" || true; if (( result )); then report_failure "$phase_file" "$result" "$RUNNER_TEMP/proncam-private-$mode.log" >&9; fi' EXIT
 private_repo() {
     : "${PRONCAM_SOURCE_TOKEN:?Missing read-only source token}"
     GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api repos/SOTTRME/Privss > "$RUNNER_TEMP/proncam-metadata.json" 9>&-
@@ -222,9 +232,9 @@ PY
     GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api "$endpoint" > "$RUNNER_TEMP/proncam-metadata.json" 9>&-
     sha=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("object",r)["sha"])' "$RUNNER_TEMP/proncam-metadata.json")
     [[ "$sha" =~ ^[0-9a-f]{40}$ && ${GITHUB_RUN_NUMBER:-} =~ ^[1-9][0-9]{0,8}$ ]] || exit 2
-    # Test builds are counted anew from run 19 (after 0.98 build 31322, run 17; run 18 was cancelled before it built):
-    # versionCode 40000 + test build number, so run 19 is test build 1 (40001, versionName 1.0.1), every code above the old ones.
-    version=$((39982 + GITHUB_RUN_NUMBER))
+    # Test builds are counted anew from run 20 (after 0.98 build 31322, run 17; run 18 was cancelled, run 19 did not build):
+    # versionCode 40000 + test build number, so run 20 is test build 1 (40001, versionName 1.0.1), every code above the old ones.
+    version=$((39981 + GITHUB_RUN_NUMBER))
     (( version > 40000 && version <= 2100000000 )) || exit 2
     printf 'sha=%s\nversion=%s\n' "$sha" "$version" >> "$GITHUB_OUTPUT"
     printf 'Selected source revision; versionCode %s.\n' "$version" >&9
@@ -324,6 +334,9 @@ mark_phase preflight
 : "${SOMECAM_VERSION_CODE:?}" "${SOMECAM_SIGNING_KEYSTORE:?}" "${SOMECAM_KEYSTORE_PASSWORD:?}" "${ANDROID_HOME:?}"
 [[ "$SOMECAM_VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ && ! -e "$output" ]] || exit 2
 export SOMECAM_VERSION_CODE
+# The release key and its password stay out of the private checks' and Gradle's environment: only the packaging below gets them.
+signing_keystore=$SOMECAM_SIGNING_KEYSTORE signing_password=$SOMECAM_KEYSTORE_PASSWORD
+unset SOMECAM_SIGNING_KEYSTORE SOMECAM_KEYSTORE_PASSWORD
 chmod +x gradlew
 # Execute exactly the private workflow's existing build checks, without copying its log/artifact upload steps.
 PRONCAM_BUILD_PHASE="$phase_file" python3 - 9>&- <<'PY'
@@ -358,8 +371,8 @@ badging=$("$aapt" dump badging "${templates[0]}" 9>&-)
 [[ "$badging" != *application-debuggable* ]] || exit 1
 name=$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p")
 [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,50}$ ]] || exit 1
-printf '%s' "$SOMECAM_SIGNING_KEYSTORE" | base64 -d > "$key"
-export SOMECAM_KEYSTORE="$key" SOMECAM_KEY_ALIAS="$(printf '\163\143\141\155\145\162\141')"
+printf '%s' "$signing_keystore" | base64 -d > "$key"
+export SOMECAM_KEYSTORE="$key" SOMECAM_KEY_ALIAS="$(printf '\163\143\141\155\145\162\141')" SOMECAM_KEYSTORE_PASSWORD="$signing_password"
 mkdir "$output"
 python3 tools/package_scam_neural.py --template "${templates[0]}" \
     --apksigner "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" \

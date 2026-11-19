@@ -53,7 +53,7 @@ jobs:
           if (run.get("head_sha") != request["build_commit"] or run.get("head_branch") != "main"
                   or run.get("path") != ".github/workflows/build.yml" or run.get("status") != "completed"):
               raise SystemExit("Original build identity differs")
-          if request["version"] != 39982 + run["run_number"] or request["version"] <= 40000:
+          if request["version"] != 39981 + run["run_number"] or request["version"] <= 40000:
               raise SystemExit("APK version differs")
           jobs = api(f"actions/runs/{run_id}/jobs?per_page=50")["jobs"]
           expected_hosts = {f"host ({lane})" for lane in ("shaders", "native-a", "native-b", "native-c", "strip-trailers", "codecs")}
