@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "request_id": "2026-11-19-somecam-film-engine",
-  "source_commit": "54a189fd56d069a48224a90ce84e3937fdb64a18",
+  "request_id": "2026-11-19-somecam-test-build-1",
+  "source_commit": "a21a74ce5d835f5a6134da7bde460a3b6391b849",
   "send_telegram": true
 }
