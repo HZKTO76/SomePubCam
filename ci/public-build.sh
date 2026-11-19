@@ -104,6 +104,8 @@ case "$*" in
         printf '{"id":1461683737,"private":true,"full_name":"SOTTRME/Privss"}\n' ;;
     'api repos/SOTTRME/Privss/git/commits/1111111111111111111111111111111111111111')
         printf '{"sha":"1111111111111111111111111111111111111111"}\n' ;;
+    'api repos/SOTTRME/Privss/contents/app/test-build.txt?ref=1111111111111111111111111111111111111111')
+        printf '{"content":"Mgo=\\n","encoding":"base64"}\n' ;;
     *) exit 99 ;;
 esac
 MOCK
@@ -119,9 +121,9 @@ MOCK
     [[ ! -e "$fixture/outputs" && ! -e "$fixture/injected" ]]
     mkdir "$fixture/ci"
     printf '{"schema":1,"source_commit":"1111111111111111111111111111111111111111","send_telegram":true}\n' > "$fixture/ci/build-request.json"
-    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=20 bash "$self" resolve > "$fixture/resolve.log" 2>&1
+    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=27 bash "$self" resolve > "$fixture/resolve.log" 2>&1
     grep -q '^sha=1111111111111111111111111111111111111111$' "$fixture/outputs"
-    grep -q '^version=40001$' "$fixture/outputs"
+    grep -q '^version=40002$' "$fixture/outputs" # (test build 2 of app/test-build.txt, whatever the run number)
     if GITHUB_ACTOR=untrusted GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     if GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=pull_request bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     printf '{"schema":1,"source_commit":"main; touch injected","send_telegram":true}\n' > "$fixture/ci/build-request.json"
@@ -231,10 +233,13 @@ PY
     [[ -n "$ref" ]] || endpoint=repos/SOTTRME/Privss/git/ref/heads/main
     GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api "$endpoint" > "$RUNNER_TEMP/proncam-metadata.json" 9>&-
     sha=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("object",r)["sha"])' "$RUNNER_TEMP/proncam-metadata.json")
-    [[ "$sha" =~ ^[0-9a-f]{40}$ && ${GITHUB_RUN_NUMBER:-} =~ ^[1-9][0-9]{0,8}$ ]] || exit 2
-    # Test builds are counted anew from run 20 (after 0.98 build 31322, run 17; run 18 was cancelled, run 19 did not build):
-    # versionCode 40000 + test build number, so run 20 is test build 1 (40001, versionName 1.0.1), every code above the old ones.
-    version=$((39981 + GITHUB_RUN_NUMBER))
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 2
+    # versionCode 40000 + the test build number of the pinned commit's app/test-build.txt (owner, 2026-11-19: «Билды теперь меняй
+    # по одному, вне зависимости от количества комитов»: one per delivery, not the run number - failed or repeated runs skip none)
+    GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api "repos/SOTTRME/Privss/contents/app/test-build.txt?ref=$sha" > "$RUNNER_TEMP/proncam-build-number.json" 9>&-
+    build=$(python3 -c 'import base64,json,sys; r=json.load(open(sys.argv[1])); print(base64.b64decode(r["content"]).decode().strip())' "$RUNNER_TEMP/proncam-build-number.json")
+    [[ "$build" =~ ^[1-9][0-9]{0,6}$ ]] || exit 2
+    version=$((40000 + 10#$build))
     (( version > 40000 && version <= 2100000000 )) || exit 2
     printf 'sha=%s\nversion=%s\n' "$sha" "$version" >> "$GITHUB_OUTPUT"
     printf 'Selected source revision; versionCode %s.\n' "$version" >&9
