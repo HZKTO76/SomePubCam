@@ -65,11 +65,12 @@ def checked_apk(directory):
 
 
 def read_sections(path):
-    """The newest section of a changelog: its heading and its lines (bullets or plain text); older sections are left out."""
+    """The newest section of a changelog: its heading and its lines (bullets or plain text); older sections are left out.
+    The text above the first "## " heading is the file's own preamble, posted only when the file has no sections."""
     text = pathlib.Path(path).read_text(encoding="utf-8")
     section = None
     title = "PronCam"
-    items = []
+    preamble, items = [], []
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -81,9 +82,9 @@ def read_sections(path):
         elif line.startswith("# ") and section is None:
             title = line[2:].strip() or title
         else:
-            if section is None:
-                section = title
-            items.append(line[2:].strip() if line[:2] in ("- ", "* ") else line)
+            (items if section is not None else preamble).append(line[2:].strip() if line[:2] in ("- ", "* ") else line)
+    if section is None:
+        section, items = title, preamble
     items = [item for item in items if item]
     if not items:
         raise ValueError("Empty changelog")
@@ -175,6 +176,9 @@ class Contract(unittest.TestCase):
                          read_sections(ru))
         self.assertEqual([("PronCam", ["Just text"])], read_sections(self._write("plain.md", "Just text\n")))
         self.assertEqual([("Изменения", ["Без даты"])], read_sections(self._write("t.md", "# Изменения\n\n- Без даты\n")))
+        self.assertEqual([("2026-11-19 — тестовая сборка 1", ["Новый отсчёт."])], read_sections(self._write(
+            "intro.md", "# Тестовые сборки\n\nВерсия 1.0.N — сборка №N.\nИстория до неё — CHANGELOG-0.98.md.\n\n"
+            "## 2026-11-19 — тестовая сборка 1\n\n- Новый отсчёт.\n")))   # the preamble is never the newest section
         calls = []
         publisher = types.SimpleNamespace(
             changelog_post=lambda *a, **k: calls.append((a, k)) or ("caption", []))
