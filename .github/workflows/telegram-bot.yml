@@ -1,0 +1,58 @@
+name: Telegram bot
+
+# The bot answers from a Cloudflare Worker (tools/telegram-worker/worker.js); its /post starts this run to take the
+# APK out of a build artifact and post it (tools/telegram_bot.py, docs/telegram-channel.md).
+# Started by hand without inputs, it answers waiting messages once by polling (only when no webhook is set).
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: 'Build number to post (empty: the latest main build)'
+        required: false
+        default: ''
+      chat:
+        description: "Owner's chat id for the replies (empty: poll for messages instead of posting)"
+        required: false
+        default: ''
+      lang:
+        description: 'Reply language (ru or en)'
+        required: false
+        default: 'ru'
+
+permissions:
+  contents: read
+  actions: read     # the build artifacts
+
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+
+      - name: Post a build / answer the bot's messages
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_OWNER: ${{ secrets.TELEGRAM_OWNER }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          TELEGRAM_TOPIC: ${{ secrets.TELEGRAM_TOPIC }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_AI_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          BUILD: ${{ inputs.build }}
+          CHAT: ${{ inputs.chat }}
+          REPLY_LANG: ${{ inputs.lang }}
+        run: |
+          if [ -n "$CHAT" ]; then
+            python3 tools/telegram_bot.py --post "$BUILD" --chat "$CHAT" --lang "$REPLY_LANG"
+          else
+            python3 tools/telegram_bot.py
+          fi

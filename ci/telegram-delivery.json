@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "run_id": 44315042567,
+  "artifact_id": 14433812168,
+  "version": 31321,
+  "build_commit": "77eb0a81ed3776498f4d91838fe3d7b248c5262f",
+  "source_commit": "b7ab4952d7c5af0e2e875d3f01efe7febc24c4a5",
+  "apk_sha256": "395661c7efbee80c5cf5f4ac82b805fa04f9501808c8fe12f2c6fe9b9b58ce97",
+  "artifact_sha256": "9522074c898e231ba6051d9e22903510c2d2d8dbc2e57727e459482c7b0f536d"
+}

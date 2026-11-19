@@ -1,0 +1,111 @@
+name: Redeliver checked PronCam APK
+
+on:
+  push:
+    branches: [main]
+    paths: [ci/telegram-delivery.json]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  telegram:
+    if: github.repository_id == '1461381914' && github.actor == 'SOTTRME' && github.triggering_actor == 'SOTTRME' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify original build and reuse its exact APK
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          repo = "SOTTRME/Xxdl"
+          request = json.loads(Path("ci/telegram-delivery.json").read_text())
+          if request.get("schema") != 1:
+              raise SystemExit("Wrong delivery request schema")
+          for key in ("run_id", "artifact_id", "version"):
+              if type(request.get(key)) is not int or request[key] <= 0:
+                  raise SystemExit("Invalid artifact selection")
+          for key, width in (("build_commit", 40), ("source_commit", 40), ("apk_sha256", 64), ("artifact_sha256", 64)):
+              if not re.fullmatch(f"[0-9a-f]{{{width}}}", request.get(key, "")):
+                  raise SystemExit("Invalid pinned identity")
+
+          def api(path):
+              result = subprocess.run(["gh", "api", f"repos/{repo}/{path}"], check=True, capture_output=True, text=True)
+              return json.loads(result.stdout)
+
+          run_id = request["run_id"]
+          run = api(f"actions/runs/{run_id}")
+          if (run.get("head_sha") != request["build_commit"] or run.get("head_branch") != "main"
+                  or run.get("path") != ".github/workflows/build.yml" or run.get("status") != "completed"):
+              raise SystemExit("Original build identity differs")
+          if request["version"] != 31305 + run["run_number"]:
+              raise SystemExit("APK version differs")
+          jobs = api(f"actions/runs/{run_id}/jobs?per_page=50")["jobs"]
+          expected_hosts = {f"host ({lane})" for lane in ("shaders", "native-a", "native-b", "native-c", "strip-trailers", "codecs")}
+          if not expected_hosts.issubset({job["name"] for job in jobs if job["conclusion"] == "success"}):
+              raise SystemExit("Original host checks did not pass")
+          build = next(job for job in jobs if job["name"] == "build")
+          done = {step["name"]: step["conclusion"] for step in build["steps"]}
+          if any(done.get(step) != "success" for step in (
+              "Check, build and sign", "Require successful host verification before publication", "Check publication files"
+          )) or done.get("Send checked APK through Telegram bot") != "failure":
+              raise SystemExit("Original build is not an eligible delivery retry")
+          source = api(f'contents/ci/build-request.json?ref={request["build_commit"]}')
+          if json.loads(base64.b64decode(source["content"]))["source_commit"] != request["source_commit"]:
+              raise SystemExit("Private source revision differs")
+
+          name = f'PronCam-{request["version"]}'
+          artifacts = api(f"actions/runs/{run_id}/artifacts")["artifacts"]
+          matches = [entry for entry in artifacts if entry["name"] == name and not entry["expired"]]
+          if len(matches) != 1 or matches[0]["id"] != request["artifact_id"] or matches[0]["digest"] != "sha256:" + request["artifact_sha256"]:
+              raise SystemExit("Artifact identity differs")
+          output, sealed = Path("public-out"), Path("public-sealed")
+          if output.exists() or output.is_symlink() or sealed.exists() or sealed.is_symlink():
+              raise SystemExit("Artifact output must be empty")
+          # the run stores the APK sealed (the artifacts of this public repository are public): opened and checked here
+          subprocess.run(["gh", "run", "download", str(run_id), "--repo", repo, "--name", name, "--dir", str(sealed)], check=True)
+          subprocess.run(["bash", "ci/public-build.sh", "unseal"], check=True)
+          apk, = [*output.glob(f'PronCam-*-{request["version"]}-SCAM.apk'), *output.glob(f'SomeCam-*-{request["version"]}-SCAM.apk')]
+          if apk.is_symlink() or not apk.is_file():
+              raise SystemExit("Unsafe APK")
+          with apk.open("rb") as stream:
+              if hashlib.file_digest(stream, "sha256").hexdigest() != request["apk_sha256"]:
+                  raise SystemExit("Original APK digest differs")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output_vars:
+              output_vars.write("source=" + request["source_commit"] + "\n")
+          print(f'Verified original signed APK {request["version"]}.')
+          PY
+          bash ci/public-build.sh stage
+      - name: Fetch pinned source and publisher
+        env:
+          PRONCAM_SOURCE_SHA: ${{ steps.artifact.outputs.source }}
+          PRONCAM_SOURCE_TOKEN: ${{ secrets.PRONCAM_SOURCE_TOKEN }}
+        run: bash ci/public-build.sh checkout
+      - name: Send checked APK through Telegram bot
+        env:
+          PRONCAM_SOURCE_SHA: ${{ steps.artifact.outputs.source }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_OWNER: ${{ secrets.TELEGRAM_OWNER }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          TELEGRAM_TOPIC: ${{ secrets.TELEGRAM_TOPIC }}
+        run: bash ci/public-build.sh telegram
+      - name: Remove temporary source
+        if: always()
+        run: bash ci/public-build.sh cleanup
