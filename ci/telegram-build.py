@@ -5,6 +5,7 @@ No Telegram/GitHub access occurs in --self-test. Only receipt count is public;
 the controller must keep this helper's diagnostics out of public build logs.
 """
 import argparse
+import json
 import asyncio
 import hashlib
 import importlib.util
@@ -100,6 +101,21 @@ def make_local_post(publisher, source):
     return make_post
 
 
+def settings_compatible(parse):
+    """The pinned publisher's reader of the bot's pinned settings, for either marker: the deployed Worker writes "scamera_bot",
+    a publisher renamed on 2026-11-19 looked for "somecam_bot" only (and found no target)."""
+    def parse_any(text):
+        found = parse(text)
+        if found is None and isinstance(text, str):
+            for old, new in (('"scamera_bot"', '"somecam_bot"'), ('"somecam_bot"', '"scamera_bot"')):
+                if old in text:
+                    found = parse(text.replace(old, new))
+                    if found is not None:
+                        break
+        return found
+    return parse_any
+
+
 def load_publisher(source):
     spec = importlib.util.spec_from_file_location("proncam_pinned_telegram_publish", source / "tools/telegram_publish.py")
     if spec is None or spec.loader is None:
@@ -107,6 +123,8 @@ def load_publisher(source):
     publisher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(publisher)
     publisher.make_post = make_local_post(publisher, source)
+    if callable(getattr(publisher, "parse_settings", None)):
+        publisher.parse_settings = settings_compatible(publisher.parse_settings)
     return publisher
 
 
@@ -208,6 +226,18 @@ class Contract(unittest.TestCase):
         settings["commits"] = False
         self.assertEqual(("caption", []), post(args, "digest", settings))
         self.assertEqual("caption", calls[-1][0])
+
+    def test_settings_read_under_either_marker(self):
+        def strict(text):   # a pinned publisher that knows one marker only
+            for line in text.splitlines():
+                if line.startswith("{"):
+                    data = json.loads(line)
+                    return {"targets": data["targets"]} if data.get("somecam_bot") == 1 else None
+            return None
+        parse = settings_compatible(strict)
+        pinned = '⚙️ Настройки бота\n{"scamera_bot": 1, "targets": [{"chat": -100123, "topic": 15}]}'
+        self.assertEqual([{"chat": -100123, "topic": 15}], parse(pinned)["targets"])
+        self.assertIsNone(parse("no settings here"))
 
     def test_missing_or_invalid_receipt_fails(self):
         for receipt in (None, [], "success", [0], [-1], [True]):

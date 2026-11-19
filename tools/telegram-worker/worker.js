@@ -64,7 +64,8 @@ function parseSettings(text) {
     } catch (e) {
       return null;
     }
-    if (!data || typeof data !== 'object' || data.somecam_bot !== 1) return null;
+    // the pinned settings' marker: "scamera_bot", as every deployed Worker writes it ("somecam_bot" read too)
+    if (!data || typeof data !== 'object' || (data.scamera_bot !== 1 && data.somecam_bot !== 1)) return null;
     const out = defaultSettings();
     for (const key of Object.keys(DEFAULTS)) if (key in data) out[key] = data[key];
     if (!('targets' in data) && data.chat) {   // one target, before the list (16 October 2026)
@@ -101,7 +102,7 @@ function describeSettings(s) {
 }
 
 function renderSettings(s) {
-  const data = {somecam_bot: 1};
+  const data = {scamera_bot: 1};
   for (const key of Object.keys(DEFAULTS)) data[key] = s[key];
   const title = t(s.lang, '⚙️ <b>Настройки бота</b> (закреплено, не открепляй)',
     '⚙️ <b>Bot settings</b> (pinned, keep it pinned)');

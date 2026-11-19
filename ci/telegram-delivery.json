@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "run_id": 44315042567,
-  "artifact_id": 14433812168,
-  "version": 31321,
-  "build_commit": "77eb0a81ed3776498f4d91838fe3d7b248c5262f",
-  "source_commit": "b7ab4952d7c5af0e2e875d3f01efe7febc24c4a5",
-  "apk_sha256": "395661c7efbee80c5cf5f4ac82b805fa04f9501808c8fe12f2c6fe9b9b58ce97",
-  "artifact_sha256": "9522074c898e231ba6051d9e22903510c2d2d8dbc2e57727e459482c7b0f536d"
+  "run_id": 44497694704,
+  "artifact_id": 14517271661,
+  "version": 40001,
+  "build_commit": "0b65f43c06f446856441e2c12a4966e2f281b825",
+  "source_commit": "f3338f5f45f8aeaf45072a8b1c7717b810fdcbb1",
+  "apk_sha256": "3aa1a20b4c2da876476b2b05b76b2690e791c6f33c2fd48538e4be9614c7b621",
+  "artifact_sha256": "ceb2529da2b3bb3fd1e6e13bfc2a74d7a32c05f0ee7d4e1c4d47078f660cb144"
 }

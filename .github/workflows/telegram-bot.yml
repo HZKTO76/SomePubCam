@@ -1,13 +1,14 @@
 name: Telegram bot
 
-# The bot answers from a Cloudflare Worker (tools/telegram-worker/worker.js); its /post starts this run to take the
-# APK out of a build artifact and post it (tools/telegram_bot.py, docs/telegram-channel.md).
+# The bot answers from a Cloudflare Worker (tools/telegram-worker/worker.js); its /post starts this run. The builds of this
+# public repository store their APK sealed (ci/public-build.sh seal), so /post opens the stored APK of the asked build, checks
+# it and posts it the way the build itself does (ci/public-build.sh telegram, the build's pinned publisher and changelog).
 # Started by hand without inputs, it answers waiting messages once by polling (only when no webhook is set).
 on:
   workflow_dispatch:
     inputs:
       build:
-        description: 'Build number to post (empty: the latest main build)'
+        description: 'Build to post: its code (40001) or test build number (1); empty: the latest stored build'
         required: false
         default: ''
       chat:
@@ -29,14 +30,16 @@ concurrency:
 
 jobs:
   bot:
-    runs-on: ubuntu-latest
+    if: github.repository_id == '1461381914' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          sparse-checkout: tools
+          persist-credentials: false
 
-      - name: Post a build / answer the bot's messages
+      - name: Answer waiting messages
+        if: inputs.chat == ''
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -44,15 +47,120 @@ jobs:
           TELEGRAM_OWNER: ${{ secrets.TELEGRAM_OWNER }}
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
           TELEGRAM_TOPIC: ${{ secrets.TELEGRAM_TOPIC }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_AI_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
           GH_TOKEN: ${{ github.token }}
+        run: python3 tools/telegram_bot.py
+
+      - name: Open the asked build's stored APK
+        id: build
+        if: inputs.chat != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           BUILD: ${{ inputs.build }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import subprocess
+
+          repo = "SOTTRME/Xxdl"
+
+          def api(path):
+              result = subprocess.run(["gh", "api", f"repos/{repo}/{path}"], check=True, capture_output=True, text=True)
+              return json.loads(result.stdout)
+
+          asked = os.environ.get("BUILD", "").strip()
+          if asked and not re.fullmatch(r"[1-9][0-9]{0,9}", asked):
+              raise SystemExit("Invalid build number")
+          version = int(asked) if asked else 0
+          if 0 < version < 40000:   # a test build number: 1 is 40001
+              version += 40000
+          stored = []
+          for artifact in api("actions/artifacts?per_page=100")["artifacts"]:
+              m = re.fullmatch(r"PronCam-([0-9]+)", artifact["name"])
+              if m and not artifact["expired"] and (not version or int(m[1]) == version):
+                  stored.append((int(m[1]), artifact["id"], artifact))
+          if not stored:
+              raise SystemExit("No stored APK of that build (kept for one day)")
+          version, _, artifact = max(stored, key=lambda entry: entry[:2])
+          run = api(f'actions/runs/{artifact["workflow_run"]["id"]}')
+          if (run.get("path") != ".github/workflows/build.yml" or run.get("head_branch") != "main"
+                  or run.get("status") != "completed" or run["actor"]["login"] != "SOTTRME"):
+              raise SystemExit("The stored APK is not of a main build")
+          jobs = api(f'actions/runs/{run["id"]}/jobs?per_page=50')["jobs"]
+          hosts = {f"host ({lane})" for lane in ("shaders", "native-a", "native-b", "native-c", "strip-trailers", "codecs")}
+          if not hosts.issubset({job["name"] for job in jobs if job["conclusion"] == "success"}):
+              raise SystemExit("The build's host checks did not pass")
+          build = next(job for job in jobs if job["name"] == "build")
+          done = {step["name"]: step["conclusion"] for step in build["steps"]}
+          if any(done.get(step) != "success" for step in (
+              "Check, build and sign", "Require successful host verification before publication", "Check publication files")):
+              raise SystemExit("The build was not checked")
+          request = json.loads(base64.b64decode(api(f'contents/ci/build-request.json?ref={run["head_sha"]}')["content"]))
+          source = request["source_commit"]
+          if not re.fullmatch(r"[0-9a-f]{40}", source):
+              raise SystemExit("Invalid source revision")
+          subprocess.run(["gh", "run", "download", str(run["id"]), "--repo", repo, "--name", artifact["name"],
+                          "--dir", "public-sealed"], check=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"source={source}\nversion={version}\n")
+          print(f"Build {version} found.")
+          PY
+          bash ci/public-build.sh unseal
+          bash ci/public-build.sh stage
+
+      - name: Fetch the build's pinned source and publisher
+        if: inputs.chat != ''
+        env:
+          PRONCAM_SOURCE_SHA: ${{ steps.build.outputs.source }}
+          PRONCAM_SOURCE_TOKEN: ${{ secrets.PRONCAM_SOURCE_TOKEN }}
+        run: bash ci/public-build.sh checkout
+
+      - name: Post the checked APK
+        if: inputs.chat != ''
+        env:
+          PRONCAM_SOURCE_SHA: ${{ steps.build.outputs.source }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_OWNER: ${{ secrets.TELEGRAM_OWNER }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          TELEGRAM_TOPIC: ${{ secrets.TELEGRAM_TOPIC }}
+        run: bash ci/public-build.sh telegram
+
+      - name: Tell the owner it was not posted
+        if: failure() && inputs.chat != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT: ${{ inputs.chat }}
           REPLY_LANG: ${{ inputs.lang }}
+          BUILD: ${{ inputs.build }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [ -n "$CHAT" ]; then
-            python3 tools/telegram_bot.py --post "$BUILD" --chat "$CHAT" --lang "$REPLY_LANG"
-          else
-            python3 tools/telegram_bot.py
-          fi
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.request
+
+          chat, build = os.environ["CHAT"].strip(), os.environ.get("BUILD", "").strip()
+          if not re.fullmatch(r"-?[0-9]{1,20}", chat):
+              raise SystemExit(0)
+          what = f"сборку {build}" if build else "последнюю сборку"
+          what_en = f"build {build}" if build else "the latest build"
+          text = (f"❌ Не удалось выложить {what}: {os.environ['RUN_URL']}" if os.environ.get("REPLY_LANG", "ru").startswith("ru")
+                  else f"❌ Could not post {what_en}: {os.environ['RUN_URL']}")
+          request = urllib.request.Request(f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
+                                           data=json.dumps({"chat_id": int(chat), "text": text}).encode(),
+                                           headers={"Content-Type": "application/json"})
+          try:
+              urllib.request.urlopen(request, timeout=30).read()
+          except Exception as e:   # never print the URL: it holds the token
+              print(f"::warning::The owner was not told: {type(e).__name__}")
+          PY
+
+      - name: Remove temporary source
+        if: always() && inputs.chat != ''
+        run: bash ci/public-build.sh cleanup

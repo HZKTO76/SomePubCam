@@ -79,7 +79,8 @@ def parse_settings(text):
                 data = json.loads(line)
             except ValueError:
                 return None
-            if not isinstance(data, dict) or data.get('somecam_bot') != 1:
+            # the marker of the bot's pinned settings: "scamera_bot" as the deployed Worker writes it ("somecam_bot" read too)
+            if not isinstance(data, dict) or (data.get('scamera_bot') != 1 and data.get('somecam_bot') != 1):
                 return None
             s = {**default_settings(), **{k: v for k, v in data.items() if k in DEFAULTS}}
             if 'targets' not in data and data.get('chat'):   # one target, before the list (16 October 2026)
@@ -118,7 +119,7 @@ def describe_settings(s):
 
 def render_settings(s):
     """HTML of the pinned settings message: the summary and the JSON the scripts read back."""
-    data = {'somecam_bot': 1, **{k: s[k] for k in DEFAULTS}}
+    data = {'scamera_bot': 1, **{k: s[k] for k in DEFAULTS}}   # the marker every deployed Worker reads
     title = t(s['lang'], '⚙️ <b>Настройки бота</b> (закреплено, не открепляй)',
               '⚙️ <b>Bot settings</b> (pinned, keep it pinned)')
     return f'{title}\n{describe_settings(s)}\n\n<code>{html.escape(json.dumps(data, ensure_ascii=False), quote=False)}</code>'
