@@ -109,9 +109,9 @@ MOCK
     [[ ! -e "$fixture/outputs" && ! -e "$fixture/injected" ]]
     mkdir "$fixture/ci"
     printf '{"schema":1,"source_commit":"1111111111111111111111111111111111111111","send_telegram":true}\n' > "$fixture/ci/build-request.json"
-    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=1 bash "$self" resolve > "$fixture/resolve.log" 2>&1
+    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=18 bash "$self" resolve > "$fixture/resolve.log" 2>&1
     grep -q '^sha=1111111111111111111111111111111111111111$' "$fixture/outputs"
-    grep -q '^version=31306$' "$fixture/outputs"
+    grep -q '^version=40001$' "$fixture/outputs"
     if GITHUB_ACTOR=untrusted GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     if GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=pull_request bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     printf '{"schema":1,"source_commit":"main; touch injected","send_telegram":true}\n' > "$fixture/ci/build-request.json"
@@ -222,9 +222,10 @@ PY
     GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api "$endpoint" > "$RUNNER_TEMP/proncam-metadata.json" 9>&-
     sha=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("object",r)["sha"])' "$RUNNER_TEMP/proncam-metadata.json")
     [[ "$sha" =~ ^[0-9a-f]{40}$ && ${GITHUB_RUN_NUMBER:-} =~ ^[1-9][0-9]{0,8}$ ]] || exit 2
-    # Freeze this offset when publishing the new workflow: prepared migration build is 31305.
-    version=$((31305 + GITHUB_RUN_NUMBER))
-    (( version <= 2100000000 )) || exit 2
+    # Test builds are counted anew from run 18 (after 0.98 build 31322, run 17): versionCode 40000 + test build number,
+    # so run 18 is test build 1 (40001, versionName 1.0.1) and every code stays above the old ones.
+    version=$((39983 + GITHUB_RUN_NUMBER))
+    (( version > 40000 && version <= 2100000000 )) || exit 2
     printf 'sha=%s\nversion=%s\n' "$sha" "$version" >> "$GITHUB_OUTPUT"
     printf 'Selected source revision; versionCode %s.\n' "$version" >&9
     exit
