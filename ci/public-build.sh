@@ -27,7 +27,7 @@ report_failure() {
         *) phase=controller ;;
     esac
     if [[ ! "$result" =~ ^[1-9][0-9]{0,2}$ ]] || (( result > 255 )); then result=1; fi
-    printf '::error::PronCam stage failed (phase=%s; exit=%s); private diagnostics were not published.\n' "$phase" "$result"
+    printf '::error::SomeCam stage failed (phase=%s; exit=%s); private diagnostics were not published.\n' "$phase" "$result"
 }
 
 mark_phase() {
@@ -39,7 +39,7 @@ check_stage() {
 import hashlib, pathlib, re, sys
 p = pathlib.Path(sys.argv[1])
 files = list(p.iterdir())
-apks = [f for f in files if re.fullmatch(r'(?:PronCam|SomeCam)-[A-Za-z0-9._-]+-[0-9]+-SCAM\.apk', f.name)]
+apks = [f for f in files if re.fullmatch(r'SomeCam-[A-Za-z0-9._-]+-[0-9]+-SCAM\.apk', f.name)]
 if len(files) != 2 or len(apks) != 1 or {f.name for f in files} != {apks[0].name, 'SHA256SUMS.txt'}:
     raise SystemExit('Unexpected publication files')
 if any(f.is_symlink() or not f.is_file() for f in files):
@@ -85,7 +85,7 @@ if [[ "$mode" == self-test ]]; then
     trap 'rm -rf -- "$fixture"' EXIT
     stage="$fixture/stage"
     mkdir "$stage" "$fixture/bin"
-    printf 'fixture APK' > "$stage/PronCam-0.98-31306-SCAM.apk"
+    printf 'fixture APK' > "$stage/SomeCam-0.98-31306-SCAM.apk"
     (cd "$stage" && sha256sum *.apk > SHA256SUMS.txt)
     check_stage "$stage"
     printf 'private source canary' > "$stage/Source.java"
@@ -94,8 +94,8 @@ if [[ "$mode" == self-test ]]; then
     printf 'bad digest' > "$stage/SHA256SUMS.txt"
     if check_stage "$stage" >/dev/null 2>&1; then exit 1; fi
     (cd "$stage" && sha256sum *.apk > SHA256SUMS.txt)
-    mv "$stage/PronCam-0.98-31306-SCAM.apk" "$fixture/real.apk"
-    ln -s ../real.apk "$stage/PronCam-0.98-31306-SCAM.apk"
+    mv "$stage/SomeCam-0.98-31306-SCAM.apk" "$fixture/real.apk"
+    ln -s ../real.apk "$stage/SomeCam-0.98-31306-SCAM.apk"
     if check_stage "$stage" >/dev/null 2>&1; then exit 1; fi
     cat > "$fixture/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
@@ -114,10 +114,10 @@ MOCK
     export PATH="$fixture/bin:$PATH" RUNNER_TEMP="$fixture" GITHUB_WORKSPACE="$fixture"
     export GITHUB_REPOSITORY=SOTTRME/Xxdl GITHUB_REPOSITORY_ID=1461381914 GITHUB_REF=refs/heads/main
     export GITHUB_TRIGGERING_ACTOR=SOTTRME
-    export GITHUB_EVENT_NAME=workflow_dispatch GITHUB_OUTPUT="$fixture/outputs" PRONCAM_SOURCE_TOKEN=fixture
+    export GITHUB_EVENT_NAME=workflow_dispatch GITHUB_OUTPUT="$fixture/outputs" SOMECAM_SOURCE_TOKEN=fixture
     if GITHUB_ACTOR=untrusted bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     if GITHUB_ACTOR=SOTTRME GITHUB_TRIGGERING_ACTOR=untrusted bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
-    if GITHUB_ACTOR=SOTTRME PRONCAM_SOURCE_REF='main; touch injected' bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=SOTTRME SOMECAM_SOURCE_REF='main; touch injected' bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     [[ ! -e "$fixture/outputs" && ! -e "$fixture/injected" ]]
     mkdir "$fixture/ci"
     printf '{"schema":1,"source_commit":"1111111111111111111111111111111111111111","send_telegram":true}\n' > "$fixture/ci/build-request.json"
@@ -129,38 +129,38 @@ MOCK
     printf '{"schema":1,"source_commit":"main; touch injected","send_telegram":true}\n' > "$fixture/ci/build-request.json"
     if GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     [[ ! -e "$fixture/injected" ]]
-    private="$fixture/proncam-source"
+    private="$fixture/somecam-source"
     mkdir -p "$private/tools/ci"
     printf '#!/usr/bin/env bash\necho PRIVATE_SOURCE_CANARY\necho PRIVATE_SOURCE_CANARY >&2\nexit 17\n' > "$private/tools/ci/host-native-a.sh"
     git init --quiet "$private"
     git -C "$private" add .
     git -C "$private" -c user.name=Fixture -c user.email=fixture@local.invalid commit --quiet -m fixture
     sha=$(git -C "$private" rev-parse HEAD)
-    if GITHUB_ACTOR=SOTTRME PRONCAM_SOURCE_SHA="$sha" PRONCAM_CHECK_LANE=native-a bash "$self" host > "$fixture/public.log" 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=SOTTRME SOMECAM_SOURCE_SHA="$sha" SOMECAM_CHECK_LANE=native-a bash "$self" host > "$fixture/public.log" 2>&1; then exit 1; fi
     if grep -q PRIVATE_SOURCE_CANARY "$fixture/public.log"; then exit 1; fi
-    grep -q PRIVATE_SOURCE_CANARY "$fixture/proncam-private-host.log"
-    grep -Fxq '::error::PronCam stage failed (phase=host; exit=17); private diagnostics were not published.' "$fixture/public.log"
+    grep -q PRIVATE_SOURCE_CANARY "$fixture/somecam-private-host.log"
+    grep -Fxq '::error::SomeCam stage failed (phase=host; exit=17); private diagnostics were not published.' "$fixture/public.log"
     for phase in controller source checkout preflight gradle native-packaging native-elf native-xml native-r8 packaging signature host host-gate publication telegram; do
         printf '%s\n' "$phase" > "$fixture/phase"
         report_failure "$fixture/phase" 19 > "$fixture/phase-public.log"
-        grep -Fxq "::error::PronCam stage failed (phase=$phase; exit=19); private diagnostics were not published." "$fixture/phase-public.log"
+        grep -Fxq "::error::SomeCam stage failed (phase=$phase; exit=19); private diagnostics were not published." "$fixture/phase-public.log"
     done
     printf 'PRIVATE_SOURCE_CANARY%%0A::error::injected\n' > "$fixture/phase"
     report_failure "$fixture/phase" PRIVATE_SOURCE_CANARY > "$fixture/phase-public.log"
-    grep -Fxq '::error::PronCam stage failed (phase=controller; exit=1); private diagnostics were not published.' "$fixture/phase-public.log"
+    grep -Fxq '::error::SomeCam stage failed (phase=controller; exit=1); private diagnostics were not published.' "$fixture/phase-public.log"
     if grep -q 'PRIVATE_SOURCE_CANARY\|injected' "$fixture/phase-public.log"; then exit 1; fi
     cat > "$private/tools/ci/host-native-a.sh" <<'POISON'
 #!/usr/bin/env bash
-printf 'PRIVATE_SOURCE_CANARY%%0A::error::injected\n' > "$RUNNER_TEMP/proncam-phase-host"
+printf 'PRIVATE_SOURCE_CANARY%%0A::error::injected\n' > "$RUNNER_TEMP/somecam-phase-host"
 echo PRIVATE_SOURCE_CANARY
 echo PRIVATE_SOURCE_CANARY >&2
 exit 23
 POISON
-    if GITHUB_ACTOR=SOTTRME PRONCAM_SOURCE_SHA="$sha" PRONCAM_CHECK_LANE=native-a bash "$self" host > "$fixture/poison-public.log" 2>&1; then exit 1; fi
-    grep -Fxq '::error::PronCam stage failed (phase=controller; exit=23); private diagnostics were not published.' "$fixture/poison-public.log"
+    if GITHUB_ACTOR=SOTTRME SOMECAM_SOURCE_SHA="$sha" SOMECAM_CHECK_LANE=native-a bash "$self" host > "$fixture/poison-public.log" 2>&1; then exit 1; fi
+    grep -Fxq '::error::SomeCam stage failed (phase=controller; exit=23); private diagnostics were not published.' "$fixture/poison-public.log"
     if grep -q 'PRIVATE_SOURCE_CANARY\|injected' "$fixture/poison-public.log"; then exit 1; fi
     GITHUB_ACTOR=SOTTRME bash "$self" cleanup
-    [[ ! -e "$private" && ! -e "$fixture/proncam-private-host.log" && ! -e "$fixture/proncam-phase-host" ]]
+    [[ ! -e "$private" && ! -e "$fixture/somecam-private-host.log" && ! -e "$fixture/somecam-phase-host" ]]
     # sealing: the checked files come back byte for byte; another token, or a changed file, does not open
     mkdir -p "$fixture/seal-in"
     printf 'sealed fixture APK' > "$fixture/seal-in/SomeCam-0.98-31306-SCAM.apk"
@@ -179,27 +179,27 @@ fi
    ${GITHUB_ACTOR:-} == SOTTRME && ${GITHUB_TRIGGERING_ACTOR:-} == SOTTRME && ${GITHUB_REF:-} == refs/heads/main &&
    ( ${GITHUB_EVENT_NAME:-} == workflow_dispatch || ${GITHUB_EVENT_NAME:-} == push ) ]] || { echo 'Build context rejected'; exit 1; }
 : "${RUNNER_TEMP:?}" "${GITHUB_WORKSPACE:?}"
-source_dir="$RUNNER_TEMP/proncam-source"
-key="$RUNNER_TEMP/proncam-release.jks"
-askpass="$RUNNER_TEMP/proncam-askpass"
+source_dir="$RUNNER_TEMP/somecam-source"
+key="$RUNNER_TEMP/somecam-release.jks"
+askpass="$RUNNER_TEMP/somecam-askpass"
 output="$GITHUB_WORKSPACE/public-out"
-phase_file="$RUNNER_TEMP/proncam-phase-$mode"
+phase_file="$RUNNER_TEMP/somecam-phase-$mode"
 if [[ "$mode" == cleanup ]]; then
     rm -rf -- "$source_dir"
-    rm -rf -- "$RUNNER_TEMP/proncam-telegram"
-    rm -f -- "$key" "$askpass" "$RUNNER_TEMP"/proncam-private-*.log "$RUNNER_TEMP"/proncam-phase-* "$RUNNER_TEMP/proncam-metadata.json"
+    rm -rf -- "$RUNNER_TEMP/somecam-telegram"
+    rm -f -- "$key" "$askpass" "$RUNNER_TEMP"/somecam-private-*.log "$RUNNER_TEMP"/somecam-phase-* "$RUNNER_TEMP/somecam-metadata.json"
     exit
 fi
 
 # No private tool stdout, compiler diagnostics, test reports or mapping enter a public log.
 exec 9>&1
-exec >>"$RUNNER_TEMP/proncam-private-$mode.log" 2>&1
+exec >>"$RUNNER_TEMP/somecam-private-$mode.log" 2>&1
 mark_phase controller
-trap 'result=$?; rm -f -- "$askpass" || true; if (( result )); then report_failure "$phase_file" "$result" "$RUNNER_TEMP/proncam-private-$mode.log" >&9; fi' EXIT
+trap 'result=$?; rm -f -- "$askpass" || true; if (( result )); then report_failure "$phase_file" "$result" "$RUNNER_TEMP/somecam-private-$mode.log" >&9; fi' EXIT
 private_repo() {
-    : "${PRONCAM_SOURCE_TOKEN:?Missing read-only source token}"
-    GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api repos/SOTTRME/Privss > "$RUNNER_TEMP/proncam-metadata.json" 9>&-
-    python3 - "$RUNNER_TEMP/proncam-metadata.json" 9>&- <<'PY'
+    : "${SOMECAM_SOURCE_TOKEN:?Missing read-only source token}"
+    GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api repos/SOTTRME/Privss > "$RUNNER_TEMP/somecam-metadata.json" 9>&-
+    python3 - "$RUNNER_TEMP/somecam-metadata.json" 9>&- <<'PY'
 import json, sys
 r = json.load(open(sys.argv[1]))
 if r.get('id') != 1461683737 or r.get('private') is not True or r.get('full_name') != 'SOTTRME/Privss':
@@ -209,12 +209,12 @@ PY
 
 if [[ "$mode" == resolve ]]; then
     mark_phase source
-    if [[ -z ${PRONCAM_SOURCE_TOKEN:-} ]]; then
-        printf '::error::Required repository secret PRONCAM_SOURCE_TOKEN is not configured.\n' >&9
+    if [[ -z ${SOMECAM_SOURCE_TOKEN:-} ]]; then
+        printf '::error::Required repository secret SOMECAM_SOURCE_TOKEN is not configured.\n' >&9
         exit 1
     fi
     private_repo
-    ref=${PRONCAM_SOURCE_REF:-}
+    ref=${SOMECAM_SOURCE_REF:-}
     if [[ "$GITHUB_EVENT_NAME" == push ]]; then
         ref=$(python3 - "$GITHUB_WORKSPACE/ci/build-request.json" 9>&- <<'PY'
 import json, re, sys
@@ -231,13 +231,13 @@ PY
     [[ -z "$ref" || "$ref" =~ ^[0-9a-f]{40}$ ]] || exit 2
     endpoint="repos/SOTTRME/Privss/git/commits/$ref"
     [[ -n "$ref" ]] || endpoint=repos/SOTTRME/Privss/git/ref/heads/main
-    GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api "$endpoint" > "$RUNNER_TEMP/proncam-metadata.json" 9>&-
-    sha=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("object",r)["sha"])' "$RUNNER_TEMP/proncam-metadata.json")
+    GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api "$endpoint" > "$RUNNER_TEMP/somecam-metadata.json" 9>&-
+    sha=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("object",r)["sha"])' "$RUNNER_TEMP/somecam-metadata.json")
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 2
     # versionCode 40000 + the test build number of the pinned commit's app/test-build.txt (owner, 2026-11-19: «Билды теперь меняй
     # по одному, вне зависимости от количества комитов»: one per delivery, not the run number - failed or repeated runs skip none)
-    GH_TOKEN="$PRONCAM_SOURCE_TOKEN" gh api "repos/SOTTRME/Privss/contents/app/test-build.txt?ref=$sha" > "$RUNNER_TEMP/proncam-build-number.json" 9>&-
-    build=$(python3 -c 'import base64,json,sys; r=json.load(open(sys.argv[1])); print(base64.b64decode(r["content"]).decode().strip())' "$RUNNER_TEMP/proncam-build-number.json")
+    GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api "repos/SOTTRME/Privss/contents/app/test-build.txt?ref=$sha" > "$RUNNER_TEMP/somecam-build-number.json" 9>&-
+    build=$(python3 -c 'import base64,json,sys; r=json.load(open(sys.argv[1])); print(base64.b64decode(r["content"]).decode().strip())' "$RUNNER_TEMP/somecam-build-number.json")
     [[ "$build" =~ ^[1-9][0-9]{0,6}$ ]] || exit 2
     version=$((40000 + 10#$build))
     (( version > 40000 && version <= 2100000000 )) || exit 2
@@ -249,17 +249,17 @@ fi
 if [[ "$mode" == checkout ]]; then
     mark_phase checkout
     private_repo
-    [[ ${PRONCAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && ! -e "$source_dir" ]] || exit 2
+    [[ ${SOMECAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && ! -e "$source_dir" ]] || exit 2
     cat > "$askpass" <<'ASKPASS'
 #!/usr/bin/env bash
-case "$1" in *Username*) printf '%s\n' x-access-token ;; *Password*) printf '%s\n' "$PRONCAM_SOURCE_TOKEN" ;; *) exit 1 ;; esac
+case "$1" in *Username*) printf '%s\n' x-access-token ;; *Password*) printf '%s\n' "$SOMECAM_SOURCE_TOKEN" ;; *) exit 1 ;; esac
 ASKPASS
     chmod 700 "$askpass"
     export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
     git init --quiet "$source_dir" 9>&-
-    git -C "$source_dir" -c credential.helper= fetch --quiet --no-tags --depth=1 https://github.com/SOTTRME/Privss.git "$PRONCAM_SOURCE_SHA" 9>&-
+    git -C "$source_dir" -c credential.helper= fetch --quiet --no-tags --depth=1 https://github.com/SOTTRME/Privss.git "$SOMECAM_SOURCE_SHA" 9>&-
     git -C "$source_dir" checkout --quiet --detach FETCH_HEAD 9>&-
-    [[ $(git -C "$source_dir" rev-parse HEAD) == "$PRONCAM_SOURCE_SHA" ]] || exit 1
+    [[ $(git -C "$source_dir" rev-parse HEAD) == "$SOMECAM_SOURCE_SHA" ]] || exit 1
     printf 'Pinned private source fetched.\n' >&9
     exit
 fi
@@ -270,7 +270,7 @@ if [[ "$mode" == stage || "$mode" == release ]]; then
     if [[ "$mode" == release ]]; then
         [[ ${SOMECAM_VERSION_CODE:-} =~ ^[1-9][0-9]{0,9}$ ]] || exit 2
         gh release create "build-$SOMECAM_VERSION_CODE" --repo SOTTRME/Xxdl --target "$GITHUB_SHA" \
-            --title "PronCam $SOMECAM_VERSION_CODE" --notes 'Изменение названия и оптимизация приложения.' "$output"/*
+            --title "SomeCam $SOMECAM_VERSION_CODE" --notes 'Изменение названия и оптимизация приложения.' "$output"/*
         printf 'Checked APK published in Releases.\n' >&9
     fi
     exit
@@ -303,7 +303,7 @@ fi
 if [[ "$mode" == telegram ]]; then
     mark_phase telegram
     check_stage "$output"
-    [[ ${PRONCAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && $(git -C "$source_dir" rev-parse HEAD) == "$PRONCAM_SOURCE_SHA" ]] || exit 2
+    [[ ${SOMECAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && $(git -C "$source_dir" rev-parse HEAD) == "$SOMECAM_SOURCE_SHA" ]] || exit 2
     for name in TELEGRAM_BOT_TOKEN TELEGRAM_API_ID TELEGRAM_API_HASH; do
         if [[ -z ${!name:-} ]]; then
             printf '::error::Required Telegram secret %s is not configured.\n' "$name" >&9
@@ -312,25 +312,25 @@ if [[ "$mode" == telegram ]]; then
     done
     python3 "$GITHUB_WORKSPACE/ci/check-telegram-build.py" \
         --publisher "$source_dir/tools/telegram_publish.py" 9>&-
-    python3 -m venv "$RUNNER_TEMP/proncam-telegram" 9>&-
-    "$RUNNER_TEMP/proncam-telegram/bin/pip" install --disable-pip-version-check -q \
+    python3 -m venv "$RUNNER_TEMP/somecam-telegram" 9>&-
+    "$RUNNER_TEMP/somecam-telegram/bin/pip" install --disable-pip-version-check -q \
         -r "$source_dir/tools/telegram-requirements.txt" 9>&-
-    env -u PRONCAM_SOURCE_TOKEN -u GH_TOKEN -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_ENV -u GITHUB_PATH \
-        "$RUNNER_TEMP/proncam-telegram/bin/python" "$GITHUB_WORKSPACE/ci/telegram-build.py" \
-        --source-dir "$source_dir" --output-dir "$output" --source-sha "$PRONCAM_SOURCE_SHA" 9>&-
+    env -u SOMECAM_SOURCE_TOKEN -u GH_TOKEN -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_ENV -u GITHUB_PATH \
+        "$RUNNER_TEMP/somecam-telegram/bin/python" "$GITHUB_WORKSPACE/ci/telegram-build.py" \
+        --source-dir "$source_dir" --output-dir "$output" --source-sha "$SOMECAM_SOURCE_SHA" 9>&-
     printf 'Checked APK delivered through Telegram bot.\n' >&9
     exit
 fi
 
-[[ ${PRONCAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && $(git -C "$source_dir" rev-parse HEAD) == "$PRONCAM_SOURCE_SHA" ]] || exit 2
+[[ ${SOMECAM_SOURCE_SHA:-} =~ ^[0-9a-f]{40}$ && $(git -C "$source_dir" rev-parse HEAD) == "$SOMECAM_SOURCE_SHA" ]] || exit 2
 cd "$source_dir"
-export GITHUB_SHA="$PRONCAM_SOURCE_SHA"
+export GITHUB_SHA="$SOMECAM_SOURCE_SHA"
 # Private tools do not need public workflow file-command channels.
 unset GITHUB_OUTPUT GITHUB_STEP_SUMMARY GITHUB_ENV GITHUB_PATH
 if [[ "$mode" == host ]]; then
     mark_phase host
-    case ${PRONCAM_CHECK_LANE:-} in shaders|native-a|native-b|native-c|strip-trailers|codecs) ;; *) exit 2 ;; esac
-    bash "tools/ci/host-$PRONCAM_CHECK_LANE.sh" 9>&-
+    case ${SOMECAM_CHECK_LANE:-} in shaders|native-a|native-b|native-c|strip-trailers|codecs) ;; *) exit 2 ;; esac
+    bash "tools/ci/host-$SOMECAM_CHECK_LANE.sh" 9>&-
     printf 'Host checks passed.\n' >&9
     exit
 fi
@@ -344,7 +344,7 @@ signing_keystore=$SOMECAM_SIGNING_KEYSTORE signing_password=$SOMECAM_KEYSTORE_PA
 unset SOMECAM_SIGNING_KEYSTORE SOMECAM_KEYSTORE_PASSWORD
 chmod +x gradlew
 # Execute exactly the private workflow's existing build checks, without copying its log/artifact upload steps.
-PRONCAM_BUILD_PHASE="$phase_file" python3 - 9>&- <<'PY'
+SOMECAM_BUILD_PHASE="$phase_file" python3 - 9>&- <<'PY'
 from pathlib import Path
 import os, subprocess
 lines = Path('.github/workflows/build-test-apk.yml').read_text().splitlines()
@@ -353,7 +353,7 @@ names = ['Check fast worker launcher and SCAM diagnostic decoder', 'Check ZSL gy
          'Build debug APK and run unit tests', 'Verify native packaging and settings']
 for index, name in enumerate(names):
     phase = 'preflight' if index < 4 else 'gradle' if index == 4 else 'native-packaging'
-    Path(os.environ['PRONCAM_BUILD_PHASE']).write_text(phase + '\n')
+    Path(os.environ['SOMECAM_BUILD_PHASE']).write_text(phase + '\n')
     start = lines.index('      - name: ' + name) + 1
     end = next((i for i in range(start, len(lines)) if lines[i].startswith('      - ') or lines[i].startswith('  host:')), len(lines))
     block = lines[start:end]
@@ -396,4 +396,4 @@ if signers != ["7b12875e8172311fecf217e0aa4b4d86d090ae01c50964047d2bae104d91e9d5
 (cd "$output" && sha256sum *.apk > SHA256SUMS.txt)
 check_stage "$output"
 cat "$output/SHA256SUMS.txt" >&9
-printf 'PronCam build and signature checks passed.\n' >&9
+printf 'SomeCam build and signature checks passed.\n' >&9

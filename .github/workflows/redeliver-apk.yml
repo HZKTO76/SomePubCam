@@ -1,4 +1,4 @@
-name: Redeliver checked PronCam APK
+name: Redeliver checked SomeCam APK
 
 on:
   push:
@@ -69,7 +69,7 @@ jobs:
           if json.loads(base64.b64decode(source["content"]))["source_commit"] != request["source_commit"]:
               raise SystemExit("Private source revision differs")
 
-          name = f'PronCam-{request["version"]}'
+          name = f'SomeCam-{request["version"]}'
           artifacts = api(f"actions/runs/{run_id}/artifacts")["artifacts"]
           matches = [entry for entry in artifacts if entry["name"] == name and not entry["expired"]]
           if len(matches) != 1 or matches[0]["id"] != request["artifact_id"] or matches[0]["digest"] != "sha256:" + request["artifact_sha256"]:
@@ -80,7 +80,7 @@ jobs:
           # the run stores the APK sealed (the artifacts of this public repository are public): opened and checked here
           subprocess.run(["gh", "run", "download", str(run_id), "--repo", repo, "--name", name, "--dir", str(sealed)], check=True)
           subprocess.run(["bash", "ci/public-build.sh", "unseal"], check=True)
-          apk, = [*output.glob(f'PronCam-*-{request["version"]}-SCAM.apk'), *output.glob(f'SomeCam-*-{request["version"]}-SCAM.apk')]
+          apk, = [*output.glob(f'SomeCam-*-{request["version"]}-SCAM.apk')]
           if apk.is_symlink() or not apk.is_file():
               raise SystemExit("Unsafe APK")
           with apk.open("rb") as stream:
@@ -93,12 +93,12 @@ jobs:
           bash ci/public-build.sh stage
       - name: Fetch pinned source and publisher
         env:
-          PRONCAM_SOURCE_SHA: ${{ steps.artifact.outputs.source }}
-          PRONCAM_SOURCE_TOKEN: ${{ secrets.PRONCAM_SOURCE_TOKEN }}
+          SOMECAM_SOURCE_SHA: ${{ steps.artifact.outputs.source }}
+          SOMECAM_SOURCE_TOKEN: ${{ secrets.SOMECAM_SOURCE_TOKEN || secrets.PRONCAM_SOURCE_TOKEN }}
         run: bash ci/public-build.sh checkout
       - name: Send checked APK through Telegram bot
         env:
-          PRONCAM_SOURCE_SHA: ${{ steps.artifact.outputs.source }}
+          SOMECAM_SOURCE_SHA: ${{ steps.artifact.outputs.source }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}

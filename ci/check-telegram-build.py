@@ -26,7 +26,7 @@ def main():
     args = parser.parse_args()
     helper = module(Path(__file__).with_name("telegram-build.py"), "delivery_helper")
     publisher = module(args.publisher, "tested_publisher")
-    with tempfile.TemporaryDirectory(prefix="proncam-telegram-publisher-test-") as folder:
+    with tempfile.TemporaryDirectory(prefix="somecam-telegram-publisher-test-") as folder:
         root = Path(folder)
         (root / "CHANGELOG.md").write_text("# Changes\n\n## 2026-11-17\n\n" + "\n".join("- " + s for s in helper.RU_ITEMS) + "\n")
         (root / "CHANGELOG.en.md").write_text("# Changes\n\n## 2026-11-17\n\n- English must not be posted.\n")
@@ -41,7 +41,7 @@ def main():
                 assert kwargs["reply_to"] == 15
                 caption = kwargs["caption"]
                 assert "owner header" in caption
-                assert "Камера переименована в PronCam." in caption
+                assert "Камера переименована в SomeCam." in caption
                 assert "Оптимизация и ускорение работы приложения." in caption
                 assert "English must not be posted." not in caption and "🇬🇧" not in caption
                 assert "SHA-256" not in caption
@@ -59,7 +59,7 @@ def main():
             return dict(auto=False, targets=[dict(chat=-100123, topic=15, where="fixture")],
                         commits=True, sha=False, header="owner header", lang="ru")
         publisher.read_settings = settings
-        apk = root / "PronCam-0.98-31306-SCAM.apk"
+        apk = root / "SomeCam-0.98-31306-SCAM.apk"
         apk.write_bytes(b"checked fixture APK")
         env = dict(TELEGRAM_BOT_TOKEN="fixture-not-a-token", TELEGRAM_API_ID="1",
                    TELEGRAM_API_HASH="fixture-not-a-hash", TELEGRAM_OWNER="fixture_owner")

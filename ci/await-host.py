@@ -68,7 +68,7 @@ def github_jobs(run, token, deadline):
                + "/jobs?filter=latest&per_page=100&page=" + str(page))
         request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token,
             "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "PronCam-host-gate"})
+            "User-Agent": "SomeCam-host-gate"})
         try:
             with opener.open(request, timeout=min(30, remaining)) as response:
                 data = json.load(response)

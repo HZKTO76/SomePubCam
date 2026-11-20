@@ -1,4 +1,4 @@
-name: Build PronCam
+name: Build SomeCam
 
 on:
   push:
@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: proncam-public-build
+  group: somecam-public-build
   cancel-in-progress: true
 
 jobs:
@@ -46,8 +46,8 @@ jobs:
       - id: source
         name: Select source revision
         env:
-          PRONCAM_SOURCE_TOKEN: ${{ secrets.PRONCAM_SOURCE_TOKEN }}
-          PRONCAM_SOURCE_REF: ${{ inputs.source_commit }}
+          SOMECAM_SOURCE_TOKEN: ${{ secrets.SOMECAM_SOURCE_TOKEN || secrets.PRONCAM_SOURCE_TOKEN }}
+          SOMECAM_SOURCE_REF: ${{ inputs.source_commit }}
         run: bash ci/public-build.sh resolve
       - name: Remove temporary metadata
         if: always()
@@ -79,13 +79,13 @@ jobs:
           sudo apt-get install -y python3-numpy python3-venv libegl1 libgl1-mesa-dri libegl-dev libgles-dev libvulkan-dev nasm ninja-build zlib1g-dev
       - name: Fetch pinned source
         env:
-          PRONCAM_SOURCE_TOKEN: ${{ secrets.PRONCAM_SOURCE_TOKEN }}
-          PRONCAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          SOMECAM_SOURCE_TOKEN: ${{ secrets.SOMECAM_SOURCE_TOKEN || secrets.PRONCAM_SOURCE_TOKEN }}
+          SOMECAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
         run: bash ci/public-build.sh checkout
       - name: Run checks
         env:
-          PRONCAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
-          PRONCAM_CHECK_LANE: ${{ matrix.lane }}
+          SOMECAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          SOMECAM_CHECK_LANE: ${{ matrix.lane }}
         run: bash ci/public-build.sh host
       - name: Remove temporary source
         if: always()
@@ -119,12 +119,12 @@ jobs:
           build-scan-publish: false
       - name: Fetch pinned source
         env:
-          PRONCAM_SOURCE_TOKEN: ${{ secrets.PRONCAM_SOURCE_TOKEN }}
-          PRONCAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          SOMECAM_SOURCE_TOKEN: ${{ secrets.SOMECAM_SOURCE_TOKEN || secrets.PRONCAM_SOURCE_TOKEN }}
+          SOMECAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
         run: bash ci/public-build.sh checkout
       - name: Check, build and sign
         env:
-          PRONCAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          SOMECAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
           SOMECAM_VERSION_CODE: ${{ needs.source.outputs.version }}
           SOMECAM_SIGNING_KEYSTORE: ${{ secrets.SCAMERA_SIGNING_KEYSTORE }}
           SOMECAM_KEYSTORE_PASSWORD: ${{ secrets.SCAMERA_SIGNING_PASSWORD }}
@@ -144,7 +144,7 @@ jobs:
         run: bash ci/public-build.sh seal
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: PronCam-${{ needs.source.outputs.version }}
+          name: SomeCam-${{ needs.source.outputs.version }}
           path: public-sealed/*
           if-no-files-found: error
           include-hidden-files: false
@@ -159,7 +159,7 @@ jobs:
       - name: Send checked APK through Telegram bot
         if: github.event_name == 'push' || inputs.send_telegram == true
         env:
-          PRONCAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          SOMECAM_SOURCE_SHA: ${{ needs.source.outputs.sha }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}

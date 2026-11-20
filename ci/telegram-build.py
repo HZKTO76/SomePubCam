@@ -18,8 +18,8 @@ import types
 import unittest
 
 # Fixture text for the self-tests; the caption takes whatever the newest section of CHANGELOG.md says (Russian only).
-RU_ITEMS = ["Камера переименована в PronCam.", "Оптимизация и ускорение работы приложения."]
-APK_NAME = re.compile(r"(?:PronCam|SomeCam)-[A-Za-z0-9._-]+-[0-9]+-SCAM\.apk")
+RU_ITEMS = ["Камера переименована в SomeCam.", "Оптимизация и ускорение работы приложения."]
+APK_NAME = re.compile(r"SomeCam-[A-Za-z0-9._-]+-[0-9]+-SCAM\.apk")
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -69,7 +69,7 @@ def read_sections(path):
     The text above the first "## " heading is the file's own preamble, posted only when the file has no sections."""
     text = pathlib.Path(path).read_text(encoding="utf-8")
     section = None
-    title = "PronCam"
+    title = "SomeCam"
     preamble, items = [], []
     for raw in text.splitlines():
         line = raw.strip()
@@ -118,7 +118,7 @@ def settings_compatible(parse):
 
 
 def load_publisher(source):
-    spec = importlib.util.spec_from_file_location("proncam_pinned_telegram_publish", source / "tools/telegram_publish.py")
+    spec = importlib.util.spec_from_file_location("somecam_pinned_telegram_publish", source / "tools/telegram_publish.py")
     if spec is None or spec.loader is None:
         raise ValueError("Cannot load pinned publisher")
     publisher = importlib.util.module_from_spec(spec)
@@ -140,14 +140,14 @@ def send(publisher, apk, digest, revision):
 
 class Contract(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="proncam-telegram-test-")
+        self.temp = tempfile.TemporaryDirectory(prefix="somecam-telegram-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
 
     def stage(self):
         directory = self.root / "out"
         directory.mkdir()
-        apk = directory / "PronCam-0.98-31306-SCAM.apk"
+        apk = directory / "SomeCam-0.98-31306-SCAM.apk"
         apk.write_bytes(b"checked fixture APK")
         digest = hashlib.sha256(apk.read_bytes()).hexdigest()
         (directory / "SHA256SUMS.txt").write_text(digest + "  " + apk.name + "\n")
@@ -174,7 +174,7 @@ class Contract(unittest.TestCase):
                       "* Ещё пункт\n\n## 2026-11-18\n\n- старое\n")
         self.assertEqual([("2026-11-19", ["Исправлены чёрные снимки.", "Плюс строка без маркера.", "Ещё пункт"])],
                          read_sections(ru))
-        self.assertEqual([("PronCam", ["Just text"])], read_sections(self._write("plain.md", "Just text\n")))
+        self.assertEqual([("SomeCam", ["Just text"])], read_sections(self._write("plain.md", "Just text\n")))
         self.assertEqual([("Изменения", ["Без даты"])], read_sections(self._write("t.md", "# Изменения\n\n- Без даты\n")))
         self.assertEqual([("2026-11-19 — тестовая сборка 1", ["Новый отсчёт."])], read_sections(self._write(
             "intro.md", "# Тестовые сборки\n\nВерсия 1.0.N — сборка №N.\nИстория до неё — CHANGELOG-0.98.md.\n\n"
@@ -221,7 +221,7 @@ class Contract(unittest.TestCase):
             build_caption=lambda *args, **kwargs: calls.append(("caption", args, kwargs)) or "caption",
             changelog_post=lambda *args, **kwargs: calls.append(("changes", args, kwargs)) or ("caption", []))
         post = make_local_post(publisher, self.root)
-        args = argparse.Namespace(apk=pathlib.Path("PronCam.apk"))
+        args = argparse.Namespace(apk=pathlib.Path("SomeCam.apk"))
         settings = dict(commits=True, sha=False, header="owner header", lang="ru")
         self.assertEqual(("caption", []), post(args, "digest", settings))
         self.assertIs(settings, calls[-1][1][3])

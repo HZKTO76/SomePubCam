@@ -79,7 +79,7 @@ jobs:
               version += 40000
           stored = []
           for artifact in api("actions/artifacts?per_page=100")["artifacts"]:
-              m = re.fullmatch(r"PronCam-([0-9]+)", artifact["name"])
+              m = re.fullmatch(r"SomeCam-([0-9]+)", artifact["name"])
               if m and not artifact["expired"] and (not version or int(m[1]) == version):
                   stored.append((int(m[1]), artifact["id"], artifact))
           if not stored:
@@ -114,14 +114,14 @@ jobs:
       - name: Fetch the build's pinned source and publisher
         if: inputs.chat != ''
         env:
-          PRONCAM_SOURCE_SHA: ${{ steps.build.outputs.source }}
-          PRONCAM_SOURCE_TOKEN: ${{ secrets.PRONCAM_SOURCE_TOKEN }}
+          SOMECAM_SOURCE_SHA: ${{ steps.build.outputs.source }}
+          SOMECAM_SOURCE_TOKEN: ${{ secrets.SOMECAM_SOURCE_TOKEN || secrets.PRONCAM_SOURCE_TOKEN }}
         run: bash ci/public-build.sh checkout
 
       - name: Post the checked APK
         if: inputs.chat != ''
         env:
-          PRONCAM_SOURCE_SHA: ${{ steps.build.outputs.source }}
+          SOMECAM_SOURCE_SHA: ${{ steps.build.outputs.source }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
