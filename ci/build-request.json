@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "request_id": "2026-11-19-somecam-test-build-2",
-  "source_commit": "eea6ced394f3544946ff2d256cd5aa3a127bc1a2",
+  "request_id": "2026-11-20-somecam-test-build-2-r2",
+  "source_commit": "13bc1d29ffe019cde917b897f1a0db02d5220154",
   "send_telegram": true
 }
