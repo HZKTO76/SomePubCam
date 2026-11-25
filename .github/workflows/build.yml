@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   source:
-    if: github.repository_id == '1461381914' && github.actor == 'SOTTRME' && github.triggering_actor == 'SOTTRME' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[hold-release]')
+    if: github.repository_id == '1471367048' && github.actor == 'HZKTO76' && github.triggering_actor == 'HZKTO76' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[hold-release]')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -76,7 +76,7 @@ jobs:
         run: |
           sdkmanager --install 'ndk;27.2.12479018' 'platforms;android-36'
           sudo apt-get update -qq
-          sudo apt-get install -y python3-numpy python3-venv libegl1 libgl1-mesa-dri libegl-dev libgles-dev libvulkan-dev nasm ninja-build zlib1g-dev
+          sudo apt-get install -y python3-numpy python3-pil python3-venv libegl1 libgl1-mesa-dri libegl-dev libgles-dev libvulkan-dev nasm ninja-build zlib1g-dev
       - name: Fetch pinned source
         env:
           SOMECAM_SOURCE_TOKEN: ${{ secrets.SOMECAM_SOURCE_TOKEN || secrets.PRONCAM_SOURCE_TOKEN }}

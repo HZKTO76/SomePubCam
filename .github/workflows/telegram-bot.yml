@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   bot:
-    if: github.repository_id == '1461381914' && github.ref == 'refs/heads/main'
+    if: github.repository_id == '1471367048' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -65,7 +65,7 @@ jobs:
           import re
           import subprocess
 
-          repo = "SOTTRME/Xxdl"
+          repo = "HZKTO76/SomePubCam"
 
           def api(path):
               result = subprocess.run(["gh", "api", f"repos/{repo}/{path}"], check=True, capture_output=True, text=True)
@@ -87,7 +87,7 @@ jobs:
           version, _, artifact = max(stored, key=lambda entry: entry[:2])
           run = api(f'actions/runs/{artifact["workflow_run"]["id"]}')
           if (run.get("path") != ".github/workflows/build.yml" or run.get("head_branch") != "main"
-                  or run.get("status") != "completed" or run["actor"]["login"] != "SOTTRME"):
+                  or run.get("status") != "completed" or run["actor"]["login"] != "HZKTO76"):
               raise SystemExit("The stored APK is not of a main build")
           jobs = api(f'actions/runs/{run["id"]}/jobs?per_page=50')["jobs"]
           hosts = {f"host ({lane})" for lane in ("shaders", "native-a", "native-b", "native-c", "strip-trailers", "codecs")}

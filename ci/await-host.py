@@ -9,7 +9,7 @@ import time
 import unittest
 import urllib.request
 
-REPOSITORY = "SOTTRME/Xxdl"
+REPOSITORY = "HZKTO76/SomePubCam"
 EXPECTED = frozenset("host (" + lane + ")" for lane in
                      ("shaders", "native-a", "native-b", "native-c", "strip-trailers", "codecs"))
 POLL_SECONDS = 20

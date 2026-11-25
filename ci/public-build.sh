@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-# Published as ci/public-build.sh in Xxdl, outside the private source checkout.
+# Published as ci/public-build.sh in SomePubCam, outside the private source checkout.
 mode=${1:-}
 case "$mode" in resolve|checkout|host|build|stage|seal|unseal|release|await-host|telegram|cleanup|self-test) ;; *) exit 2 ;; esac
 
@@ -100,11 +100,11 @@ if [[ "$mode" == self-test ]]; then
     cat > "$fixture/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
 case "$*" in
-    'api repos/SOTTRME/Privss')
-        printf '{"id":1461683737,"private":true,"full_name":"SOTTRME/Privss"}\n' ;;
-    'api repos/SOTTRME/Privss/git/commits/1111111111111111111111111111111111111111')
+    'api repos/HZKTO76/SomePrivCam')
+        printf '{"id":1471367794,"private":true,"full_name":"HZKTO76/SomePrivCam"}\n' ;;
+    'api repos/HZKTO76/SomePrivCam/git/commits/1111111111111111111111111111111111111111')
         printf '{"sha":"1111111111111111111111111111111111111111"}\n' ;;
-    'api repos/SOTTRME/Privss/contents/app/test-build.txt?ref=1111111111111111111111111111111111111111')
+    'api repos/HZKTO76/SomePrivCam/contents/app/test-build.txt?ref=1111111111111111111111111111111111111111')
         printf '{"content":"Mgo=\\n","encoding":"base64"}\n' ;;
     *) exit 99 ;;
 esac
@@ -112,22 +112,22 @@ MOCK
     chmod +x "$fixture/bin/gh"
     self=$(realpath "${BASH_SOURCE[0]}")
     export PATH="$fixture/bin:$PATH" RUNNER_TEMP="$fixture" GITHUB_WORKSPACE="$fixture"
-    export GITHUB_REPOSITORY=SOTTRME/Xxdl GITHUB_REPOSITORY_ID=1461381914 GITHUB_REF=refs/heads/main
-    export GITHUB_TRIGGERING_ACTOR=SOTTRME
+    export GITHUB_REPOSITORY=HZKTO76/SomePubCam GITHUB_REPOSITORY_ID=1471367048 GITHUB_REF=refs/heads/main
+    export GITHUB_TRIGGERING_ACTOR=HZKTO76
     export GITHUB_EVENT_NAME=workflow_dispatch GITHUB_OUTPUT="$fixture/outputs" SOMECAM_SOURCE_TOKEN=fixture
     if GITHUB_ACTOR=untrusted bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
-    if GITHUB_ACTOR=SOTTRME GITHUB_TRIGGERING_ACTOR=untrusted bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
-    if GITHUB_ACTOR=SOTTRME SOMECAM_SOURCE_REF='main; touch injected' bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=HZKTO76 GITHUB_TRIGGERING_ACTOR=untrusted bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=HZKTO76 SOMECAM_SOURCE_REF='main; touch injected' bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     [[ ! -e "$fixture/outputs" && ! -e "$fixture/injected" ]]
     mkdir "$fixture/ci"
     printf '{"schema":1,"source_commit":"1111111111111111111111111111111111111111","send_telegram":true}\n' > "$fixture/ci/build-request.json"
-    GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=27 bash "$self" resolve > "$fixture/resolve.log" 2>&1
+    GITHUB_ACTOR=HZKTO76 GITHUB_EVENT_NAME=push GITHUB_RUN_NUMBER=27 bash "$self" resolve > "$fixture/resolve.log" 2>&1
     grep -q '^sha=1111111111111111111111111111111111111111$' "$fixture/outputs"
     grep -q '^version=40002$' "$fixture/outputs" # (test build 2 of app/test-build.txt, whatever the run number)
     if GITHUB_ACTOR=untrusted GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
-    if GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=pull_request bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=HZKTO76 GITHUB_EVENT_NAME=pull_request bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     printf '{"schema":1,"source_commit":"main; touch injected","send_telegram":true}\n' > "$fixture/ci/build-request.json"
-    if GITHUB_ACTOR=SOTTRME GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=HZKTO76 GITHUB_EVENT_NAME=push bash "$self" resolve >/dev/null 2>&1; then exit 1; fi
     [[ ! -e "$fixture/injected" ]]
     private="$fixture/somecam-source"
     mkdir -p "$private/tools/ci"
@@ -136,7 +136,7 @@ MOCK
     git -C "$private" add .
     git -C "$private" -c user.name=Fixture -c user.email=fixture@local.invalid commit --quiet -m fixture
     sha=$(git -C "$private" rev-parse HEAD)
-    if GITHUB_ACTOR=SOTTRME SOMECAM_SOURCE_SHA="$sha" SOMECAM_CHECK_LANE=native-a bash "$self" host > "$fixture/public.log" 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=HZKTO76 SOMECAM_SOURCE_SHA="$sha" SOMECAM_CHECK_LANE=native-a bash "$self" host > "$fixture/public.log" 2>&1; then exit 1; fi
     if grep -q PRIVATE_SOURCE_CANARY "$fixture/public.log"; then exit 1; fi
     grep -q PRIVATE_SOURCE_CANARY "$fixture/somecam-private-host.log"
     grep -Fxq '::error::SomeCam stage failed (phase=host; exit=17); private diagnostics were not published.' "$fixture/public.log"
@@ -156,10 +156,10 @@ echo PRIVATE_SOURCE_CANARY
 echo PRIVATE_SOURCE_CANARY >&2
 exit 23
 POISON
-    if GITHUB_ACTOR=SOTTRME SOMECAM_SOURCE_SHA="$sha" SOMECAM_CHECK_LANE=native-a bash "$self" host > "$fixture/poison-public.log" 2>&1; then exit 1; fi
+    if GITHUB_ACTOR=HZKTO76 SOMECAM_SOURCE_SHA="$sha" SOMECAM_CHECK_LANE=native-a bash "$self" host > "$fixture/poison-public.log" 2>&1; then exit 1; fi
     grep -Fxq '::error::SomeCam stage failed (phase=controller; exit=23); private diagnostics were not published.' "$fixture/poison-public.log"
     if grep -q 'PRIVATE_SOURCE_CANARY\|injected' "$fixture/poison-public.log"; then exit 1; fi
-    GITHUB_ACTOR=SOTTRME bash "$self" cleanup
+    GITHUB_ACTOR=HZKTO76 bash "$self" cleanup
     [[ ! -e "$private" && ! -e "$fixture/somecam-private-host.log" && ! -e "$fixture/somecam-phase-host" ]]
     # sealing: the checked files come back byte for byte; another token, or a changed file, does not open
     mkdir -p "$fixture/seal-in"
@@ -175,8 +175,8 @@ POISON
     exit
 fi
 
-[[ ${GITHUB_REPOSITORY:-} == SOTTRME/Xxdl && ${GITHUB_REPOSITORY_ID:-} == 1461381914 &&
-   ${GITHUB_ACTOR:-} == SOTTRME && ${GITHUB_TRIGGERING_ACTOR:-} == SOTTRME && ${GITHUB_REF:-} == refs/heads/main &&
+[[ ${GITHUB_REPOSITORY:-} == HZKTO76/SomePubCam && ${GITHUB_REPOSITORY_ID:-} == 1471367048 &&
+   ${GITHUB_ACTOR:-} == HZKTO76 && ${GITHUB_TRIGGERING_ACTOR:-} == HZKTO76 && ${GITHUB_REF:-} == refs/heads/main &&
    ( ${GITHUB_EVENT_NAME:-} == workflow_dispatch || ${GITHUB_EVENT_NAME:-} == push ) ]] || { echo 'Build context rejected'; exit 1; }
 : "${RUNNER_TEMP:?}" "${GITHUB_WORKSPACE:?}"
 source_dir="$RUNNER_TEMP/somecam-source"
@@ -198,11 +198,11 @@ mark_phase controller
 trap 'result=$?; rm -f -- "$askpass" || true; if (( result )); then report_failure "$phase_file" "$result" "$RUNNER_TEMP/somecam-private-$mode.log" >&9; fi' EXIT
 private_repo() {
     : "${SOMECAM_SOURCE_TOKEN:?Missing read-only source token}"
-    GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api repos/SOTTRME/Privss > "$RUNNER_TEMP/somecam-metadata.json" 9>&-
+    GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api repos/HZKTO76/SomePrivCam > "$RUNNER_TEMP/somecam-metadata.json" 9>&-
     python3 - "$RUNNER_TEMP/somecam-metadata.json" 9>&- <<'PY'
 import json, sys
 r = json.load(open(sys.argv[1]))
-if r.get('id') != 1461683737 or r.get('private') is not True or r.get('full_name') != 'SOTTRME/Privss':
+if r.get('id') != 1471367794 or r.get('private') is not True or r.get('full_name') != 'HZKTO76/SomePrivCam':
     raise SystemExit('Private source identity differs')
 PY
 }
@@ -229,14 +229,14 @@ PY
         )
     fi
     [[ -z "$ref" || "$ref" =~ ^[0-9a-f]{40}$ ]] || exit 2
-    endpoint="repos/SOTTRME/Privss/git/commits/$ref"
-    [[ -n "$ref" ]] || endpoint=repos/SOTTRME/Privss/git/ref/heads/main
+    endpoint="repos/HZKTO76/SomePrivCam/git/commits/$ref"
+    [[ -n "$ref" ]] || endpoint=repos/HZKTO76/SomePrivCam/git/ref/heads/main
     GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api "$endpoint" > "$RUNNER_TEMP/somecam-metadata.json" 9>&-
     sha=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("object",r)["sha"])' "$RUNNER_TEMP/somecam-metadata.json")
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 2
     # versionCode 40000 + the test build number of the pinned commit's app/test-build.txt (owner, 2026-11-19: «Билды теперь меняй
     # по одному, вне зависимости от количества комитов»: one per delivery, not the run number - failed or repeated runs skip none)
-    GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api "repos/SOTTRME/Privss/contents/app/test-build.txt?ref=$sha" > "$RUNNER_TEMP/somecam-build-number.json" 9>&-
+    GH_TOKEN="$SOMECAM_SOURCE_TOKEN" gh api "repos/HZKTO76/SomePrivCam/contents/app/test-build.txt?ref=$sha" > "$RUNNER_TEMP/somecam-build-number.json" 9>&-
     build=$(python3 -c 'import base64,json,sys; r=json.load(open(sys.argv[1])); print(base64.b64decode(r["content"]).decode().strip())' "$RUNNER_TEMP/somecam-build-number.json")
     [[ "$build" =~ ^[1-9][0-9]{0,6}$ ]] || exit 2
     version=$((40000 + 10#$build))
@@ -257,7 +257,7 @@ ASKPASS
     chmod 700 "$askpass"
     export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
     git init --quiet "$source_dir" 9>&-
-    git -C "$source_dir" -c credential.helper= fetch --quiet --no-tags --depth=1 https://github.com/SOTTRME/Privss.git "$SOMECAM_SOURCE_SHA" 9>&-
+    git -C "$source_dir" -c credential.helper= fetch --quiet --no-tags --depth=1 https://github.com/HZKTO76/SomePrivCam.git "$SOMECAM_SOURCE_SHA" 9>&-
     git -C "$source_dir" checkout --quiet --detach FETCH_HEAD 9>&-
     [[ $(git -C "$source_dir" rev-parse HEAD) == "$SOMECAM_SOURCE_SHA" ]] || exit 1
     printf 'Pinned private source fetched.\n' >&9
@@ -269,7 +269,7 @@ if [[ "$mode" == stage || "$mode" == release ]]; then
     check_stage "$output"
     if [[ "$mode" == release ]]; then
         [[ ${SOMECAM_VERSION_CODE:-} =~ ^[1-9][0-9]{0,9}$ ]] || exit 2
-        gh release create "build-$SOMECAM_VERSION_CODE" --repo SOTTRME/Xxdl --target "$GITHUB_SHA" \
+        gh release create "build-$SOMECAM_VERSION_CODE" --repo HZKTO76/SomePubCam --target "$GITHUB_SHA" \
             --title "SomeCam $SOMECAM_VERSION_CODE" --notes 'Изменение названия и оптимизация приложения.' "$output"/*
         printf 'Checked APK published in Releases.\n' >&9
     fi

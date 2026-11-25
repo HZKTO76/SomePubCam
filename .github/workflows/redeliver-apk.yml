@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   telegram:
-    if: github.repository_id == '1461381914' && github.actor == 'SOTTRME' && github.triggering_actor == 'SOTTRME' && github.ref == 'refs/heads/main'
+    if: github.repository_id == '1471367048' && github.actor == 'HZKTO76' && github.triggering_actor == 'HZKTO76' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -33,7 +33,7 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          repo = "SOTTRME/Xxdl"
+          repo = "HZKTO76/SomePubCam"
           request = json.loads(Path("ci/telegram-delivery.json").read_text())
           if request.get("schema") != 1:
               raise SystemExit("Wrong delivery request schema")
